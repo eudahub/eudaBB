@@ -12,6 +12,10 @@ class User(AbstractUser):
     rank = models.CharField(max_length=64, blank=True, default="")
     is_banned = models.BooleanField(default=False)
     ban_reason = models.TextField(blank=True, default="")
+    archive_access = models.SmallIntegerField(
+        default=0,
+        help_text="Max archive_level user can see: 0=normal, 1=soft darkweb, 2=hard darkweb (admin-granted)",
+    )
 
     class Meta:
         db_table = "forum_users"
@@ -43,7 +47,29 @@ class Forum(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default="")
     order = models.PositiveSmallIntegerField(default=0)
-    is_visible = models.BooleanField(default=True)
+
+    class AccessLevel(models.IntegerChoices):
+        PUBLIC = 0, "Public"
+        REGISTERED = 1, "Registered only"
+        ADMIN = 2, "Admin only"
+
+    access_level = models.SmallIntegerField(
+        choices=AccessLevel.choices,
+        default=AccessLevel.PUBLIC,
+        help_text="Who can see this forum (phpBB visibility_class)",
+    )
+
+    # Archive darkweb level — separate from access_level
+    class ArchiveLevel(models.IntegerChoices):
+        NORMAL = 0, "Normal"
+        SOFT = 1, "Soft darkweb (spam=1 users)"
+        HARD = 2, "Hard darkweb (Krowa clones, Więzienie etc.)"
+
+    archive_level = models.SmallIntegerField(
+        choices=ArchiveLevel.choices,
+        default=ArchiveLevel.NORMAL,
+        help_text="Archive content sensitivity level",
+    )
 
     # Cached counters — updated by helpers in views.py
     topic_count = models.PositiveIntegerField(default=0)

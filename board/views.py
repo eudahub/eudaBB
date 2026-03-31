@@ -56,11 +56,18 @@ def _render_and_create_post(topic: Topic, author, content_bbcode: str, post_orde
 
 def index(request):
     """Forum index: list all sections with their forums."""
+    user_access = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    is_staff = request.user.is_staff if request.user.is_authenticated else False
     sections = Section.objects.prefetch_related(
         "forums",
         "forums__last_post",
         "forums__last_post__author",
     ).all()
+    return render(request, "board/index.html", {
+        "sections": sections,
+        "user_access": user_access,
+        "is_staff": is_staff,
+    })
     return render(request, "board/index.html", {"sections": sections})
 
 

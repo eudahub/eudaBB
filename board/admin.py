@@ -7,7 +7,7 @@ from .models import User, Section, Forum, Topic, Post
 class UserAdmin(BaseUserAdmin):
     list_display = ["username", "email", "post_count", "is_banned", "is_staff"]
     fieldsets = BaseUserAdmin.fieldsets + (
-        ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "is_banned", "ban_reason")}),
+        ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "is_banned", "ban_reason", "archive_access")}),
     )
 
 
@@ -18,8 +18,8 @@ class SectionAdmin(admin.ModelAdmin):
 
 @admin.register(Forum)
 class ForumAdmin(admin.ModelAdmin):
-    list_display = ["title", "section", "parent", "order", "topic_count", "post_count", "is_visible"]
-    list_filter = ["is_visible", "section"]
+    list_display = ["title", "section", "parent", "order", "topic_count", "post_count", "access_level", "archive_level"]
+    list_filter = ["access_level", "archive_level", "section"]
 
 
 @admin.register(Topic)

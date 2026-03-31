@@ -88,8 +88,8 @@ class Command(BaseCommand):
                     "description": row["description"] or "",
                     "parent": parent,
                     "order": row["forum_id"],
-                    # visibility_class: 0=public, 1=restricted, 2=admin-only
-                    "is_visible": row["visibility_class"] == 0,
+                    # visibility_class from phpBB: 0=public, 1=registered, 2=admin
+                    "access_level": row["visibility_class"] or 0,
                     "topic_count": row["topic_count"] or 0,
                     "post_count": row["post_count"] or 0,
                 },
