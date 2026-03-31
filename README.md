@@ -82,7 +82,10 @@ DB_PORT=5432
 ### 3. Database
 
 ```bash
-# Create database in PostgreSQL:
+# Create a PostgreSQL role for your system user (first time only):
+sudo -u postgres createuser --superuser $USER
+
+# Create database:
 createdb forum_db
 
 # Migrations:

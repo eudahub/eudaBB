@@ -82,7 +82,10 @@ DB_PORT=5432
 ### 3. Baza danych
 
 ```bash
-# Utwórz bazę w PostgreSQL:
+# Utwórz rolę PostgreSQL dla swojego użytkownika systemowego (tylko za pierwszym razem):
+sudo -u postgres createuser --superuser $USER
+
+# Utwórz bazę:
 createdb forum_db
 
 # Migracje:
