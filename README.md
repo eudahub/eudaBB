@@ -1,15 +1,15 @@
-# Forum Django — minimalna wersja startowa
+# Django Forum — minimal starter version
 
-Klasyczne forum w stylu phpBB: sekcje → fora → wątki → posty, BBCode, paginacja.
+Classic phpBB-style forum: sections → forums → threads → posts, BBCode, pagination.
 
 ## Stack
 
 - Python 3.12+ / Django 5.x
 - PostgreSQL
-- Pico CSS (CDN, bez node_modules)
-- biblioteka `bbcode` do renderowania
+- Pico CSS (CDN, no node_modules)
+- `bbcode` library for rendering
 
-## Struktura projektu
+## Project structure
 
 ```
 forum/
@@ -19,10 +19,10 @@ forum/
 │   └── wsgi.py
 ├── board/
 │   ├── models.py       # User, Section, Forum, Topic, Post
-│   ├── views.py        # widoki + helpery statystyk
+│   ├── views.py        # views + stats helpers
 │   ├── urls.py
 │   ├── forms.py
-│   ├── bbcode.py       # wrapper renderera BBCode
+│   ├── bbcode.py       # BBCode renderer wrapper
 │   ├── admin.py
 │   └── migrations/
 ├── templates/
@@ -42,9 +42,9 @@ forum/
 └── .env.example
 ```
 
-## Uruchomienie (lokalnie)
+## Running locally
 
-### 1. Środowisko wirtualne i zależności
+### 1. Virtual environment and dependencies
 
 ```bash
 python -m venv venv
@@ -52,35 +52,35 @@ source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Konfiguracja środowiska
+### 2. Environment configuration
 
 ```bash
 cp .env.example .env
-# Edytuj .env — ustaw dane do PostgreSQL i SECRET_KEY
+# Edit .env — set PostgreSQL credentials and SECRET_KEY
 ```
 
-Minimalne `.env` dla devu:
+Minimal `.env` for development:
 
 ```
 DEBUG=True
-SECRET_KEY=cokolwiek-dlugie-i-losowe
+SECRET_KEY=something-long-and-random
 DB_NAME=forum_db
 DB_USER=postgres
-DB_PASSWORD=twoje_haslo
+DB_PASSWORD=your_password
 DB_HOST=localhost
 DB_PORT=5432
 ```
 
-### 3. Baza danych
+### 3. Database
 
 ```bash
-# Utwórz bazę w PostgreSQL:
+# Create database in PostgreSQL:
 createdb forum_db
 
-# Migracje:
+# Migrations:
 python manage.py migrate
 
-# Superuser (admin panelu):
+# Superuser (admin panel):
 python manage.py createsuperuser
 ```
 
@@ -90,49 +90,49 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
-Forum dostępne na: http://127.0.0.1:8000/
-Panel admina: http://127.0.0.1:8000/admin/
+Forum available at: http://127.0.0.1:8000/
+Admin panel: http://127.0.0.1:8000/admin/
 
-## Pierwsze kroki po uruchomieniu
+## First steps after launch
 
-1. Zaloguj się do `/admin/`
-2. Utwórz **Section** (np. "Ogólne")
-3. Utwórz **Forum** przypisane do tej sekcji (np. "Rozmowy")
-4. Wejdź na stronę główną — powinno być widoczne forum
-5. Zarejestruj zwykłego użytkownika przez `/register/`
+1. Log in to `/admin/`
+2. Create a **Section** (e.g. "General")
+3. Create a **Forum** assigned to that section (e.g. "Discussion")
+4. Go to the home page — the forum should be visible
+5. Register a regular user via `/register/`
 
-## Produkcja (nginx + gunicorn)
+## Production (nginx + gunicorn)
 
 ```bash
 pip install gunicorn
 gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
 ```
 
-nginx jako reverse proxy + serwowanie `/media/` i `/static/` (po `collectstatic`).
+nginx as a reverse proxy + serving `/media/` and `/static/` (after `collectstatic`).
 
 ```bash
 python manage.py collectstatic
 ```
 
-## Co jest gotowe (v0.1)
+## What is done (v0.1)
 
-- [x] Hierarchia: Sekcja → Forum → Wątek → Post
-- [x] Rejestracja i logowanie
-- [x] Tworzenie wątków i odpowiedzi
-- [x] BBCode → HTML (render cache w `content_html`)
-- [x] Paginacja wątków i postów
-- [x] Cached countery (posty, wątki, ostatni post)
-- [x] Panel admina
-- [x] Sticky / Announcement (przez admina)
-- [x] Blokowanie wątków (przez admina)
+- [x] Hierarchy: Section → Forum → Thread → Post
+- [x] Registration and login
+- [x] Creating threads and replies
+- [x] BBCode → HTML (render cache in `content_html`)
+- [x] Thread and post pagination
+- [x] Cached counters (posts, threads, last post)
+- [x] Admin panel
+- [x] Sticky / Announcement (via admin)
+- [x] Thread locking (via admin)
 
-## Do rozbudowania (kolejne kroki)
+## To be extended (next steps)
 
-- [ ] Cytowania (`[quote]`)
-- [ ] Edycja postów
-- [ ] Profil użytkownika
-- [ ] Moderacja (usuwanie/przenoszenie wątków)
-- [ ] Ankiety (Poll)
-- [ ] Wyszukiwanie
-- [ ] Powiadomienia
-- [ ] Avatary
+- [ ] Quotes (`[quote]`)
+- [ ] Post editing
+- [ ] User profile
+- [ ] Moderation (deleting/moving threads)
+- [ ] Polls
+- [ ] Search
+- [ ] Notifications
+- [ ] Avatars
