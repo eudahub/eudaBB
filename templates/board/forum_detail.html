@@ -5,6 +5,25 @@
 <p class="breadcrumb"><a href="/">Forum</a> › {{ forum.title }}</p>
 <h2>{{ forum.title }}</h2>
 
+{% with subforums=forum.subforums.all %}
+{% if subforums %}
+<table>
+  <thead><tr><th>Podforum</th><th>Wątki</th><th>Posty</th><th>Ostatni post</th></tr></thead>
+  <tbody>
+  {% for sub in subforums %}{% if sub.is_visible %}
+  <tr>
+    <td><a href="{% url 'forum_detail' sub.pk %}"><strong>{{ sub.title }}</strong></a>
+      {% if sub.description %}<br><small>{{ sub.description }}</small>{% endif %}</td>
+    <td>{{ sub.topic_count }}</td>
+    <td>{{ sub.post_count }}</td>
+    <td>{% if sub.last_post %}{{ sub.last_post_at|date:"d.m.Y H:i" }}<br><small>{{ sub.last_post.author.username }}</small>{% else %}—{% endif %}</td>
+  </tr>
+  {% endif %}{% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endwith %}
+
 {% if user.is_authenticated %}
   <p><a href="{% url 'new_topic' forum.pk %}" role="button">+ Nowy wątek</a></p>
 {% endif %}

@@ -16,7 +16,7 @@
       </tr>
     </thead>
     <tbody>
-      {% for forum in section.forums.all %}
+      {% for forum in section.forums.all %}{% if forum.parent_id == None %}
         {% if forum.is_visible %}
         <tr>
           <td>
@@ -32,7 +32,7 @@
             {% else %}—{% endif %}
           </td>
         </tr>
-        {% endif %}
+        {% endif %}{% endif %}
       {% empty %}
         <tr><td colspan="4"><em>Brak forów w tej sekcji.</em></td></tr>
       {% endfor %}
