@@ -10,6 +10,10 @@ class User(AbstractUser):
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
     post_count = models.PositiveIntegerField(default=0)
     rank = models.CharField(max_length=64, blank=True, default="")
+    is_ghost = models.BooleanField(
+        default=False,
+        help_text="Archive-imported account — no password, cannot log in",
+    )
     is_banned = models.BooleanField(default=False)
     ban_reason = models.TextField(blank=True, default="")
     archive_access = models.SmallIntegerField(

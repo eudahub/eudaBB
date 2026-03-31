@@ -5,9 +5,10 @@ from .models import User, Section, Forum, Topic, Post
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ["username", "email", "post_count", "is_banned", "is_staff"]
+    list_display = ["username", "email", "post_count", "is_ghost", "is_banned", "is_staff"]
+    list_filter = ["is_ghost", "is_banned", "is_staff"]
     fieldsets = BaseUserAdmin.fieldsets + (
-        ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "is_banned", "ban_reason", "archive_access")}),
+        ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "is_ghost", "is_banned", "ban_reason", "archive_access")}),
     )
 
 
