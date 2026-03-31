@@ -44,6 +44,14 @@ forum/
 
 ## Running locally
 
+### 0. Install PostgreSQL (Ubuntu/Debian)
+
+```bash
+sudo apt install postgresql postgresql-contrib
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+```
+
 ### 1. Virtual environment and dependencies
 
 ```bash
