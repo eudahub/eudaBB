@@ -167,7 +167,36 @@ def reply(request, topic_id):
 
 
 # ---------------------------------------------------------------------------
+# TODO: Search
+# ---------------------------------------------------------------------------
+# Search must require login (@login_required) — DDoS protection.
+# Full-text search is expensive; anonymous access would allow trivial amplification.
+#
+# Implementation notes:
+# - Use PostgreSQL full-text search (SearchVector on Post.content_bbcode)
+# - Filter results by forum access_level <= request.user.archive_access
+# - Paginate results (reuse POSTS_PER_PAGE)
+# - Client-side Argon2 + server-side SHA3-256 for login (see auth TODO below)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
 # Auth
+# ---------------------------------------------------------------------------
+# TODO: Client-side Argon2 + server-side SHA3-256 for password login
+#
+# Flow:
+#   1. Client requests salt for given username (server returns salt, reveals
+#      whether username exists — accepted trade-off, see design notes)
+#   2. Client computes Argon2(password, salt) in JS (argon2-browser library)
+#   3. Client sends Argon2 result to server
+#   4. Server computes SHA3-256(received) and compares with stored hash
+#
+# Benefit: Argon2 work factor runs on client, not server — DDoS-resistant.
+# Stored value: SHA3-256(Argon2(pw, salt)) — replay attack with leaked DB
+# requires inverting SHA3, which is infeasible.
+#
+# Email hash stays server-side Argon2 (entered during password reset, no JS).
 # ---------------------------------------------------------------------------
 
 def register(request):
