@@ -21,11 +21,18 @@ class RegisterForm(UserCreationForm):
         # Exact normalized match
         for existing in all_users:
             if normalize(existing) == norm_proposed:
-                if User.objects.get(username=existing).is_ghost:
-                    raise forms.ValidationError(
-                        f"Nazwa '{existing}' pochodzi z archiwum. "
-                        "Skontaktuj się z administratorem, aby aktywować to konto."
-                    )
+                user = User.objects.get(username=existing)
+                if user.is_ghost:
+                    if proposed == existing:
+                        # Exact string match — allow registration, flag as pending activation
+                        self._ghost_username = existing
+                        return proposed
+                    else:
+                        # Same normalized form but different string — blocked
+                        raise forms.ValidationError(
+                            f"Nazwa zarezerwowana przez konto archiwalne '{existing}'. "
+                            "Skontaktuj się z administratorem."
+                        )
                 raise forms.ValidationError("Ta nazwa użytkownika jest już zajęta.")
 
         # Similarity check (0 = disabled, default 1)

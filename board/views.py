@@ -178,6 +178,19 @@ def register(request):
     if request.method == "POST":
         form = RegisterForm(request.POST)
         if form.is_valid():
+            ghost_username = getattr(form, "_ghost_username", None)
+            if ghost_username:
+                # Activate ghost account instead of creating a new one
+                user = User.objects.get(username=ghost_username)
+                user.set_password(form.cleaned_data["password1"])
+                user.email = form.cleaned_data.get("email", "")
+                user.is_ghost = False
+                user.is_active = False  # wait for admin approval
+                user.save()
+                return render(request, "registration/register.html", {
+                    "form": form,
+                    "pending_activation": True,
+                })
             user = form.save()
             login(request, user)
             return redirect("/")
