@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib.auth.forms import UserCreationForm
+from django.conf import settings
 from .models import User
 from .username_utils import normalize, find_similar
 
@@ -27,8 +28,9 @@ class RegisterForm(UserCreationForm):
                     )
                 raise forms.ValidationError("Ta nazwa użytkownika jest już zajęta.")
 
-        # Similarity check
-        similar = find_similar(proposed, list(all_users), max_dist=3)
+        # Similarity check (0 = disabled, default 1)
+        max_dist = getattr(settings, "USERNAME_SIMILARITY_MAX_DIST", 1)
+        similar = find_similar(proposed, list(all_users), max_dist=max_dist) if max_dist > 0 else []
         if similar:
             raise forms.ValidationError(
                 f"Nazwa zbyt podobna do istniejącej: {', '.join(similar)}. "

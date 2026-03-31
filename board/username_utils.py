@@ -9,9 +9,17 @@ import unicodedata
 import re
 
 
+# Characters NFKD cannot decompose — manual fallback
+_MANUAL = str.maketrans("łŁøØæÆ", "lLoOaA")
+
+
 def normalize(username: str) -> str:
-    """Normalize username for comparison: lowercase, no diacritics, alphanumeric only."""
-    nfkd = unicodedata.normalize("NFKD", username.lower())
+    """Normalize username for comparison: lowercase, no diacritics, alphanumeric only.
+    Uses NFKD for most diacritics (handles ą,ć,ę,ń,ó,ś,ź,ż and Nordic Å etc.),
+    plus manual map for ł/ø/æ which have no Unicode decomposition.
+    """
+    s = username.translate(_MANUAL)
+    nfkd = unicodedata.normalize("NFKD", s.lower())
     ascii_only = nfkd.encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]", "", ascii_only)
 
@@ -61,12 +69,12 @@ def _onp_distance(a: str, b: str) -> int:
     return Delta + 2 * p
 
 
-def is_too_similar(proposed: str, existing: str, max_dist: int = 3) -> bool:
+def is_too_similar(proposed: str, existing: str, max_dist: int = 1) -> bool:
     """Return True if normalized proposed name is within max_dist edits of existing."""
     return _onp_distance(normalize(proposed), normalize(existing)) <= max_dist
 
 
-def find_similar(proposed: str, usernames: list[str], max_dist: int = 3) -> list[str]:
+def find_similar(proposed: str, usernames: list[str], max_dist: int = 1) -> list[str]:
     """Return list of existing usernames too similar to proposed."""
     norm = normalize(proposed)
     result = []
