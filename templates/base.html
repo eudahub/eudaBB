@@ -30,6 +30,7 @@
     <div>
       {% if user.is_authenticated %}
         <span>{{ user.username }}</span>
+        {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
         <a href="{% url 'logout' %}">Wyloguj</a>
       {% else %}
         <a href="{% url 'login' %}">Zaloguj</a>

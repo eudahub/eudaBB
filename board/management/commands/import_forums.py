@@ -88,7 +88,7 @@ class Command(BaseCommand):
                     "description": row["description"] or "",
                     "parent": parent,
                     "order": row["forum_id"],
-                    "is_visible": row["visibility"] == 1,
+                    "is_visible": row["visibility"] == 0,
                     "topic_count": row["topic_count"] or 0,
                     "post_count": row["post_count"] or 0,
                 },
