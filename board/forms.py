@@ -3,14 +3,25 @@ from django.contrib.auth.forms import UserCreationForm
 from django.conf import settings
 from .models import User
 from .username_utils import normalize, find_similar
+from .email_utils import hash_email, mask_email
 
 
 class RegisterForm(UserCreationForm):
-    email = forms.EmailField(required=True)
+    email = forms.EmailField(required=True, help_text="Nie jest przechowywany — tylko zaszyfrowany skrót.")
 
     class Meta:
         model = User
-        fields = ["username", "email", "password1", "password2"]
+        fields = ["username", "password1", "password2"]
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        raw_email = self.cleaned_data.get("email", "")
+        user.email = ""
+        user.email_hash = hash_email(raw_email)
+        user.email_mask = mask_email(raw_email)
+        if commit:
+            user.save()
+        return user
 
     def clean_username(self):
         proposed = self.cleaned_data["username"]

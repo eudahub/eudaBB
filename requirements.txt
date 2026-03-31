@@ -3,3 +3,5 @@ psycopg2-binary>=2.9
 bbcode>=1.1
 Pillow>=10.0
 python-decouple>=3.8
+argon2-cffi==25.1.0
+argon2-cffi-bindings==25.1.0
