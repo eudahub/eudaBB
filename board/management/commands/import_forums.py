@@ -58,7 +58,7 @@ class Command(BaseCommand):
         # --- Forums (two passes for parent/child) ---
         forums = conn.execute(
             "SELECT forum_id, section_id, parent_forum_id, title, description, "
-            "topic_count, post_count, visibility "
+            "topic_count, post_count, visibility AS visibility_class "
             "FROM forums ORDER BY forum_id"
         ).fetchall()
 
@@ -88,7 +88,8 @@ class Command(BaseCommand):
                     "description": row["description"] or "",
                     "parent": parent,
                     "order": row["forum_id"],
-                    "is_visible": row["visibility"] == 0,
+                    # visibility_class: 0=public, 1=restricted, 2=admin-only
+                    "is_visible": row["visibility_class"] == 0,
                     "topic_count": row["topic_count"] or 0,
                     "post_count": row["post_count"] or 0,
                 },
