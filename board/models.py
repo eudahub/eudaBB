@@ -33,8 +33,8 @@ class Section(models.Model):
 class Forum(models.Model):
     """A forum board, optionally nested under a parent forum."""
     section = models.ForeignKey(
-        Section, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name="forums",
+        Section, on_delete=models.PROTECT,
+        related_name="forums",
     )
     parent = models.ForeignKey(
         "self", on_delete=models.SET_NULL,

@@ -9,9 +9,9 @@ __pycache__/
 # Virtual environment
 venv/
 
-# Django migrations (generated)
-board/migrations/*.py
-!board/migrations/__init__.py
+# Python cache
+*.pyc
+*.pyo
 
 # Django static/media
 staticfiles/
