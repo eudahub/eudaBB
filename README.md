@@ -88,7 +88,8 @@ sudo -u postgres createuser --superuser $USER
 # Create database:
 createdb forum_db
 
-# Migrations:
+# Generate and apply migrations:
+python manage.py makemigrations board
 python manage.py migrate
 
 # Superuser (admin panel):
@@ -136,6 +137,17 @@ python manage.py collectstatic
 - [x] Admin panel
 - [x] Sticky / Announcement (via admin)
 - [x] Thread locking (via admin)
+
+## Troubleshooting
+
+**`fe_sendauth: no password supplied`**
+Django is connecting via TCP. Set `DB_HOST=` (empty) in `.env` to use a Unix socket instead — no password required.
+
+**`Peer authentication failed for user "postgres"`**
+Set `DB_USER` in `.env` to your system username (the one you used with `createuser`), not `postgres`.
+
+**`Dependency on app with no migrations: board`**
+Run `python manage.py makemigrations board` before `migrate`.
 
 ## To be extended (next steps)
 

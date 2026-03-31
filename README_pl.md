@@ -88,7 +88,8 @@ sudo -u postgres createuser --superuser $USER
 # Utwórz bazę:
 createdb forum_db
 
-# Migracje:
+# Wygeneruj i zastosuj migracje:
+python manage.py makemigrations board
 python manage.py migrate
 
 # Superuser (admin panelu):
@@ -136,6 +137,17 @@ python manage.py collectstatic
 - [x] Panel admina
 - [x] Sticky / Announcement (przez admina)
 - [x] Blokowanie wątków (przez admina)
+
+## Rozwiązywanie problemów
+
+**`fe_sendauth: no password supplied`**
+Django łączy się przez TCP. Ustaw `DB_HOST=` (puste) w `.env`, żeby używać Unix socketa — bez hasła.
+
+**`Peer authentication failed for user "postgres"`**
+Ustaw `DB_USER` w `.env` na swoją nazwę użytkownika systemowego (tę, której użyłeś przy `createuser`), nie `postgres`.
+
+**`Dependency on app with no migrations: board`**
+Uruchom `python manage.py makemigrations board` przed `migrate`.
 
 ## Do rozbudowania (kolejne kroki)
 
