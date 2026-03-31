@@ -1,12 +1,17 @@
+import secrets
+from datetime import timedelta
+
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post
+from .models import Section, Forum, Topic, Post, ActivationToken
 from .forms import RegisterForm, NewTopicForm, ReplyForm
+from .email_utils import verify_email
 from . import bbcode as bbcode_renderer
 
 
@@ -209,16 +214,16 @@ def register(request):
         if form.is_valid():
             ghost_username = getattr(form, "_ghost_username", None)
             if ghost_username:
-                # Activate ghost account instead of creating a new one
+                # Ghost account: save password but don't activate yet.
+                # User must verify email ownership via activate_ghost view.
                 user = User.objects.get(username=ghost_username)
                 user.set_password(form.cleaned_data["password1"])
-                user.email = form.cleaned_data.get("email", "")
-                user.is_ghost = False
-                user.is_active = False  # wait for admin approval
-                user.save()
+                user.is_active = False
+                user.save(update_fields=["password", "is_active"])
                 return render(request, "registration/register.html", {
                     "form": form,
-                    "pending_activation": True,
+                    "ghost_username": ghost_username,
+                    "email_mask": user.email_mask,
                 })
             user = form.save()
             login(request, user)
@@ -227,3 +232,89 @@ def register(request):
         form = RegisterForm()
 
     return render(request, "registration/register.html", {"form": form})
+
+
+def activate_ghost(request):
+    """Step 2 of ghost activation: user proves email ownership."""
+    from .models import User
+    username = request.POST.get("username") or request.GET.get("username", "")
+    try:
+        user = User.objects.get(username=username, is_ghost=False, is_active=False)
+    except User.DoesNotExist:
+        return render(request, "registration/activate_ghost.html", {
+            "username": username, "error": "Nie znaleziono konta oczekującego aktywacji.",
+        })
+
+    # Get or create token record (used for rate limiting)
+    token_obj, _ = ActivationToken.objects.get_or_create(
+        user=user,
+        defaults={
+            "token": secrets.token_urlsafe(48),
+            "expires_at": timezone.now() + timedelta(hours=24),
+        },
+    )
+
+    if request.method == "POST":
+        if token_obj.is_rate_limited():
+            remaining = ActivationToken.WINDOW_MINUTES
+            return render(request, "registration/activate_ghost.html", {
+                "username": username,
+                "email_mask": user.email_mask,
+                "error": f"Zbyt wiele prób. Spróbuj ponownie za {remaining} minut.",
+            })
+
+        email_input = request.POST.get("email", "").strip()
+        if not user.email_hash or not verify_email(email_input, user.email_hash):
+            token_obj.record_failed_attempt()
+            remaining_attempts = ActivationToken.MAX_ATTEMPTS - token_obj.failed_attempts
+            return render(request, "registration/activate_ghost.html", {
+                "username": username,
+                "email_mask": user.email_mask,
+                "error": f"Podany email nie pasuje do konta. Pozostało prób: {max(remaining_attempts, 0)}.",
+            })
+
+        # Email matches — refresh token and send activation link
+        token_obj.token = secrets.token_urlsafe(48)
+        token_obj.expires_at = timezone.now() + timedelta(hours=24)
+        token_obj.failed_attempts = 0
+        token_obj.window_start = None
+        token_obj.save()
+
+        activation_url = request.build_absolute_uri(f"/activate/{token_obj.token}/")
+        send_mail(
+            subject="Aktywacja konta",
+            message=f"Kliknij link aby aktywować konto {username}:\n\n{activation_url}\n\nLink ważny 24 godziny.",
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+            recipient_list=[email_input],
+            fail_silently=False,
+        )
+        return render(request, "registration/activate_ghost.html", {
+            "username": username,
+            "sent": True,
+        })
+
+    return render(request, "registration/activate_ghost.html", {
+        "username": username,
+        "email_mask": user.email_mask,
+    })
+
+
+def activate_confirm(request, token):
+    """Final step: user clicks email link, account activated."""
+    from .models import User
+    try:
+        token_obj = ActivationToken.objects.select_related("user").get(token=token)
+    except ActivationToken.DoesNotExist:
+        return render(request, "registration/activate_confirm.html", {"invalid": True})
+
+    if not token_obj.is_valid():
+        token_obj.delete()
+        return render(request, "registration/activate_confirm.html", {"expired": True})
+
+    user = token_obj.user
+    user.is_ghost = False
+    user.is_active = True
+    user.save(update_fields=["is_ghost", "is_active"])
+    token_obj.delete()
+    login(request, user)
+    return render(request, "registration/activate_confirm.html", {"success": True, "username": user.username})

@@ -1,0 +1,76 @@
+REJESTRACJA KONT - DUCHY ARCHIWALNE
+====================================
+
+TŁO
+---
+Importujemy z archiwum Sfini strukturę forów, wątków i postów.
+Każdy post ma autora. Konta autorów tworzymy jako "duchy" -
+konta bez hasła, nieaktywne (is_active=False, is_ghost=True).
+Nazwy tych kont są zarezerwowane.
+
+
+PRZYPADEK 1: Rejestracja gdy BRAK emaili w bazie
+-------------------------------------------------
+(dotyczy duchów bez emaila - np. spamerzy których nie importowaliśmy
+do sfinia_users_admin.db, lub konta z pustym mailem)
+
+W tym przypadku samodzielna aktywacja NIE JEST możliwa.
+User widzi komunikat: "To konto pochodzi z archiwum.
+Skontaktuj się z administratorem."
+
+Admin weryfikuje tożsamość ręcznie (np. przez Messenger, znajomość osobista)
+i aktywuje konto w panelu administracyjnym (/admin/).
+
+
+PRZYPADEK 2: Rejestracja gdy SĄ emaile w bazie (771 kont)
+----------------------------------------------------------
+Jednorazowo (przed uruchomieniem forum) konwertujemy emaile ze starej bazy
+do formatu Argon2 (hash z solą, jak hasła). Zajmuje to ok. 15 minut.
+W bazie trzymamy TYLKO hash i maskę (np. a***i@wp.pl) - nigdy plaintext.
+
+Flow rejestracji:
+
+1. User wpisuje nick np. "Andy72"
+
+2. System wykrywa ducha o tej nazwie i wyświetla:
+   "To konto pochodzi z archiwum.
+    Adres email na pliku: a***i@wp.pl
+    Ustaw hasło poniżej, a następnie potwierdź email."
+
+3. User ustawia hasło (zapisywane od razu, ale konto nadal nieaktywne)
+
+4. User przechodzi do strony weryfikacji emaila.
+   Widzi maskę a***i@wp.pl i pole do wpisania pełnego adresu.
+
+5. System porównuje wpisany email z hashem Argon2 w bazie.
+
+   a) Email PASUJE → wysyłamy link aktywacyjny na ten adres.
+      Link ważny 24 godziny.
+      User klika link → konto aktywowane, user zalogowany.
+
+   b) Email NIE PASUJE → komunikat:
+      "Podany email nie pasuje. Pozostało prób: X.
+       Masz kilka skrzynek? Spróbuj innego adresu."
+
+6. Limit prób: 10 na godzinę (reset po 60 minutach).
+   Po wyczerpaniu: "Zbyt wiele prób. Spróbuj za 60 minut."
+   Zapobiega to odgadywaniu emaila dla danego nicka.
+
+
+UWAGI DODATKOWE
+---------------
+
+Blokada podobnych nicków:
+- "andy72" (małe litery) jest zablokowane jeśli istnieje duch "Andy72"
+  (normalizacja: bez diakrytyków, bez spacji, tylko litery i cyfry)
+- "Andy73" jest zablokowane bo różni się o 1 znak od "Andy72"
+- "Andrzej" NIE jest blokowane - zbyt duża różnica
+
+Prywatność emaila:
+- Email nigdy nie jest zapisany w plaintext w bazie
+- Tylko hash Argon2 (jak hasło) + maska do wyświetlenia
+- Przy wycieku bazy atakujący nie odzyska emaili
+
+Reset hasła (przyszłość):
+- Działa analogicznie: user podaje nick, widzi maskę emaila,
+  wpisuje pełny email, otrzymuje link resetujący

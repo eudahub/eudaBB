@@ -4,9 +4,12 @@
 {% block content %}
 <article style="max-width: 400px; margin: 4rem auto;">
   <h2>Rejestracja</h2>
-  {% if pending_activation %}
-    <p>Konto <strong>{{ form.cleaned_data.username }}</strong> pochodzi z archiwum.
-    Hasło zostało ustawione — administrator musi zatwierdzić aktywację.</p>
+  {% if ghost_username %}
+    <p>Hasło ustawione. Konto <strong>{{ ghost_username }}</strong> pochodzi z archiwum.</p>
+    <p>Adres email na pliku: <strong>{{ email_mask }}</strong></p>
+    <p><a href="{% url 'activate_ghost' %}?username={{ ghost_username }}" role="button">
+      Potwierdź email i aktywuj konto →
+    </a></p>
   {% else %}
   <form method="post">
     {% csrf_token %}

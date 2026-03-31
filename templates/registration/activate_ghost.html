@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Aktywacja konta archiwalnego{% endblock %}
+{% block content %}
+<article style="max-width: 400px; margin: 4rem auto;">
+  <h2>Aktywacja konta: {{ username }}</h2>
+
+  {% if sent %}
+    <p>Link aktywacyjny został wysłany. Sprawdź skrzynkę i kliknij link w ciągu 24 godzin.</p>
+  {% else %}
+    <p>To konto pochodzi z archiwum. Adres email na pliku: <strong>{{ email_mask }}</strong></p>
+    <p>Wpisz pełny adres email aby otrzymać link aktywacyjny:</p>
+    {% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="username" value="{{ username }}">
+      <input type="email" name="email" placeholder="Twój email" required autofocus>
+      <button type="submit">Wyślij link aktywacyjny</button>
+    </form>
+  {% endif %}
+</article>
+{% endblock %}

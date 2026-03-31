@@ -41,6 +41,52 @@ class User(AbstractUser):
         db_table = "forum_users"
 
 
+class ActivationToken(models.Model):
+    """Short-lived token for ghost account activation via email link."""
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="activation_token",
+    )
+    token = models.CharField(max_length=128, unique=True)
+    expires_at = models.DateTimeField()
+
+    # Rate limiting: max 10 failed email attempts, window resets after 1 hour
+    failed_attempts = models.SmallIntegerField(default=0)
+    window_start = models.DateTimeField(null=True, blank=True)
+
+    MAX_ATTEMPTS = 10
+    WINDOW_MINUTES = 60
+
+    class Meta:
+        db_table = "forum_activation_tokens"
+
+    def is_valid(self):
+        from django.utils import timezone
+        return timezone.now() < self.expires_at
+
+    def is_rate_limited(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        if not self.window_start:
+            return False
+        if timezone.now() > self.window_start + timedelta(minutes=self.WINDOW_MINUTES):
+            # Window expired — reset
+            self.failed_attempts = 0
+            self.window_start = None
+            self.save(update_fields=["failed_attempts", "window_start"])
+            return False
+        return self.failed_attempts >= self.MAX_ATTEMPTS
+
+    def record_failed_attempt(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        now = timezone.now()
+        if not self.window_start or now > self.window_start + timedelta(minutes=self.WINDOW_MINUTES):
+            self.window_start = now
+            self.failed_attempts = 0
+        self.failed_attempts += 1
+        self.save(update_fields=["failed_attempts", "window_start"])
+
+
 class Section(models.Model):
     """Top-level grouping of forums (phpBB: category)."""
     title = models.CharField(max_length=255)

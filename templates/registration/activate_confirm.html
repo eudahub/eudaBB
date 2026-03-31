@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Aktywacja konta{% endblock %}
+{% block content %}
+<article style="max-width: 400px; margin: 4rem auto;">
+  {% if success %}
+    <h2>Konto aktywowane</h2>
+    <p>Witaj, <strong>{{ username }}</strong>! Jesteś zalogowany.</p>
+    <p><a href="/" role="button">Przejdź do forum</a></p>
+  {% elif expired %}
+    <h2>Link wygasł</h2>
+    <p>Link aktywacyjny jest ważny 24 godziny. Wróć do rejestracji i wyślij nowy link.</p>
+    <p><a href="{% url 'register' %}">Powrót do rejestracji</a></p>
+  {% elif invalid %}
+    <h2>Nieprawidłowy link</h2>
+    <p>Link aktywacyjny jest nieprawidłowy lub został już użyty.</p>
+    <p><a href="{% url 'register' %}">Powrót do rejestracji</a></p>
+  {% endif %}
+</article>
+{% endblock %}
