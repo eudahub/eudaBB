@@ -1,0 +1,5 @@
+Django>=5.0,<6.0
+psycopg2-binary>=2.9
+bbcode>=1.1
+Pillow>=10.0
+python-decouple>=3.8

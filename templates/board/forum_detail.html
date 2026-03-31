@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ forum.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb"><a href="/">Forum</a> › {{ forum.title }}</p>
+<h2>{{ forum.title }}</h2>
+
+{% if user.is_authenticated %}
+  <p><a href="{% url 'new_topic' forum.pk %}" role="button">+ Nowy wątek</a></p>
+{% endif %}
+
+<table>
+  <thead>
+    <tr>
+      <th>Temat</th>
+      <th>Autor</th>
+      <th>Odpowiedzi</th>
+      <th>Wyświetleń</th>
+      <th>Ostatni post</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for topic in page.object_list %}
+    <tr>
+      <td>
+        {% if topic.topic_type == 2 %}<strong>[Ogłoszenie] </strong>{% endif %}
+        {% if topic.topic_type == 1 %}<em>[Przyklejony] </em>{% endif %}
+        <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a>
+        {% if topic.is_locked %} 🔒{% endif %}
+      </td>
+      <td>{{ topic.author.username|default:"—" }}</td>
+      <td>{{ topic.reply_count }}</td>
+      <td>{{ topic.view_count }}</td>
+      <td>
+        {% if topic.last_post %}
+          {{ topic.last_post_at|date:"d.m.Y H:i" }}<br>
+          <small>{{ topic.last_post.author.username|default:"—" }}</small>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5"><em>Brak wątków w tym forum.</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% include "board/_pagination.html" %}
+{% endblock %}

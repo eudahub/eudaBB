@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Odpowiedz — {{ topic.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
+  Odpowiedź
+</p>
+
+<h2>Odpowiedź w: {{ topic.title }}</h2>
+
+<form method="post">
+  {% csrf_token %}
+  {% for field in form %}
+    <label>{{ field.label }}{{ field }}
+      {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+    </label>
+  {% endfor %}
+  <button type="submit">Wyślij odpowiedź</button>
+  <a href="{% url 'topic_detail' topic.pk %}" role="button" class="secondary outline" style="margin-left:.5rem;">Anuluj</a>
+</form>
+{% endblock %}

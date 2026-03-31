@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pl" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Forum{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    body { max-width: 1100px; margin: 0 auto; padding: 0 1rem; }
+    nav { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--pico-muted-border-color); padding: .75rem 0; margin-bottom: 1rem; }
+    nav a { margin-right: 1rem; text-decoration: none; }
+    .breadcrumb { color: var(--pico-muted-color); margin-bottom: 1rem; font-size: .9rem; }
+    .breadcrumb a { color: var(--pico-primary); }
+    table { width: 100%; }
+    .post-box { border: 1px solid var(--pico-muted-border-color); border-radius: 6px; margin-bottom: 1.5rem; }
+    .post-header { background: var(--pico-card-sectioning-background-color); padding: .5rem 1rem; display: flex; justify-content: space-between; font-size: .85rem; color: var(--pico-muted-color); border-radius: 6px 6px 0 0; }
+    .post-author { width: 150px; padding: 1rem; border-right: 1px solid var(--pico-muted-border-color); font-size: .85rem; vertical-align: top; }
+    .post-content { padding: 1rem; vertical-align: top; }
+    .locked-notice { color: var(--pico-del-color); font-style: italic; }
+    .messages li { padding: .5rem; border-radius: 4px; list-style: none; }
+    .messages .error { background: #fdd; }
+    .messages .success { background: #dfd; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div>
+      <a href="/">🏠 Forum</a>
+    </div>
+    <div>
+      {% if user.is_authenticated %}
+        <span>{{ user.username }}</span>
+        <a href="{% url 'logout' %}">Wyloguj</a>
+      {% else %}
+        <a href="{% url 'login' %}">Zaloguj</a>
+        <a href="{% url 'register' %}">Rejestracja</a>
+      {% endif %}
+    </div>
+  </nav>
+
+  {% if messages %}
+    <ul class="messages">
+      {% for msg in messages %}<li class="{{ msg.tags }}">{{ msg }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  {% block content %}{% endblock %}
+</body>
+</html>

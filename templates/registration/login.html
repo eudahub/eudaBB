@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Logowanie{% endblock %}
+
+{% block content %}
+<article style="max-width: 400px; margin: 4rem auto;">
+  <h2>Logowanie</h2>
+  <form method="post">
+    {% csrf_token %}
+    {% for field in form %}
+      <label>{{ field.label }}{{ field }}
+        {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+      </label>
+    {% endfor %}
+    {% if form.non_field_errors %}
+      <p style="color:red;">{{ form.non_field_errors|join:", " }}</p>
+    {% endif %}
+    <button type="submit">Zaloguj</button>
+  </form>
+  <p><a href="{% url 'register' %}">Nie masz konta? Zarejestruj się.</a></p>
+</article>
+{% endblock %}

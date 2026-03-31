@@ -1,0 +1,15 @@
+{% if page.has_other_pages %}
+<nav aria-label="Paginacja" style="margin-top: 1rem;">
+  {% if page.has_previous %}
+    <a href="?page={{ page.previous_page_number }}" role="button" class="secondary outline">« Poprzednia</a>
+  {% endif %}
+
+  <small style="margin: 0 1rem;">
+    Strona {{ page.number }} z {{ page.paginator.num_pages }}
+  </small>
+
+  {% if page.has_next %}
+    <a href="?page={{ page.next_page_number }}" role="button" class="secondary outline">Następna »</a>
+  {% endif %}
+</nav>
+{% endif %}

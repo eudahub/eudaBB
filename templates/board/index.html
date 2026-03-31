@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Forum — strona główna{% endblock %}
+
+{% block content %}
+<h1>Forum</h1>
+
+{% for section in sections %}
+  <h3>{{ section.title }}</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Forum</th>
+        <th>Wątki</th>
+        <th>Posty</th>
+        <th>Ostatni post</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for forum in section.forums.all %}
+        {% if forum.is_visible %}
+        <tr>
+          <td>
+            <a href="{% url 'forum_detail' forum.pk %}"><strong>{{ forum.title }}</strong></a>
+            {% if forum.description %}<br><small>{{ forum.description }}</small>{% endif %}
+          </td>
+          <td>{{ forum.topic_count }}</td>
+          <td>{{ forum.post_count }}</td>
+          <td>
+            {% if forum.last_post %}
+              {{ forum.last_post_at|date:"d.m.Y H:i" }}<br>
+              <small>{{ forum.last_post.author.username }}</small>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="4"><em>Brak forów w tej sekcji.</em></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% empty %}
+  <p>Brak sekcji. Dodaj przez <a href="/admin/">panel administracyjny</a>.</p>
+{% endfor %}
+{% endblock %}

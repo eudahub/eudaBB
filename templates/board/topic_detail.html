@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' forum.pk %}">{{ forum.title }}</a> ›
+  {{ topic.title }}
+</p>
+
+<h2>{{ topic.title }}</h2>
+{% if topic.is_locked %}<p class="locked-notice">🔒 Wątek zamknięty — odpowiadanie wyłączone.</p>{% endif %}
+
+{% include "board/_pagination.html" %}
+
+{% for post in page.object_list %}
+<div class="post-box" id="post-{{ post.pk }}">
+  <div class="post-header">
+    <span>#{{ post.post_order }}</span>
+    <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
+  </div>
+  <table style="width:100%; border-collapse: collapse;">
+    <tr>
+      <td class="post-author">
+        <strong>{{ post.author.username|default:"[usunięty]" }}</strong>
+        {% if post.author %}
+          <br><small>Postów: {{ post.author.post_count }}</small>
+          {% if post.author.rank %}<br><small>{{ post.author.rank }}</small>{% endif %}
+          {% if post.author.location %}<br><small>📍 {{ post.author.location }}</small>{% endif %}
+        {% endif %}
+      </td>
+      <td class="post-content">
+        {{ post.content_html|safe }}
+        {% if post.edit_count %}
+          <hr>
+          <small><em>Edytowano {{ post.edit_count }} raz.
+            {% if post.updated_by %}przez {{ post.updated_by.username }}{% endif %}
+            {% if post.updated_at %}({{ post.updated_at|date:"d.m.Y H:i" }}){% endif %}
+          </em></small>
+        {% endif %}
+        {% if post.author.signature %}
+          <hr>
+          <small>{{ post.author.signature }}</small>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+</div>
+{% empty %}
+  <p><em>Brak postów.</em></p>
+{% endfor %}
+
+{% include "board/_pagination.html" %}
+
+{% if reply_form %}
+  <hr>
+  <h3>Odpowiedz</h3>
+  <form method="post" action="{% url 'reply' topic.pk %}">
+    {% csrf_token %}
+    {% for field in reply_form %}
+      <label>{{ field.label }}{{ field }}
+        {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+      </label>
+    {% endfor %}
+    <button type="submit">Wyślij odpowiedź</button>
+  </form>
+{% elif not user.is_authenticated %}
+  <p><a href="{% url 'login' %}">Zaloguj się</a>, aby odpowiedzieć.</p>
+{% endif %}
+{% endblock %}

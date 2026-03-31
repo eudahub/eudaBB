@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Nowy wątek — {{ forum.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' forum.pk %}">{{ forum.title }}</a> ›
+  Nowy wątek
+</p>
+
+<h2>Nowy wątek w: {{ forum.title }}</h2>
+
+<form method="post">
+  {% csrf_token %}
+  {% for field in form %}
+    <label>{{ field.label }}{{ field }}
+      {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+    </label>
+  {% endfor %}
+  <button type="submit">Utwórz wątek</button>
+  <a href="{% url 'forum_detail' forum.pk %}" role="button" class="secondary outline" style="margin-left:.5rem;">Anuluj</a>
+</form>
+{% endblock %}
