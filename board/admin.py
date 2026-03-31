@@ -1,15 +1,23 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib import messages
+from django.utils.translation import gettext_lazy as _
 from .models import User, Section, Forum, Topic, Post
 
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ["username", "email", "post_count", "is_ghost", "is_banned", "is_staff"]
-    list_filter = ["is_ghost", "is_banned", "is_staff"]
+    list_display = ["username", "email_mask", "post_count", "is_ghost", "is_active", "is_banned", "is_staff"]
+    list_filter = ["is_ghost", "is_active", "is_banned", "is_staff"]
+    actions = ["activate_accounts"]
     fieldsets = BaseUserAdmin.fieldsets + (
         ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "is_ghost", "is_banned", "ban_reason", "archive_access")}),
     )
+
+    @admin.action(description="Aktywuj wybrane konta (is_ghost=False, is_active=True)")
+    def activate_accounts(self, request, queryset):
+        updated = queryset.filter(is_ghost=True).update(is_ghost=False, is_active=True)
+        self.message_user(request, f"Aktywowano {updated} kont.", messages.SUCCESS)
 
 
 @admin.register(Section)
