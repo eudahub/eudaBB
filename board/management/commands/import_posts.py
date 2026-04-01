@@ -26,6 +26,7 @@ from django.db import transaction
 
 from board import bbcode as bbcode_renderer
 from board.models import Forum, Post, Topic, User
+from board.management.commands.update_forum_counts import compute_recursive_counts
 
 
 TOPIC_TYPE_MAP = {
@@ -189,11 +190,13 @@ class Command(BaseCommand):
                 topic.reply_count = max(total - 1, 0)
                 topic.save(update_fields=["reply_count"])
 
-        # --- Update forum counters ---
-        self.stdout.write("Aktualizuję liczniki forów…")
+        # --- Update forum counters (recursive, like phpBB) ---
+        self.stdout.write("Aktualizuję liczniki forów (rekurencyjnie)…")
+        totals = compute_recursive_counts()
         for forum in Forum.objects.all():
-            forum.topic_count = forum.topics.count()
-            forum.post_count  = Post.objects.filter(topic__forum=forum).count()
+            tc, pc = totals[forum.id]
+            forum.topic_count = tc
+            forum.post_count  = pc
             forum.save(update_fields=["topic_count", "post_count"])
 
         self.stdout.write(self.style.SUCCESS(
