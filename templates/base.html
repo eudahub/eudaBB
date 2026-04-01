@@ -6,30 +6,67 @@
   <title>{% block title %}Forum{% endblock %}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <style>
-    /* Compact layout — closer to phpBB density */
-    :root { --pico-font-size: 13px; --pico-line-height: 1.4; }
-    body { max-width: 1100px; margin: 0 auto; padding: 0 .5rem; font-size: 13px; }
-    h1 { font-size: 1.3rem; margin-bottom: .4rem; }
-    h2 { font-size: 1.15rem; margin-bottom: .4rem; }
-    h3 { font-size: 1rem; }
-    p  { margin-bottom: .4rem; }
-    nav { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--pico-muted-border-color); padding: .4rem 0; margin-bottom: .6rem; font-size: .85rem; }
-    nav a { margin-right: .75rem; text-decoration: none; }
-    .breadcrumb { color: var(--pico-muted-color); margin-bottom: .5rem; font-size: .82rem; }
-    .breadcrumb a { color: var(--pico-primary); }
-    /* Compact tables */
-    table { width: 100%; border-collapse: collapse; }
-    thead th { font-size: .8rem; padding: .25rem .5rem; background: var(--pico-card-sectioning-background-color); }
-    td, th { padding: .3rem .5rem; vertical-align: middle; border-bottom: 1px solid var(--pico-muted-border-color); }
-    td small { font-size: .78rem; color: var(--pico-muted-color); }
+    /* subSilver-inspired — matches sfinia.fora.pl palette and density */
+    :root {
+      --pico-font-size: 12px;
+      --pico-line-height: 1.4;
+      --pico-primary: #800000;
+      --pico-primary-hover: #DD6900;
+    }
+    body {
+      font-family: Verdana, Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      background-color: #fffcfc;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 .5rem;
+      color: #000;
+    }
+    h1, h2, h3 { font-size: 12px; font-weight: bold; margin: .3rem 0; color: #000; }
+    p  { margin-bottom: .4rem; font-size: 12px; }
+    a:link, a:visited { color: #800000; text-decoration: none; }
+    a:hover            { color: #DD6900; text-decoration: underline; }
+
+    /* Nav bar */
+    nav {
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid #cc9999;
+      padding: .3rem 0; margin-bottom: .5rem;
+      font-size: 11px;
+    }
+    nav a { margin-right: .6rem; }
+
+    /* Breadcrumb */
+    .breadcrumb { margin-bottom: .4rem; font-size: 11px; }
+
+    /* Tables — phpBB forumline style */
+    table { width: 100%; border-collapse: collapse; border: 2px solid #BC8F8F; }
+    thead th {
+      font-size: 11px; font-weight: bold;
+      color: #FFB572; background-color: #800000;
+      padding: 4px 6px; height: 25px;
+    }
+    td { padding: 3px 6px; vertical-align: middle; font-size: 12px; }
+    tr.row1 td { background-color: #f8f8e8; }
+    tr.row2 td { background-color: #fbfbd0; }
+    tr.cat  td { background-color: #f0ee81; font-weight: bold; font-size: 12px; color: #800000; border: 1px solid #fff; }
+    td small { font-size: 10px; color: #444; }
+
     /* Posts */
-    .post-box { border: 1px solid var(--pico-muted-border-color); border-radius: 4px; margin-bottom: .75rem; }
-    .post-header { background: var(--pico-card-sectioning-background-color); padding: .25rem .6rem; display: flex; justify-content: space-between; font-size: .78rem; color: var(--pico-muted-color); border-radius: 4px 4px 0 0; }
-    .post-author { width: 130px; padding: .5rem; border-right: 1px solid var(--pico-muted-border-color); font-size: .8rem; vertical-align: top; }
-    .post-content { padding: .5rem .75rem; vertical-align: top; font-size: .87rem; line-height: 1.45; }
-    .locked-notice { color: var(--pico-del-color); font-style: italic; font-size: .85rem; }
-    .messages li { padding: .3rem .5rem; border-radius: 3px; list-style: none; font-size: .85rem; }
-    .messages .error { background: #fdd; }
+    .post-box   { border: 2px solid #BC8F8F; border-radius: 2px; margin-bottom: .5rem; }
+    .post-header {
+      background-color: #f0ee81;
+      padding: 2px 6px;
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: #000;
+    }
+    .post-author { width: 130px; padding: .4rem; border-right: 1px solid #BC8F8F; font-size: 11px; vertical-align: top; background-color: #f8f8e8; }
+    .post-content { padding: .4rem .6rem; vertical-align: top; font-size: 12px; line-height: 18px; }
+    .locked-notice { color: #800000; font-style: italic; font-size: 11px; }
+
+    /* Messages */
+    .messages li { padding: 3px 6px; list-style: none; font-size: 11px; }
+    .messages .error   { background: #fdd; }
     .messages .success { background: #dfd; }
   </style>
 </head>
