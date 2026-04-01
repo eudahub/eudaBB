@@ -79,7 +79,7 @@ def index(request):
 
 def forum_detail(request, forum_id):
     """Topic list for a single forum, paginated."""
-    forum = get_object_or_404(Forum, pk=forum_id, is_visible=True)
+    forum = get_object_or_404(Forum, pk=forum_id)
     topics_qs = forum.topics.select_related("author", "last_post", "last_post__author")
     paginator = Paginator(topics_qs, getattr(settings, "TOPICS_PER_PAGE", 30))
     page = paginator.get_page(request.GET.get("page"))
@@ -116,7 +116,7 @@ def new_topic(request, forum_id):
     """Create a new topic with its first post."""
     if request.user.is_root:
         return HttpResponseForbidden("Konto root nie może tworzyć postów.")
-    forum = get_object_or_404(Forum, pk=forum_id, is_visible=True)
+    forum = get_object_or_404(Forum, pk=forum_id)
 
     if request.method == "POST":
         form = NewTopicForm(request.POST)
