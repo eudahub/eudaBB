@@ -11,8 +11,9 @@ Parameters must match exactly between JS (hash-wasm) and Python (argon2-cffi).
 from argon2.low_level import hash_secret_raw, Type
 
 # Must match the JS constants in login.html / register.html
-PREHASH_MEMORY    = 32768   # KB (32 MB)
-PREHASH_TIME      = 3
+# Benchmarked 2026-04-01: desktop WASM ~355ms, smartphone WASM ~1340ms
+PREHASH_MEMORY    = 262144  # KB (256 MB)
+PREHASH_TIME      = 2
 PREHASH_PARALLEL  = 1
 PREHASH_HASHLEN   = 32      # bytes → 64 hex chars
 

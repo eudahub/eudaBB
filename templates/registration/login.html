@@ -22,7 +22,7 @@
 <script>
 (function() {
   var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
-  var PARAMS = { memorySize: 32768, iterations: 3, parallelism: 1, hashLength: 32, outputType: 'hex' };
+  var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
 
   function saltFor(username) { return username.toLowerCase() + ':sfiniabb'; }
 

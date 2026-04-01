@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Argon2 WASM benchmark</title>
+  <style>
+    body { font-family: monospace; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { border: 1px solid #ccc; padding: 0.4rem 0.7rem; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { background: #eee; }
+    .ok   { background: #dfd; }
+    .warn { background: #ffd; }
+    .bad  { background: #fdd; }
+    #status { margin: 1rem 0; color: #555; }
+    button { padding: 0.5rem 1.5rem; font-size: 1rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h2>Argon2id WASM — benchmark parametrów</h2>
+  <p>Otwórz tę stronę w przeglądarce <strong>i na smartfonie</strong>, kliknij Start i porównaj wyniki.</p>
+  <p>Cel: desktop 500–800ms, smartfon poniżej ~2000ms.</p>
+  <button id="btn" onclick="runBench()" disabled>▶ Start benchmark</button>
+  <div id="status">Ładowanie WASM… (może potrwać kilka sekund przy wolnym internecie)</div>
+  <table id="results" style="display:none">
+    <thead>
+      <tr><th>Parametry</th><th>Czas (ms)</th><th>Ocena</th></tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+<script>
+var CONFIGS = [
+  { m:  65536, t:  6, p: 1, label:  '64MB  t=6  p=1' },
+  { m:  65536, t: 10, p: 1, label:  '64MB  t=10 p=1' },
+  { m: 131072, t:  3, p: 1, label: '128MB  t=3  p=1' },
+  { m: 131072, t:  5, p: 1, label: '128MB  t=5  p=1' },
+  { m: 131072, t:  8, p: 1, label: '128MB  t=8  p=1' },
+  { m: 196608, t:  3, p: 1, label: '192MB  t=3  p=1' },
+  { m: 262144, t:  2, p: 1, label: '256MB  t=2  p=1' },
+  { m: 262144, t:  3, p: 1, label: '256MB  t=3  p=1' },
+];
+
+var wasmLoaded = false;
+
+function wasmReady() {
+  wasmLoaded = true;
+  document.getElementById('status').textContent = 'WASM gotowy. Kliknij Start.';
+  document.getElementById('btn').disabled = false;
+}
+
+function wasmFail() {
+  document.getElementById('status').textContent = 'Błąd: nie można załadować WASM (brak internetu?).';
+}
+
+// btn already disabled in HTML
+
+function grade(ms) {
+  if (ms < 200)  return ['za słabe', 'bad'];
+  if (ms < 400)  return ['słabe', 'bad'];
+  if (ms < 500)  return ['akceptowalne (cel: desktop)', 'warn'];
+  if (ms < 900)  return ['dobre — cel desktop ✓', 'ok'];
+  if (ms < 2000) return ['mocne — może być celem na mobile ✓', 'ok'];
+  return ['za wolne na mobile', 'warn'];
+}
+
+async function measureOne(cfg) {
+  var t0 = performance.now();
+  await hashwasm.argon2id({
+    password: 'benchmarkpassword',
+    salt: 'testuser:sfiniabb',
+    memorySize: cfg.m,
+    iterations: cfg.t,
+    parallelism: cfg.p,
+    hashLength: 32,
+    outputType: 'hex',
+  });
+  return Math.round(performance.now() - t0);
+}
+
+async function runBench() {
+  if (!wasmLoaded) { alert('WASM jeszcze się ładuje.'); return; }
+  var btn = document.getElementById('btn');
+  btn.disabled = true;
+  document.getElementById('status').textContent = 'Trwa pomiar…';
+  document.getElementById('results').style.display = '';
+  var tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+
+  for (var i = 0; i < CONFIGS.length; i++) {
+    var cfg = CONFIGS[i];
+    document.getElementById('status').textContent = 'Mierzę: ' + cfg.label;
+    await measureOne(cfg); // warmup
+    var ms = await measureOne(cfg);
+    var g = grade(ms);
+    var tr = document.createElement('tr');
+    tr.className = g[1];
+    tr.innerHTML = '<td>' + cfg.label + '</td><td>' + ms + ' ms</td><td>' + g[0] + '</td>';
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById('status').textContent = 'Gotowe. Skopiuj wyniki i porównaj z telefonem.';
+  btn.disabled = false;
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js" onload="wasmReady()" onerror="wasmFail()"></script>
+</body>
+</html>
