@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.http import HttpResponseForbidden
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.utils import timezone
@@ -113,6 +114,8 @@ def topic_detail(request, topic_id):
 @login_required
 def new_topic(request, forum_id):
     """Create a new topic with its first post."""
+    if request.user.is_root:
+        return HttpResponseForbidden("Konto root nie może tworzyć postów.")
     forum = get_object_or_404(Forum, pk=forum_id, is_visible=True)
 
     if request.method == "POST":
@@ -142,6 +145,8 @@ def new_topic(request, forum_id):
 @login_required
 def reply(request, topic_id):
     """Add a reply post to an existing topic."""
+    if request.user.is_root:
+        return HttpResponseForbidden("Konto root nie może tworzyć postów.")
     topic = get_object_or_404(Topic, pk=topic_id)
 
     if topic.is_locked:

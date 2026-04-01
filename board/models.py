@@ -36,9 +36,20 @@ class User(AbstractUser):
         default=0,
         help_text="Max archive_level user can see: 0=normal, 1=soft darkweb, 2=hard darkweb (admin-granted)",
     )
+    is_root = models.BooleanField(
+        default=False,
+        help_text="Superadmin: manages users and forum structure. Cannot post, has no email, no password reset.",
+    )
 
     class Meta:
         db_table = "forum_users"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_root"],
+                condition=models.Q(is_root=True),
+                name="only_one_root",
+            )
+        ]
 
 
 class ActivationToken(models.Model):
