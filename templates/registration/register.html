@@ -19,6 +19,22 @@
         {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
       </label>
     {% endfor %}
+    {% if mask_variants %}
+    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:0.8rem 1rem;margin:0.5rem 0;">
+      <strong>Uwaga:</strong> Twój adres email ma bardzo krótką część lokalną
+      — maska będzie łatwa do odgadnięcia brute-force.<br>
+      Wybierz wariant maski wyświetlanej na forum:
+      <div style="margin-top:0.4rem;">
+        {% for variant in mask_variants %}
+        <label style="display:block;">
+          <input type="radio" name="mask_variant" value="{{ variant }}"{% if forloop.first %} checked{% endif %}>
+          {{ variant }}{% if forloop.first %} (domyślna){% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      <small>Im więcej gwiazdek, tym trudniej odgadnąć. Rozważ użycie dłuższego adresu email.</small>
+    </div>
+    {% endif %}
     <button type="submit">Utwórz konto</button>
   </form>
   {% endif %}

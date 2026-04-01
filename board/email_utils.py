@@ -13,6 +13,9 @@ import re
 from django.contrib.auth.hashers import make_password, check_password
 
 
+SHORT_LOCAL_THRESHOLD = 4  # local parts this short get a weak-mask warning
+
+
 KNOWN_PROVIDERS = {
     "gmail.com", "googlemail.com",
     "outlook.com", "hotmail.com", "hotmail.pl", "live.com",
@@ -64,3 +67,40 @@ def mask_email(email: str) -> str:
         masked_domain = _mask_part(host) + "." + tld
 
     return f"{masked_local}@{masked_domain}"
+
+
+def mask_email_variants(email: str) -> list:
+    """Return alternative mask options when local part is short (≤ SHORT_LOCAL_THRESHOLD).
+
+    Returns an empty list for long local parts — no choice needed.
+    The list is ordered from least to most private:
+      j*n@wp.pl, j*@wp.pl, *n@wp.pl, *@wp.pl
+    """
+    email = email.strip()
+    if "@" not in email:
+        return []
+
+    local, domain = email.rsplit("@", 1)
+    domain_lower = domain.lower()
+    local_clean = re.sub(r"[^a-zA-Z0-9]", "", local) or local
+    n = len(local_clean)
+
+    if n > SHORT_LOCAL_THRESHOLD:
+        return []
+
+    if domain_lower in KNOWN_PROVIDERS:
+        masked_domain = domain_lower
+    else:
+        parts = domain_lower.split(".")
+        tld = ".".join(parts[-1:]) if len(parts) == 2 else ".".join(parts[-2:])
+        host = parts[0]
+        masked_domain = _mask_part(host) + "." + tld
+
+    variants = []
+    if n >= 3:
+        variants.append(f"{local_clean[0]}*{local_clean[-1]}@{masked_domain}")
+    if n >= 2:
+        variants.append(f"{local_clean[0]}*@{masked_domain}")
+        variants.append(f"*{local_clean[-1]}@{masked_domain}")
+    variants.append(f"*@{masked_domain}")
+    return variants

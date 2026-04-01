@@ -11,7 +11,7 @@ from django.conf import settings
 
 from .models import Section, Forum, Topic, Post, ActivationToken
 from .forms import RegisterForm, NewTopicForm, ReplyForm
-from .email_utils import verify_email
+from .email_utils import verify_email, mask_email_variants
 from . import bbcode as bbcode_renderer
 
 
@@ -225,7 +225,16 @@ def register(request):
                     "ghost_username": ghost_username,
                     "email_mask": user.email_mask,
                 })
-            user = form.save()
+            raw_email = form.cleaned_data.get("email", "")
+            variants = mask_email_variants(raw_email)
+            mask_variant = request.POST.get("mask_variant", "")
+            if variants and mask_variant not in variants:
+                # Short email — ask user to pick a mask variant
+                return render(request, "registration/register.html", {
+                    "form": form,
+                    "mask_variants": variants,
+                })
+            user = form.save(mask_variant=mask_variant or None)
             login(request, user)
             return redirect("/")
     else:

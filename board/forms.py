@@ -3,7 +3,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.conf import settings
 from .models import User
 from .username_utils import normalize, find_similar
-from .email_utils import hash_email, mask_email
+from .email_utils import hash_email, mask_email, mask_email_variants
 
 
 class RegisterForm(UserCreationForm):
@@ -13,12 +13,16 @@ class RegisterForm(UserCreationForm):
         model = User
         fields = ["username", "password1", "password2"]
 
-    def save(self, commit=True):
+    def save(self, commit=True, mask_variant=None):
         user = super().save(commit=False)
         raw_email = self.cleaned_data.get("email", "")
         user.email = ""
         user.email_hash = hash_email(raw_email)
-        user.email_mask = mask_email(raw_email)
+        variants = mask_email_variants(raw_email)
+        if mask_variant and mask_variant in variants:
+            user.email_mask = mask_variant
+        else:
+            user.email_mask = mask_email(raw_email)
         if commit:
             user.save()
         return user
