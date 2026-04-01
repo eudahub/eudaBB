@@ -4,8 +4,9 @@
 {% block content %}
 <article style="max-width: 400px; margin: 4rem auto;">
   <h2>Logowanie</h2>
-  <form method="post">
+  <form method="post" id="login-form">
     {% csrf_token %}
+    <input type="hidden" name="password_is_prehashed" value="0" id="prehashed-flag">
     {% for field in form %}
       <label>{{ field.label }}{{ field }}
         {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
@@ -14,8 +15,45 @@
     {% if form.non_field_errors %}
       <p style="color:red;">{{ form.non_field_errors|join:", " }}</p>
     {% endif %}
-    <button type="submit">Zaloguj</button>
+    <button type="submit" id="login-btn">Zaloguj</button>
   </form>
   <p><a href="{% url 'register' %}">Nie masz konta? Zarejestruj się.</a></p>
 </article>
+<script>
+(function() {
+  var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
+  var PARAMS = { memorySize: 32768, iterations: 3, parallelism: 1, hashLength: 32, outputType: 'hex' };
+
+  function saltFor(username) { return username.toLowerCase() + ':sfiniabb'; }
+
+  var form = document.getElementById('login-form');
+  var flag = document.getElementById('prehashed-flag');
+  var btn  = document.getElementById('login-btn');
+
+  var script = document.createElement('script');
+  script.src = WASM_CDN;
+  script.onload = function() {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      btn.disabled = true;
+      var usernameField = form.querySelector('[name=username]');
+      var passwordField = form.querySelector('[name=password]');
+      hashwasm.argon2id(Object.assign({}, PARAMS, {
+        password: passwordField.value,
+        salt: saltFor(usernameField.value),
+      })).then(function(hash) {
+        passwordField.value = hash;
+        flag.value = '1';
+        form.submit();
+      }).catch(function() {
+        // WASM failed — submit plaintext, backend will prehash in Python
+        btn.disabled = false;
+        form.submit();
+      });
+    });
+  };
+  script.onerror = function() { /* brak CDN — plaintext, backend prehashuje */ };
+  document.head.appendChild(script);
+})();
+</script>
 {% endblock %}

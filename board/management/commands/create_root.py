@@ -14,6 +14,7 @@ import getpass
 from django.core.management.base import BaseCommand, CommandError
 
 from board.models import User
+from board.auth_utils import prehash_password
 
 
 class Command(BaseCommand):
@@ -46,7 +47,7 @@ class Command(BaseCommand):
             email_hash="",
             email_mask="",
         )
-        root.set_password(password)
+        root.set_password(prehash_password(password, "root"))
         root.save()
 
         self.stdout.write(self.style.SUCCESS(

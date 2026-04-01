@@ -11,7 +11,7 @@
       Potwierdź email i aktywuj konto →
     </a></p>
   {% else %}
-  <form method="post">
+  <form method="post" id="register-form">
     {% csrf_token %}
     {% for field in form %}
       <label>{{ field.label }}{{ field }}
@@ -35,8 +35,46 @@
       <small>Im więcej gwiazdek, tym trudniej odgadnąć. Rozważ użycie dłuższego adresu email.</small>
     </div>
     {% endif %}
-    <button type="submit">Utwórz konto</button>
+    <button type="submit" id="register-btn">Utwórz konto</button>
   </form>
+<script>
+(function() {
+  var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
+  var PARAMS = { memorySize: 32768, iterations: 3, parallelism: 1, hashLength: 32, outputType: 'hex' };
+
+  function saltFor(username) { return username.toLowerCase() + ':sfiniabb'; }
+
+  var form = document.getElementById('register-form');
+  var btn  = document.getElementById('register-btn');
+
+  var script = document.createElement('script');
+  script.src = WASM_CDN;
+  script.onload = function() {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      btn.disabled = true;
+      var username  = form.querySelector('[name=username]').value;
+      var p1field   = form.querySelector('[name=password1]');
+      var p2field   = form.querySelector('[name=password2]');
+      var flagField = form.querySelector('[name=password_is_prehashed]');
+      var salt = saltFor(username);
+      Promise.all([
+        hashwasm.argon2id(Object.assign({}, PARAMS, { password: p1field.value, salt: salt })),
+        hashwasm.argon2id(Object.assign({}, PARAMS, { password: p2field.value, salt: salt })),
+      ]).then(function(hashes) {
+        p1field.value = hashes[0];
+        p2field.value = hashes[1];
+        if (flagField) flagField.value = '1';
+        form.submit();
+      }).catch(function() {
+        btn.disabled = false;
+        form.submit();
+      });
+    });
+  };
+  document.head.appendChild(script);
+})();
+</script>
   {% endif %}
   <p><a href="{% url 'login' %}">Masz już konto? Zaloguj się.</a></p>
 </article>
