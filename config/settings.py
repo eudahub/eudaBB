@@ -7,6 +7,11 @@ SECRET_KEY = config("SECRET_KEY", default="dev-secret-key-change-in-production")
 DEBUG = config("DEBUG", default=True, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1").split(",")
 
+# TEST_MODE: skip email sending, activate ghost accounts immediately after email check.
+# Also shows "Przełącz" button for all logged-in users.
+# Set TEST_MODE=true in .env for development, never on production.
+TEST_MODE = config("TEST_MODE", default=False, cast=bool)
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -40,6 +45,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "board.context_processors.test_mode",
             ],
         },
     },

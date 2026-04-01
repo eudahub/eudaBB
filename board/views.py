@@ -287,7 +287,18 @@ def activate_ghost(request):
                 "error": f"Podany email nie pasuje do konta. Pozostało prób: {max(remaining_attempts, 0)}.",
             })
 
-        # Email matches — refresh token and send activation link
+        # Email matches
+        if getattr(settings, "TEST_MODE", False):
+            # TEST_MODE: activate immediately, no email link
+            user.is_ghost = False
+            user.is_active = True
+            user.save(update_fields=["is_ghost", "is_active"])
+            login(request, user)
+            return render(request, "registration/activate_confirm.html", {
+                "success": True, "username": user.username,
+            })
+
+        # Production: send activation link
         token_obj.token = secrets.token_urlsafe(48)
         token_obj.expires_at = timezone.now() + timedelta(hours=24)
         token_obj.failed_attempts = 0
