@@ -10,7 +10,7 @@
 <table>
   <thead><tr><th>Podforum</th><th>Wątki</th><th>Posty</th><th>Ostatni post</th></tr></thead>
   <tbody>
-  {% for sub in subforums %}{% if sub.is_visible %}
+  {% for sub in subforums %}
   <tr>
     <td><a href="{% url 'forum_detail' sub.pk %}"><strong>{{ sub.title }}</strong></a>
       {% if sub.description %}<br><small>{{ sub.description }}</small>{% endif %}</td>
@@ -18,7 +18,7 @@
     <td>{{ sub.post_count }}</td>
     <td>{% if sub.last_post %}{{ sub.last_post_at|date:"d.m.Y H:i" }}<br><small>{{ sub.last_post.author.username }}</small>{% else %}—{% endif %}</td>
   </tr>
-  {% endif %}{% endfor %}
+  {% endfor %}
   </tbody>
 </table>
 {% endif %}
