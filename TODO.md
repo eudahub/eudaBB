@@ -341,3 +341,50 @@ Write API (nowe posty) wymaga więcej — walidacja, uprawnienia, aktualizacja l
 
 ### Priorytet
 Niski — zrobić po ustabilizowaniu wersji webowej. Read-only API jako pierwszy krok.
+
+---
+
+## Paginacja i numeracja postów
+
+### Dwa rodzaje "rzadkości" stron
+
+**PLONK/filtrowanie** — sparse pages akceptowalne:
+- różne dla każdego usera (preferencja)
+- strona 46 obiektywnie zawiera te same posty dla wszystkich, tylko niektórzy widzą mniej
+- nie renumerujemy
+
+**Moderacja (usunięcie/przeniesienie bloku)** — renumeracja konieczna:
+- obiektywna zmiana dla wszystkich
+- moderator może przenosić bloki 20-30 postów → wiele stron pustych dla wszystkich
+- po usunięciu/przeniesieniu: renumeruj `post_order` w dotkniętych wątkach
+
+### Dwa pola — NIE są potrzebne
+
+`id` (Django auto PK) jest już immutawalnym, rosnącym numerem oryginalnym.
+`post_order` — gęsty, renumerowany po moderacji.
+
+Nie dodawać `post_order_original` — zbędne, `id` spełnia tę rolę.
+
+### Renumeracja po moderacji
+
+```python
+def renumber_topic(topic_id):
+    from django.db import connection
+    with connection.cursor() as c:
+        c.execute("""
+            UPDATE board_post p
+            SET post_order = sub.new_order
+            FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (ORDER BY post_order) AS new_order
+                FROM board_post WHERE topic_id = %s
+            ) sub
+            WHERE p.id = sub.id
+        """, [topic_id])
+```
+
+Uruchamiać synchronicznie po każdym usunięciu lub przeniesieniu postów.
+Koszt: O(n) gdzie n = liczba postów w wątku — zwykle kilkaset, pomijalne.
+
+### Priorytet
+Zaimplementować razem z widokami moderacji (usuwanie/przenoszenie postów).
