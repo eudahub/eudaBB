@@ -13,6 +13,7 @@ from django.conf import settings
 from .models import Section, Forum, Topic, Post, ActivationToken
 from .forms import RegisterForm, NewTopicForm, ReplyForm
 from .email_utils import verify_email, mask_email_variants
+from .spam_utils import get_author_spam_filter, filter_forums
 from . import bbcode as bbcode_renderer
 
 
@@ -69,18 +70,31 @@ def index(request):
         "forums__last_post",
         "forums__last_post__author",
     ).all()
+    # Filter forums per-section based on user's spam_class
+    filtered_sections = []
+    for section in sections:
+        visible = list(filter_forums(section.forums.all(), request.user))
+        if visible:
+            section._visible_forums = visible
+            filtered_sections.append(section)
     return render(request, "board/index.html", {
-        "sections": sections,
+        "sections": filtered_sections,
         "user_access": user_access,
         "is_staff": is_staff,
     })
-    return render(request, "board/index.html", {"sections": sections})
 
 
 def forum_detail(request, forum_id):
     """Topic list for a single forum, paginated."""
     forum = get_object_or_404(Forum, pk=forum_id)
-    topics_qs = forum.topics.select_related("author", "last_post", "last_post__author")
+    from .spam_utils import get_max_forum_level
+    if forum.archive_level > get_max_forum_level(request.user):
+        return HttpResponseForbidden("Brak dostępu do tego forum.")
+    topics_qs = (
+        forum.topics
+        .select_related("author", "last_post", "last_post__author")
+        .filter(get_author_spam_filter(request.user))
+    )
     paginator = Paginator(topics_qs, getattr(settings, "TOPICS_PER_PAGE", 30))
     page = paginator.get_page(request.GET.get("page"))
     return render(request, "board/forum_detail.html", {"forum": forum, "page": page})
@@ -93,9 +107,19 @@ def topic_detail(request, topic_id):
     # Increment view counter (simple version — no dedup)
     Topic.objects.filter(pk=topic_id).update(view_count=topic.view_count + 1)
 
+    # Paginacja stabilna — wszystkie posty, niezależnie od PLONK
     posts_qs = topic.posts.select_related("author", "updated_by")
     paginator = Paginator(posts_qs, getattr(settings, "POSTS_PER_PAGE", 20))
     page = paginator.get_page(request.GET.get("page"))
+
+    # Zbiór ID postów do ukrycia (spam) — template pokazuje placeholder zamiast treści
+    spam_q = get_author_spam_filter(request.user)
+    if spam_q:
+        visible_post_ids = set(
+            topic.posts.filter(spam_q).values_list("id", flat=True)
+        )
+    else:
+        visible_post_ids = None  # None = pokaż wszystkie
 
     reply_form = ReplyForm() if not topic.is_locked else None
 
@@ -104,6 +128,7 @@ def topic_detail(request, topic_id):
         "forum": topic.forum,
         "page": page,
         "reply_form": reply_form,
+        "visible_post_ids": visible_post_ids,
     })
 
 

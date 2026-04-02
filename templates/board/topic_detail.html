@@ -14,6 +14,7 @@
 {% include "board/_pagination.html" %}
 
 {% for post in page.object_list %}
+{% if visible_post_ids == None or post.pk in visible_post_ids %}
 <div class="post-box" id="post-{{ post.pk }}">
   <div class="post-header">
     <span>#{{ post.post_order }}</span>
@@ -49,6 +50,25 @@
     </tr>
   </table>
 </div>
+{% else %}
+<div class="post-box" id="post-{{ post.pk }}" style="opacity:.45;">
+  <div class="post-header">
+    <span>#{{ post.post_order }}</span>
+    <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
+  </div>
+  <p style="margin:.4rem .6rem; font-style:italic; color:#888;">
+    [Post ukryty (filtr spamu) — <a href="#post-{{ post.pk }}" onclick="this.closest('.post-box').style.opacity=1;this.closest('.post-box').querySelector('.spam-hidden').style.display='block';this.parentNode.style.display='none';return false;">pokaż</a>]
+  </p>
+  <div class="spam-hidden" style="display:none;">
+    <table style="width:100%; border-collapse: collapse;">
+      <tr>
+        <td class="post-author"><strong>{{ post.author.username|default:"[usunięty]" }}</strong></td>
+        <td class="post-content">{{ post.content_html|safe }}</td>
+      </tr>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% empty %}
   <p><em>Brak postów.</em></p>
 {% endfor %}

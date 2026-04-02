@@ -16,10 +16,9 @@
       </tr>
     </thead>
     <tbody>
-      {% for forum in section.forums.all %}
+      {% for forum in section._visible_forums %}
         {% if forum.parent_id == None %}
         {% if is_staff or forum.access_level == 0 or forum.access_level <= user_access %}
-        {% if forum.archive_level == 0 or forum.archive_level <= user_access %}
         <tr>
           <td>
             <a href="{% url 'forum_detail' forum.pk %}"><strong>{{ forum.title }}</strong></a>
@@ -34,7 +33,7 @@
             {% else %}—{% endif %}
           </td>
         </tr>
-        {% endif %}{% endif %}{% endif %}
+        {% endif %}{% endif %}
       {% empty %}
         <tr><td colspan="4"><em>Brak forów w tej sekcji.</em></td></tr>
       {% endfor %}

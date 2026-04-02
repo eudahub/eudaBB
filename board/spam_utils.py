@@ -1,0 +1,77 @@
+"""
+Spam filtering helpers — used in views to hide posts/forums from spammers.
+
+Rules:
+  anonymous / NORMAL (spam_class=0): hide GRAY and WEB by default (can toggle via settings)
+  GRAY (spam_class=1):               hide WEB, always see own class
+  WEB  (spam_class=2):               see everyone — they're in the worst group themselves
+
+Forum visibility:
+  archive_level=0 (NORMAL): everyone including anonymous
+  archive_level=1 (SOFT):   spam_class >= 1 (GRAY + WEB)
+  archive_level=2 (HARD):   spam_class >= 2 (WEB only)
+"""
+
+from django.db.models import Q
+
+from .models import User
+
+
+def get_user_spam_class(user) -> int:
+    """Return user's spam_class, or 0 for anonymous."""
+    if user.is_authenticated:
+        return user.spam_class
+    return 0
+
+
+def get_author_spam_filter(user) -> Q:
+    """Return Q that excludes posts/topics from spam authors the user should not see.
+
+    Apply to any Post or Topic queryset:
+        Post.objects.filter(get_author_spam_filter(request.user))
+        Topic.objects.filter(get_author_spam_filter(request.user))
+    """
+    spam_class = get_user_spam_class(user)
+
+    if spam_class >= User.SpamClass.WEB:
+        # WEB users see everyone
+        return Q()
+
+    if spam_class == User.SpamClass.GRAY:
+        # GRAY users see their own class but not WEB
+        return ~Q(author__spam_class=User.SpamClass.WEB)
+
+    # NORMAL or anonymous — check personal settings (default: hide both classes)
+    hidden = _get_hidden_classes_for_normal(user)
+    if hidden:
+        return ~Q(author__spam_class__in=hidden)
+    return Q()
+
+
+def _get_hidden_classes_for_normal(user) -> list:
+    """Return list of spam_class values hidden for a NORMAL/anonymous user."""
+    if not user.is_authenticated:
+        return [User.SpamClass.GRAY, User.SpamClass.WEB]
+
+    try:
+        s = user.ignore_settings
+        hidden = []
+        if s.hide_gray:
+            hidden.append(User.SpamClass.GRAY)
+        if s.hide_web:
+            hidden.append(User.SpamClass.WEB)
+        return hidden
+    except Exception:
+        # No settings object yet — use defaults
+        return [User.SpamClass.GRAY, User.SpamClass.WEB]
+
+
+def get_max_forum_level(user) -> int:
+    """Return maximum archive_level of forums this user may see."""
+    return get_user_spam_class(user)
+
+
+def filter_forums(forums_qs, user):
+    """Filter a Forum queryset to only forums the user may access."""
+    max_level = get_max_forum_level(user)
+    return forums_qs.filter(archive_level__lte=max_level)
