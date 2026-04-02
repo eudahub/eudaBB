@@ -54,6 +54,18 @@ class User(AbstractUser):
         default=False,
         help_text="Archive-imported account — no password, cannot log in",
     )
+    class SpamClass(models.IntegerChoices):
+        NORMAL = 0, "Normalny"
+        GRAY   = 1, "Gray (zaśmiecacz)"
+        WEB    = 2, "Web (bot/spam rejestracyjny)"
+
+    spam_class = models.SmallIntegerField(
+        choices=SpamClass.choices,
+        default=SpamClass.NORMAL,
+        db_index=True,
+        help_text="Klasa spamu: 0=normalny, 1=gray, 2=web. Używana przez PLONK do filtrowania.",
+    )
+
     is_banned = models.BooleanField(default=False)
     ban_reason = models.TextField(blank=True, default="")
     archive_access = models.SmallIntegerField(

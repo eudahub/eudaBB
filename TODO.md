@@ -170,152 +170,129 @@ Filtrowanie: `Post.objects.exclude(author__in=ignored_users).exclude(topic__in=i
 
 ---
 
-## Kategorie użytkowników (UserCategory)
+## Klasyfikacja użytkowników — dwa niezależne mechanizmy
 
-Ogólny mechanizm grupowania userów przez admina — niezależny od PLONK.
-Te same kategorie mogą być używane przez wiele funkcji: PLONK, ograniczenia uprawnień,
-statystyki, filtrowanie widoków dla moderatorów itp.
+### Rozróżnienie: klasy rozłączne vs grupy
 
-### Dane źródłowe — sfinia_users_real.db
-Kolumna `spam`: 0 = normalny, 1 = gray (51 userów), 2 = web (3110 userów).
-Wartości `spam=1/2` to wynik analizy aktywności — stosunek postów w sekcjach spamu.
-Import: komenda `import_user_categories` czyta te dane i tworzy kategorie `gray`/`web`.
+**Klasy rozłączne** (`spam_class` na modelu User) — do PLONK i filtrowania treści:
+- każdy user należy do dokładnie jednej klasy (0/1/2)
+- filtrowanie: `author__spam_class__in=[1,2]` — jeden indeks, zero JOINów
+- paginacja stabilna: strony oparte na globalnej liczbie postów, nie przefiltrowanej
 
-### Model
+**Grupy** (Django built-in `groups` lub flagi na modelu) — do uprawnień:
+- user może należeć do wielu grup (moderator + weryfikowany + VIP)
+- nie służą do filtrowania treści w PLONK
+- nie muszą być rozłączne
 
-```python
-class UserCategory(models.Model):
-    """Nazwana kategoria userów zarządzana przez admina."""
-    name        = models.CharField(max_length=64, unique=True)  # np. "gray", "web"
-    description = models.TextField(blank=True)
-    members     = models.ManyToManyField(User, blank=True, related_name="categories")
+### Klasy spamu (`spam_class`) — **ZAIMPLEMENTOWANE**
 
-    def __str__(self):
-        return self.name
+Pole `spam_class = SmallIntegerField` na modelu `User`:
+```
+0 = NORMAL  — normalny user (594 na sfinia)
+1 = GRAY    — zaśmiecacz (51 na sfinia)
+2 = WEB     — bot/spam rejestracyjny (3110 na sfinia)
 ```
 
-### Komenda importu
+Import z archiwum:
 ```
-python manage.py import_user_categories /path/to/sfinia_users_real.db
+python manage.py import_spam_classes /path/to/sfinia_users_real.db
 ```
-- Tworzy kategorie `gray` (spam=1) i `web` (spam=2) jeśli nie istnieją
-- Przypisuje userów po `username` (pomija nieznalezionych)
-- Idempotentna — można uruchamiać wielokrotnie
+
+Admin może ręcznie zmieniać `spam_class` przez panel Django admin.
+W przyszłości: możliwość dodawania nowych klas bez zmiany schematu (np. 3=troll).
 
 ---
 
 ## System ignorowania (PLONK — wzorem Usenetu)
 
-### Problem skalowalności
-Na sfinia.fora.pl 3110/3755 userów to web-spamerzy. Gdyby każdy user musiał ręcznie
-dodawać tysiące osób do PLONK, byłoby to drogie i uciążliwe.
-Rozwiązanie: PLONK korzysta z **UserCategory** — user subskrybuje kategorię `web`
-jednym kliknięciem zamiast dodawać 3110 osób.
+### Paginacja — kluczowa decyzja projektowa
 
-### Dwa poziomy ignorowania userów
+Wątek ma 2000 postów, 100 stron po 20. User włącza PLONK (ukrywa klasę `web`).
+**Strony NIE zmieniają struktury** — strona 46 nadal zaczyna się od postu #901.
+Na stronie może być mniej niż 20 postów (niektóre ukryte), nawet 0.
+Posty ignorowanych zastępowane są placeholderem — nie są usuwane z paginacji.
 
-**1. Subskrypcja kategorii**
-User ignoruje całą kategorię (np. `web`, `gray`).
-Koszt: O(1) na usera — jedna relacja `user → category`.
+Dlaczego tak? Stabilne URL-e stron (`?page=46`) można linkować i wracać do nich.
+Gdyby strony się przesuwały przy włączaniu/wyłączaniu PLONK, linki by się psuły.
 
-**2. Indywidualne PLONK na konkretnego usera**
-Dla przypadków spoza kategorii — user dodaje konkretną osobę.
-Oczekiwana liczba: dziesiątki.
+### Ignorowanie userów — trzy poziomy
 
-**Odwrotność (whitelist) — opcjonalna**
-User ignoruje kategorię `web`, ale jeden user z tej kategorii mu nie przeszkadza →
-dodaje go do whitelist. Whitelist nadpisuje tylko kategorie, nie ignory indywidualne.
-Priorytet niski — można dodać później bez zmian schematu.
+**1. Klasy spamu** (skalar na userze, zero kosztu)
+User zaznacza: `[x] ukryj klasę WEB`, `[ ] ukryj klasę GRAY`.
+Filtr: `author__spam_class__in=ignored_classes` — jeden warunek SQL z indeksem.
+
+**2. Indywidualny PLONK** (M2M, małe liczby)
+User dodaje konkretne osoby spoza klas. Oczekiwana liczba: kilkadziesiąt.
+
+**3. Whitelist klasy** (opcjonalna, niski priorytet)
+User ignoruje klasę `web`, ale jeden jej member mu nie przeszkadza.
+Whitelist nadpisuje klasę, nie nadpisuje indywidualnego PLONK.
 
 ### Model danych
 
 ```python
 class UserIgnoreSettings(models.Model):
-    """Ustawienia PLONK dla jednego usera. Relacja 1:1 z User (leniwie tworzona)."""
-    user = models.OneToOneField(User, related_name="ignore_settings")
+    """Ustawienia PLONK — leniwie tworzone przy pierwszym użyciu."""
+    user      = models.OneToOneField(User, related_name="ignore_settings")
+    hide_gray = models.BooleanField(default=False)
+    hide_web  = models.BooleanField(default=True)   # domyślnie web ukryte
 
-    # Indywidualne ignory — małe liczby
     ignored_users  = models.ManyToManyField(User,  blank=True, related_name="individually_ignored_by")
     ignored_topics = models.ManyToManyField(Topic, blank=True, related_name="ignored_by")
     ignored_forums = models.ManyToManyField(Forum, blank=True, related_name="ignored_by")
-
-    # Subskrypcja kategorii userów (UserCategory) — skalowalne ignorowanie grup
-    ignored_categories = models.ManyToManyField(
-        "UserCategory", blank=True, related_name="ignored_by_users"
-    )
-
-    # Whitelist — wyłączenia spod kategorii (opcjonalne)
     whitelisted_users = models.ManyToManyField(User, blank=True, related_name="whitelisted_by")
 ```
 
-### Obliczanie zbioru ignorowanych userów (helper)
+### Obliczanie filtra w widoku
 
 ```python
-def get_ignored_user_ids(user) -> set[int]:
-    """Zwraca set ID userów ignorowanych przez danego usera."""
+def get_plonk_q(user):
+    """Zwraca Q-obiekt wykluczający ignorowanych autorów."""
     try:
-        settings = user.ignore_settings
+        s = user.ignore_settings
     except UserIgnoreSettings.DoesNotExist:
-        return set()
+        return Q()
 
-    ids = set(settings.ignored_users.values_list("id", flat=True))
+    ignored_classes = []
+    if s.hide_gray: ignored_classes.append(User.SpamClass.GRAY)
+    if s.hide_web:  ignored_classes.append(User.SpamClass.WEB)
 
-    for cat in settings.ignored_categories.prefetch_related("members"):
-        ids.update(group.members.values_list("id", flat=True))
+    q = Q()
+    if ignored_classes:
+        q &= ~Q(author__spam_class__in=ignored_classes)
 
-    # Whitelist nadpisuje listy grupowe (ale nie ignory indywidualne)
-    whitelist = set(settings.whitelisted_users.values_list("id", flat=True))
-    return ids - whitelist
+    whitelist = set(s.whitelisted_users.values_list("id", flat=True))
+    individual = set(s.ignored_users.values_list("id", flat=True)) - whitelist
+    if individual:
+        q &= ~Q(author_id__in=individual)
+
+    return q
 ```
-
-Wynik cachować w sesji lub Redis (TTL ~5 min) — unikamy zapytania przy każdym requescie.
-
-### UX — strona „Mój PLONK" w profilu
-
-- Sekcja **Listy grupowe**: checkboxy `gray [ ]`, `dark [ ]` z opisem i liczbą członków
-- Sekcja **Ignorowani userzy**: lista z przyciskiem „Usuń"; przycisk „Ignoruj" przy każdym poście
-- Sekcja **Ignorowane wątki**: lista z przyciskiem „Usuń"; przycisk „Ignoruj wątek" w nagłówku wątku
-- Sekcja **Ignorowane fora**: lista z przyciskiem „Usuń"; przycisk w nagłówku forum
-- Sekcja **Whitelist** (jeśli zaimplementowana): userzy wyłączeni spod list grupowych
 
 ### Zachowanie w widokach
 
 | Miejsce | Zachowanie |
 |---|---|
-| Lista wątków | ignorowane wątki ukryte; wątki założone przez ignorowanego ukryte |
-| Treść wątku | post ignorowanego → szary placeholder „[ignorowany — kliknij]" |
-| Wyszukiwarka | exclude po autorze i temacie zgodnie z PLONK |
-| Liczniki forum | liczyć pomimo PLONK (liczniki są globalne, nie per-user) |
+| Treść wątku | post ignorowanego → placeholder `[ukryty — kliknij aby pokazać]` |
+| Lista wątków | wątki założone przez ignorowanego → ukryte całkowicie |
+| Ignorowane wątki/fora | ukryte całkowicie |
+| Wyszukiwarka | posty ignorowanych wykluczone z wyników |
+| Liczniki forum | globalne — PLONK nie wpływa |
+| Paginacja | **stabilna** — numery stron niezależne od PLONK |
 
-### Działanie w zapytaniach Django
+### UX — strona „Mój PLONK" w profilu
+- Checkboxy klas: `[x] Ukryj WEB (boty)`, `[ ] Ukryj GRAY`
+- Lista indywidualnie ignorowanych z przyciskiem „Usuń z PLONK"
+- Lista ignorowanych wątków i forów z przyciskiem „Usuń"
+- Przycisk „Ignoruj" przy każdym poście / „Ignoruj wątek" w nagłówku wątku
 
-```python
-# Wspólny helper do użycia w views
-ignored_ids    = get_ignored_user_ids(request.user)   # set[int]
-ignored_topics = settings.ignored_topics.values_list("id", flat=True)
-ignored_forums = settings.ignored_forums.values_list("id", flat=True)
-
-topics_qs = (
-    Topic.objects
-    .exclude(author_id__in=ignored_ids)
-    .exclude(pk__in=ignored_topics)
-    .exclude(forum_id__in=ignored_forums)
-)
-
-posts_qs = (
-    Post.objects
-    .exclude(author_id__in=ignored_ids)
-    .exclude(topic_id__in=ignored_topics)
-    .exclude(topic__forum_id__in=ignored_forums)
-)
-```
+### Integracja z wyszukiwarką
+- `posts_qs.filter(get_plonk_q(user))` — ten sam Q-obiekt
+- `exclude(topic__in=ignored_topics)` — ignorowane wątki wykluczone z wyników
 
 ### Priorytet
-Średni — zrobić razem z wyszukiwarką (oba muszą współpracować).
-Listy grupowe (`PlonkGroup`) warto stworzyć wcześniej — admin może zacząć
-budować listę `gray`/`dark` zanim UX dla userów będzie gotowy.
-
----
+Średni — zrobić razem z wyszukiwarką.
+`import_spam_classes` już gotowe — można od razu zapełnić `spam_class` w bazie.
 
 ## API dla aplikacji Android (REST JSON)
 
