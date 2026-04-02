@@ -47,6 +47,16 @@ def hash_email(email: str) -> str:
     return raw.hex()
 
 
+def fix_email_mask_if_needed(user, email: str) -> bool:
+    """If user's email_mask doesn't match email, correct it. Returns True if fixed."""
+    correct_mask = mask_email(email.strip().lower())
+    if user.email_mask != correct_mask:
+        user.email_mask = correct_mask
+        user.save(update_fields=["email_mask"])
+        return True
+    return False
+
+
 def verify_email(email: str, stored_hash: str) -> bool:
     """Return True if email matches stored hash.
 

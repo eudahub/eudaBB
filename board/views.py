@@ -12,7 +12,7 @@ from django.conf import settings
 
 from .models import Section, Forum, Topic, Post, ActivationToken
 from .forms import RegisterForm, NewTopicForm, ReplyForm
-from .email_utils import verify_email, mask_email_variants
+from .email_utils import verify_email, mask_email_variants, fix_email_mask_if_needed
 from .spam_utils import get_author_spam_filter, filter_forums
 from . import bbcode as bbcode_renderer
 
@@ -312,7 +312,9 @@ def activate_ghost(request):
                 "error": f"Podany email nie pasuje do konta. Pozostało prób: {max(remaining_attempts, 0)}.",
             })
 
-        # Email matches
+        # Email matches — napraw maskę jeśli niezgodna (błąd w bazie)
+        fix_email_mask_if_needed(user, email_input)
+
         if getattr(settings, "TEST_MODE", False):
             # TEST_MODE: activate immediately, no email link
             user.is_ghost = False
@@ -367,6 +369,7 @@ def find_account(request):
             user = User.objects.filter(is_ghost=True, email_hash=h).first()
 
             if user:
+                fix_email_mask_if_needed(user, email_input)
                 token_obj, _ = ActivationToken.objects.get_or_create(
                     user=user,
                     defaults={
