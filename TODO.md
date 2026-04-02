@@ -314,3 +314,53 @@ posts_qs = (
 Średni — zrobić razem z wyszukiwarką (oba muszą współpracować).
 Listy grupowe (`PlonkGroup`) warto stworzyć wcześniej — admin może zacząć
 budować listę `gray`/`dark` zanim UX dla userów będzie gotowy.
+
+---
+
+## API dla aplikacji Android (REST JSON)
+
+### Cel
+Aplikacja Android czyta forum bez parsowania HTML — dostaje czysty JSON przez HTTP.
+Przeglądarka nadal dostaje HTML. Dwa "fronty", ten sam Django i te same modele.
+
+### Technologia
+- **Django REST Framework (DRF)** — de facto standard, `pip install djangorestframework`
+- **Autentykacja**: JWT tokeny (`djangorestframework-simplejwt`) zamiast sesji/ciasteczek
+  - Android loguje się → dostaje `access_token` (krótki, ~15 min) + `refresh_token` (długi)
+  - każdy request: `Authorization: Bearer <token>`
+  - odświeżanie tokenu bez ponownego logowania
+- **Android**: Retrofit + OkHttp + Gson/Moshi (standardowy stack)
+
+### Endpointy (szkic)
+
+```
+GET  /api/v1/forums/                    lista forów z licznikami
+GET  /api/v1/forums/<id>/topics/        lista wątków (paginacja)
+GET  /api/v1/topics/<id>/posts/         posty w wątku (paginacja)
+GET  /api/v1/posts/<id>/                pojedynczy post
+POST /api/v1/topics/<forum_id>/         nowy wątek (wymaga auth)
+POST /api/v1/posts/<topic_id>/          nowa odpowiedź (wymaga auth)
+
+POST /api/v1/auth/token/                logowanie → {access, refresh}
+POST /api/v1/auth/token/refresh/        odświeżenie access tokenu
+```
+
+### Zakres danych w JSON
+- Treść postów: pole `content_bbcode` (surowy BBCode) lub `content_html` (gotowy HTML)
+  — do decyzji: Android może sam renderować BBCode albo wyświetlać HTML w WebView
+- Avatary: URL do `MEDIA_URL/avatars/<plik>` — Android pobiera osobno
+- Paginacja: `{"count": 438444, "next": "?page=2", "results": [...]}`
+
+### Uwagi bezpieczeństwa
+- Te same reguły co dla przeglądarki: PLONK, uprawnienia, is_ghost, is_banned
+- Rate limiting na endpointach publicznych (django-ratelimit lub nginx)
+- Argon2 pre-hashing przy logowaniu: Android liczy Argon2 po stronie klienta
+  (biblioteka Java/Kotlin: `com.lambdapioneer.argon2kt`) — tak samo jak przeglądarka WASM
+
+### Ile roboty?
+Mając gotowe modele — DRF `ModelSerializer` + `ViewSet` generuje większość automatycznie.
+Szacunkowo: ~200-300 linii kodu dla pełnego read-only API (fora, wątki, posty).
+Write API (nowe posty) wymaga więcej — walidacja, uprawnienia, aktualizacja liczników.
+
+### Priorytet
+Niski — zrobić po ustabilizowaniu wersji webowej. Read-only API jako pierwszy krok.
