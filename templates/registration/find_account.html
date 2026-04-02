@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Znajdź swoje konto{% endblock %}
+{% block content %}
+<h2>Nie pamiętasz swojego nicka?</h2>
+
+{% if success and test_mode_username %}
+  <p style="color:green;"><strong>Tryb testowy:</strong> Twój nick to <strong>{{ test_mode_username }}</strong>. Zostałeś zalogowany.</p>
+{% elif sent %}
+  <p>Jeśli podany email jest powiązany z kontem na tym forum, wysłaliśmy na niego wiadomość z nickiem i linkiem aktywacyjnym.</p>
+  <p>Sprawdź skrzynkę (i folder spam).</p>
+{% else %}
+  <p>Podaj adres email, którego użyłeś przy rejestracji. Jeśli konto istnieje, wyślemy na ten adres Twój nick i link aktywacyjny.</p>
+  <p><em>Nick nie zostanie pokazany na ekranie — tylko w wiadomości email.</em></p>
+
+  <form method="post">
+    {% csrf_token %}
+    <label>Email:<br>
+      <input type="email" name="email" required autofocus style="width:300px;">
+    </label>
+    <br><br>
+    <button type="submit">Wyślij</button>
+  </form>
+{% endif %}
+
+<p><a href="{% url 'login' %}">← Powrót do logowania</a></p>
+{% endblock %}

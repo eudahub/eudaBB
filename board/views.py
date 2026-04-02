@@ -349,6 +349,72 @@ def activate_ghost(request):
     })
 
 
+def find_account(request):
+    """'Nie pamiętam nicka' — user podaje email, dostaje nick + link aktywacyjny na skrzynkę.
+
+    Nigdy nie ujawniamy nicka na ekranie — tylko na email, żeby nikt nie szpiegował
+    cudzych nicków przez wpisanie dowolnego maila.
+    Odpowiedź jest zawsze taka sama (czy znaleziono konto czy nie) — nie zdradza
+    czy dany email jest w bazie.
+    """
+    sent = False
+    if request.method == "POST":
+        email_input = request.POST.get("email", "").strip().lower()
+        if email_input:
+            # Szukamy ghosta z pasującym email_hash
+            user = None
+            for candidate in User.objects.filter(is_ghost=True, email_hash__gt=""):
+                if verify_email(email_input, candidate.email_hash):
+                    user = candidate
+                    break
+
+            if user:
+                token_obj, _ = ActivationToken.objects.get_or_create(
+                    user=user,
+                    defaults={
+                        "token": secrets.token_urlsafe(48),
+                        "expires_at": timezone.now() + timedelta(hours=24),
+                    },
+                )
+                # Refresh token
+                token_obj.token = secrets.token_urlsafe(48)
+                token_obj.expires_at = timezone.now() + timedelta(hours=24)
+                token_obj.failed_attempts = 0
+                token_obj.window_start = None
+                token_obj.save()
+
+                activation_url = request.build_absolute_uri(f"/activate/{token_obj.token}/")
+
+                if getattr(settings, "TEST_MODE", False):
+                    # TEST_MODE: aktywuj od razu, wyświetl nick (tylko na dev)
+                    user.is_ghost = False
+                    user.is_active = True
+                    user.save(update_fields=["is_ghost", "is_active"])
+                    login(request, user)
+                    return render(request, "registration/find_account.html", {
+                        "test_mode_username": user.username,
+                        "success": True,
+                    })
+
+                send_mail(
+                    subject="Twoje konto na forum",
+                    message=(
+                        f"Znaleźliśmy Twoje konto na forum.\n\n"
+                        f"Twój nick: {user.username}\n\n"
+                        f"Kliknij link poniżej aby aktywować konto:\n{activation_url}\n\n"
+                        f"Link ważny 24 godziny.\n"
+                        f"Jeśli to nie Ty — zignoruj tę wiadomość."
+                    ),
+                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+                    recipient_list=[email_input],
+                    fail_silently=True,
+                )
+        # Zawsze ta sama odpowiedź — nie zdradza czy email jest w bazie
+        sent = True
+
+    return render(request, "registration/find_account.html", {"sent": sent})
+
+
 def activate_confirm(request, token):
     """Final step: user clicks email link, account activated."""
     from .models import User

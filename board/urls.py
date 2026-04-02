@@ -10,4 +10,5 @@ urlpatterns = [
     path("register/", views.register, name="register"),
     path("activate-ghost/", views.activate_ghost, name="activate_ghost"),
     path("activate/<str:token>/", views.activate_confirm, name="activate_confirm"),
+    path("znajdz-konto/", views.find_account, name="find_account"),
 ]
