@@ -102,3 +102,7 @@ TOPICS_PER_PAGE = 30
 # Post content size limits
 POST_CONTENT_HARD_MAX_BYTES = 64 * 1024   # absolute technical limit
 POST_CONTENT_SOFT_MAX_BYTES = 20_000      # admin-configurable default
+
+# Contact form — jedyny plaintext email w systemie (email admina)
+CONTACT_FORM_RECIPIENT = config("CONTACT_FORM_RECIPIENT", default="")
+CONTACT_FORM_RATE_LIMIT = 3   # max wiadomości z jednego IP na godzinę

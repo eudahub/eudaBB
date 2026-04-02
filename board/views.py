@@ -201,6 +201,58 @@ def reply(request, topic_id):
     return render(request, "board/reply.html", {"topic": topic, "form": form})
 
 
+def contact(request):
+    """Contact form — open to everyone, sends to admin email (CONTACT_FORM_RECIPIENT).
+
+    Rate limit: max CONTACT_FORM_RATE_LIMIT messages per IP per hour (tracked in session).
+    User provides their email in plaintext — the only place in the system where
+    a non-admin email is sent as plaintext (and only to the admin, not stored in DB).
+    """
+    recipient = getattr(settings, "CONTACT_FORM_RECIPIENT", "")
+    rate_limit = getattr(settings, "CONTACT_FORM_RATE_LIMIT", 3)
+
+    sent = False
+    error = None
+
+    if request.method == "POST":
+        # Rate limiting via session
+        from django.utils import timezone as tz
+        import datetime
+        now = tz.now()
+        window_start = request.session.get("contact_window_start")
+        count = request.session.get("contact_count", 0)
+
+        if window_start:
+            window_start = datetime.datetime.fromisoformat(window_start)
+            if (now - window_start).total_seconds() > 3600:
+                count = 0
+                window_start = None
+
+        if count >= rate_limit:
+            error = f"Wysłałeś zbyt wiele wiadomości. Spróbuj ponownie za godzinę."
+        else:
+            sender_email = request.POST.get("email", "").strip()
+            message = request.POST.get("message", "").strip()
+
+            if not sender_email or not message:
+                error = "Wypełnij oba pola."
+            elif not recipient:
+                error = "Formularz kontaktowy nie jest skonfigurowany. Skontaktuj się bezpośrednio z administratorem."
+            else:
+                send_mail(
+                    subject=f"[Forum] Wiadomość od {sender_email}",
+                    message=f"Od: {sender_email}\n\n{message}",
+                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+                    recipient_list=[recipient],
+                    fail_silently=False,
+                )
+                request.session["contact_count"] = count + 1
+                request.session["contact_window_start"] = (window_start or now).isoformat()
+                sent = True
+
+    return render(request, "board/contact.html", {"sent": sent, "error": error})
+
+
 # ---------------------------------------------------------------------------
 # TODO: Search
 # ---------------------------------------------------------------------------
