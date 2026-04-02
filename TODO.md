@@ -388,3 +388,54 @@ Koszt: O(n) gdzie n = liczba postów w wątku — zwykle kilkaset, pomijalne.
 
 ### Priorytet
 Zaimplementować razem z widokami moderacji (usuwanie/przenoszenie postów).
+
+---
+
+## Chat (kolejka wiadomości)
+
+### Decyzja projektowa
+Forum blokuje niezarejestrowanych userów od pisania postów. Chat jest kompensatą —
+anonimowi mogą pisać na żywo, nawet bez konta. Zarchiwizowane posty są tylko dla
+zarejestrowanych; chat jest efemeryczny.
+
+### Charakterystyka
+- Wiadomości przechowywane w DB przez konfigurowalny czas (domyślnie 4 godziny)
+- Po upływie czasu — automatycznie usuwane (rolling window / kolejka)
+- Dostęp: wszyscy — zarejestrowani i anonimowi
+- Czas retencji ustawiany przez moderatora (np. 1h–24h)
+- Anonimowi wyświetlani jako „Gość" lub z losowym identyfikatorem sesji
+
+### Model danych
+
+```python
+class ChatMessage(models.Model):
+    author      = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    author_name = models.CharField(max_length=64, default="Gość")  # dla anonimowych
+    content     = models.TextField(max_length=500)
+    created_at  = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]
+```
+
+### Czyszczenie starych wiadomości
+Przy każdym GET lub POST czatu: usuń wiadomości starsze niż `CHAT_RETENTION_HOURS`.
+Lub cron co 15 minut. Nie potrzeba Celery — prosta operacja DELETE WHERE.
+
+```python
+CHAT_RETENTION_HOURS = 4   # ustawiany przez moderatora (w DB lub settings)
+```
+
+### UX
+- Prosta strona `/chat/` z listą wiadomości + formularzem
+- Auto-odświeżanie co N sekund (polling) lub WebSocket (prostsze: polling)
+- Limit długości wiadomości: 500 znaków
+- Anonimowy może podać nick "na sesję" (przechowywany w sesji, nie w DB)
+- Moderator może wyczyścić chat ręcznie lub ustawić krótszy czas retencji
+
+### Rate limiting
+- Anonimowi: max 1 wiadomość / 10 sekund (sesja)
+- Zarejestrowani: max 1 wiadomość / 3 sekundy
+
+### Priorytet
+Niski — zrobić po ustabilizowaniu głównych funkcji forum.
