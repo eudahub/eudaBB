@@ -98,3 +98,7 @@ LOGOUT_REDIRECT_URL = "/"
 # Posts per page
 POSTS_PER_PAGE = 20
 TOPICS_PER_PAGE = 30
+
+# Post content size limits
+POST_CONTENT_HARD_MAX_BYTES = 64 * 1024   # absolute technical limit
+POST_CONTENT_SOFT_MAX_BYTES = 20_000      # admin-configurable default

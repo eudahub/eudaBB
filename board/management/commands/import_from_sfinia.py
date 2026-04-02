@@ -2,19 +2,22 @@
 Import users from sfinia_import.db (pre-hashed, no plaintext emails).
 
 Usage:
-    python manage.py import_from_sfinia /path/to/sfinia_import.db [--clear-ghosts]
+    python manage.py import_from_sfinia /path/to/sfinia_import.db [--avatars-dir DIR]
 
---clear-ghosts  Delete existing ghost accounts before import (default: False).
-                Safe: only removes is_ghost=True users, never root or active accounts.
+Uses update_or_create by username — existing users are updated in place,
+so PKs never change and post author references remain valid.
+Only ghost/inactive users are touched; active accounts are left alone.
 
-Creates User records with is_ghost=True, is_active=False.
-Skips users whose username already exists in the DB.
+--clear-ghosts  Delete existing ghost accounts before import (legacy, use with caution:
+                breaks post author references if posts already imported).
 """
 
+import os
 import sqlite3
 
 from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand, CommandError
+from django.core.files import File
 
 from board.models import User
 
@@ -25,10 +28,15 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("import_db", help="Path to sfinia_import.db")
         parser.add_argument(
+            "--avatars-dir",
+            default="",
+            help="Directory containing avatar files (e.g. /path/to/admin_avatars)",
+        )
+        parser.add_argument(
             "--clear-ghosts",
             action="store_true",
             default=False,
-            help="Delete existing ghost accounts before import",
+            help="Delete existing ghost accounts before import (breaks post references!)",
         )
 
     def handle(self, *args, **options):
@@ -46,22 +54,16 @@ class Command(BaseCommand):
 
         rows = conn.execute(
             "SELECT username, has_email, email_hash, email_mask, "
-            "       signature, website, location "
+            "       signature, website, location, avatar_local_path "
             "FROM users ORDER BY user_id"
         ).fetchall()
         conn.close()
 
-        existing = set(User.objects.values_list("username", flat=True))
+        avatars_dir = options["avatars_dir"]
 
-        created = skipped = 0
+        created = updated = avatars_set = 0
         for row in rows:
-            if row["username"] in existing:
-                skipped += 1
-                continue
-
-            User.objects.create(
-                username=row["username"],
-                password=make_password(None),       # unusable password
+            defaults = dict(
                 is_ghost=True,
                 is_active=False,
                 email="",
@@ -71,8 +73,54 @@ class Command(BaseCommand):
                 website=row["website"]   or "",
                 location=row["location"] or "",
             )
+
+            user, was_created = User.objects.get_or_create(
+                username=row["username"],
+                defaults={**defaults, "password": make_password(None)},
+            )
+
+            if not was_created:
+                # Update profile fields but never touch password or active status
+                # of already-active (non-ghost) accounts
+                if user.is_ghost:
+                    for field, value in defaults.items():
+                        setattr(user, field, value)
+                    update_fields = list(defaults.keys())
+                else:
+                    # Active user: only update profile metadata, not auth fields
+                    for field in ("email_hash", "email_mask", "signature", "website", "location"):
+                        setattr(user, field, defaults[field])
+                    update_fields = ["email_hash", "email_mask", "signature", "website", "location"]
+
+                # Handle avatar
+                local_path = row["avatar_local_path"] or ""
+                if local_path and avatars_dir and not user.avatar:
+                    filename = os.path.basename(local_path)
+                    full_path = os.path.join(avatars_dir, filename)
+                    if os.path.exists(full_path):
+                        with open(full_path, "rb") as f:
+                            user.avatar.save(filename, File(f), save=False)
+                        update_fields.append("avatar")
+                        avatars_set += 1
+
+                user.save(update_fields=update_fields)
+                updated += 1
+                continue
+
+            # Newly created — handle avatar
+            local_path = row["avatar_local_path"] or ""
+            if local_path and avatars_dir:
+                filename = os.path.basename(local_path)
+                full_path = os.path.join(avatars_dir, filename)
+                if os.path.exists(full_path):
+                    with open(full_path, "rb") as f:
+                        user.avatar.save(filename, File(f), save=False)
+                    user.save(update_fields=["avatar"])
+                    avatars_set += 1
+
             created += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f"Gotowe. Utworzono: {created}, pominięto (już istnieją): {skipped}"
+            f"Gotowe. Utworzono: {created}, zaktualizowano: {updated}"
+            + (f", awatary: {avatars_set}" if avatars_set else "")
         ))

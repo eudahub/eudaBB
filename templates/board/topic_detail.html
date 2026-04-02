@@ -24,9 +24,12 @@
       <td class="post-author">
         <strong>{{ post.author.username|default:"[usunięty]" }}</strong>
         {% if post.author %}
+          {% if post.author.avatar %}
+            <br><img src="{{ post.author.avatar.url }}" alt="" style="max-width:80px; max-height:80px; display:block; margin:.3rem 0;">
+          {% endif %}
           <br><small>Postów: {{ post.author.post_count }}</small>
           {% if post.author.rank %}<br><small>{{ post.author.rank }}</small>{% endif %}
-          {% if post.author.location %}<br><small>📍 {{ post.author.location }}</small>{% endif %}
+          {% if post.author.location %}<br><small>{{ post.author.location }}</small>{% endif %}
         {% endif %}
       </td>
       <td class="post-content">

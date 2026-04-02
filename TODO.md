@@ -101,8 +101,216 @@ if not settings.TEST_MODE:
 
 ---
 
-## Inne TODO
+## Wyszukiwarka
 
-- Import wątków i postów z archiwum phpBB (z filtrowaniem spamu)
-- Szukajka (tylko dla zalogowanych, ochrona przed DDoS) — patrz komentarze TODO w views.py
-- Client-side Argon2 przy logowaniu — patrz TODO w views.py
+### Dwa tryby — jeden formularz z zakładkami lub przełącznikiem
+
+**A) Wyszukiwanie postów** (pełnotekstowe, domyślne)
+- Backend: PostgreSQL `tsvector` / `tsquery` (FTS)
+- Język: `polish` (PostgreSQL ma słownik polski — obsługuje odmianę)
+- Logika słów: **zawsze AND**, nigdy OR — wpisanie „pies kot" = oba słowa muszą wystąpić
+- Fraza w cudzysłowie: `"pies kot"` = dokładna sekwencja słów (phrase search, `<->` w tsquery)
+- Lista stop-words: **minimalna** — tylko jednoiterowe `w`, `z`, `i`, `a`, `o`, `do`, `na`, `po`, `za`, `ze`, `ku` itp.
+  Uzasadnienie: user może szukać „i" jako nick lub skrót, długa lista blokuje sensowne zapytania.
+  PostgreSQL domyślnie ma obszerną listę — skonfigurować własną `TEXT SEARCH CONFIGURATION` z okrojonym słownikiem.
+- Brak stemming jeśli zbyt agresywny — rozważyć `simple` config zamiast `polish` jeśli wyniki dziwne
+- Wyniki: posty z podświetleniem (`ts_headline`), posortowane po rankingu (`ts_rank`)
+- Dostęp: tylko zalogowani (ochrona przed DDoS/scraping)
+- Paginacja wyników
+
+**B) Wyszukiwanie wątków** (po tytule)
+- Prosty `ILIKE '%...%'` lub FTS tylko na `Topic.title`
+- Dodatkowy checkbox: **„tylko ankiety"** (filtr `topic_type = POLL` gdy zaimplementujemy ankiety)
+  oraz **„zawiera ankietę"** — do rozważenia czy to samo
+- Wyniki: lista wątków z forum, autorem, datą, ilością postów
+
+### Implementacja techniczna
+
+```python
+# models.py — dodać do Post:
+search_vector = SearchVectorField(null=True)  # django.contrib.postgres
+
+# Indeks GIN (wymagany dla wydajności FTS):
+# CREATE INDEX post_search_gin ON board_post USING GIN(search_vector);
+
+# Aktualizacja wektora:
+# — przy każdym zapisie posta (sygnał post_save)
+# — lub komenda management: python manage.py update_search_vectors
+# — docelowo: triggerami PostgreSQL (atomowo, bez race condition)
+```
+
+```python
+# Własna konfiguracja FTS z okrojoną listą stop-words:
+# CREATE TEXT SEARCH CONFIGURATION polish_forum ( COPY = polish );
+# ALTER TEXT SEARCH CONFIGURATION polish_forum
+#   ALTER MAPPING FOR word WITH polish_stem;
+# (+ osobny plik stop-words bez długiej listy)
+```
+
+```python
+# views.py — logika zapytania:
+# "pies kot" (cudzysłów)  → SearchQuery("pies kot", search_type="phrase")
+# pies kot (bez)          → SearchQuery("pies", ...) & SearchQuery("kot", ...)
+# ts_rank dla sortowania, ts_headline dla podświetlenia
+```
+
+### URL
+- `/szukaj/` — formularz + wyniki (GET z parametrami `q=`, `type=posts|topics`, `polls_only=1`)
+
+### Integracja z systemem ignorowania (PLONK)
+Wyszukiwarka musi filtrować wyniki zgodnie z listą ignorowanych danego usera:
+- posty ignorowanych userów nie pojawiają się w wynikach
+- wątki na liście ignorowanych wątków nie pojawiają się w wynikach
+- fora ignorowane (jeśli zaimplementujemy) też wykluczone
+Filtrowanie: `Post.objects.exclude(author__in=ignored_users).exclude(topic__in=ignored_topics)`
+— dodać do zapytania FTS przed zwróceniem wyników.
+
+### Priorytet
+Średni — zrobić po ustabilizowaniu importu i profili użytkowników.
+
+---
+
+## Kategorie użytkowników (UserCategory)
+
+Ogólny mechanizm grupowania userów przez admina — niezależny od PLONK.
+Te same kategorie mogą być używane przez wiele funkcji: PLONK, ograniczenia uprawnień,
+statystyki, filtrowanie widoków dla moderatorów itp.
+
+### Dane źródłowe — sfinia_users_real.db
+Kolumna `spam`: 0 = normalny, 1 = gray (51 userów), 2 = web (3110 userów).
+Wartości `spam=1/2` to wynik analizy aktywności — stosunek postów w sekcjach spamu.
+Import: komenda `import_user_categories` czyta te dane i tworzy kategorie `gray`/`web`.
+
+### Model
+
+```python
+class UserCategory(models.Model):
+    """Nazwana kategoria userów zarządzana przez admina."""
+    name        = models.CharField(max_length=64, unique=True)  # np. "gray", "web"
+    description = models.TextField(blank=True)
+    members     = models.ManyToManyField(User, blank=True, related_name="categories")
+
+    def __str__(self):
+        return self.name
+```
+
+### Komenda importu
+```
+python manage.py import_user_categories /path/to/sfinia_users_real.db
+```
+- Tworzy kategorie `gray` (spam=1) i `web` (spam=2) jeśli nie istnieją
+- Przypisuje userów po `username` (pomija nieznalezionych)
+- Idempotentna — można uruchamiać wielokrotnie
+
+---
+
+## System ignorowania (PLONK — wzorem Usenetu)
+
+### Problem skalowalności
+Na sfinia.fora.pl 3110/3755 userów to web-spamerzy. Gdyby każdy user musiał ręcznie
+dodawać tysiące osób do PLONK, byłoby to drogie i uciążliwe.
+Rozwiązanie: PLONK korzysta z **UserCategory** — user subskrybuje kategorię `web`
+jednym kliknięciem zamiast dodawać 3110 osób.
+
+### Dwa poziomy ignorowania userów
+
+**1. Subskrypcja kategorii**
+User ignoruje całą kategorię (np. `web`, `gray`).
+Koszt: O(1) na usera — jedna relacja `user → category`.
+
+**2. Indywidualne PLONK na konkretnego usera**
+Dla przypadków spoza kategorii — user dodaje konkretną osobę.
+Oczekiwana liczba: dziesiątki.
+
+**Odwrotność (whitelist) — opcjonalna**
+User ignoruje kategorię `web`, ale jeden user z tej kategorii mu nie przeszkadza →
+dodaje go do whitelist. Whitelist nadpisuje tylko kategorie, nie ignory indywidualne.
+Priorytet niski — można dodać później bez zmian schematu.
+
+### Model danych
+
+```python
+class UserIgnoreSettings(models.Model):
+    """Ustawienia PLONK dla jednego usera. Relacja 1:1 z User (leniwie tworzona)."""
+    user = models.OneToOneField(User, related_name="ignore_settings")
+
+    # Indywidualne ignory — małe liczby
+    ignored_users  = models.ManyToManyField(User,  blank=True, related_name="individually_ignored_by")
+    ignored_topics = models.ManyToManyField(Topic, blank=True, related_name="ignored_by")
+    ignored_forums = models.ManyToManyField(Forum, blank=True, related_name="ignored_by")
+
+    # Subskrypcja kategorii userów (UserCategory) — skalowalne ignorowanie grup
+    ignored_categories = models.ManyToManyField(
+        "UserCategory", blank=True, related_name="ignored_by_users"
+    )
+
+    # Whitelist — wyłączenia spod kategorii (opcjonalne)
+    whitelisted_users = models.ManyToManyField(User, blank=True, related_name="whitelisted_by")
+```
+
+### Obliczanie zbioru ignorowanych userów (helper)
+
+```python
+def get_ignored_user_ids(user) -> set[int]:
+    """Zwraca set ID userów ignorowanych przez danego usera."""
+    try:
+        settings = user.ignore_settings
+    except UserIgnoreSettings.DoesNotExist:
+        return set()
+
+    ids = set(settings.ignored_users.values_list("id", flat=True))
+
+    for cat in settings.ignored_categories.prefetch_related("members"):
+        ids.update(group.members.values_list("id", flat=True))
+
+    # Whitelist nadpisuje listy grupowe (ale nie ignory indywidualne)
+    whitelist = set(settings.whitelisted_users.values_list("id", flat=True))
+    return ids - whitelist
+```
+
+Wynik cachować w sesji lub Redis (TTL ~5 min) — unikamy zapytania przy każdym requescie.
+
+### UX — strona „Mój PLONK" w profilu
+
+- Sekcja **Listy grupowe**: checkboxy `gray [ ]`, `dark [ ]` z opisem i liczbą członków
+- Sekcja **Ignorowani userzy**: lista z przyciskiem „Usuń"; przycisk „Ignoruj" przy każdym poście
+- Sekcja **Ignorowane wątki**: lista z przyciskiem „Usuń"; przycisk „Ignoruj wątek" w nagłówku wątku
+- Sekcja **Ignorowane fora**: lista z przyciskiem „Usuń"; przycisk w nagłówku forum
+- Sekcja **Whitelist** (jeśli zaimplementowana): userzy wyłączeni spod list grupowych
+
+### Zachowanie w widokach
+
+| Miejsce | Zachowanie |
+|---|---|
+| Lista wątków | ignorowane wątki ukryte; wątki założone przez ignorowanego ukryte |
+| Treść wątku | post ignorowanego → szary placeholder „[ignorowany — kliknij]" |
+| Wyszukiwarka | exclude po autorze i temacie zgodnie z PLONK |
+| Liczniki forum | liczyć pomimo PLONK (liczniki są globalne, nie per-user) |
+
+### Działanie w zapytaniach Django
+
+```python
+# Wspólny helper do użycia w views
+ignored_ids    = get_ignored_user_ids(request.user)   # set[int]
+ignored_topics = settings.ignored_topics.values_list("id", flat=True)
+ignored_forums = settings.ignored_forums.values_list("id", flat=True)
+
+topics_qs = (
+    Topic.objects
+    .exclude(author_id__in=ignored_ids)
+    .exclude(pk__in=ignored_topics)
+    .exclude(forum_id__in=ignored_forums)
+)
+
+posts_qs = (
+    Post.objects
+    .exclude(author_id__in=ignored_ids)
+    .exclude(topic_id__in=ignored_topics)
+    .exclude(topic__forum_id__in=ignored_forums)
+)
+```
+
+### Priorytet
+Średni — zrobić razem z wyszukiwarką (oba muszą współpracować).
+Listy grupowe (`PlonkGroup`) warto stworzyć wcześniej — admin może zacząć
+budować listę `gray`/`dark` zanim UX dla userów będzie gotowy.

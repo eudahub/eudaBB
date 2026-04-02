@@ -1,5 +1,29 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
+
+
+AVATAR_MAX_BYTES  = 64 * 1024   # 64 kB
+AVATAR_MAX_W      = 128
+AVATAR_MAX_H      = 128
+AVATAR_MIN_W      = 16
+AVATAR_MIN_H      = 32
+
+
+def validate_avatar(image):
+    if image.size > AVATAR_MAX_BYTES:
+        raise ValidationError(
+            f"Plik za duży: {image.size // 1024} kB (max {AVATAR_MAX_BYTES // 1024} kB)."
+        )
+    if image.width > AVATAR_MAX_W or image.height > AVATAR_MAX_H:
+        raise ValidationError(
+            f"Wymiary {image.width}×{image.height} przekraczają max {AVATAR_MAX_W}×{AVATAR_MAX_H} px."
+        )
+    if image.width < AVATAR_MIN_W or image.height < AVATAR_MIN_H:
+        raise ValidationError(
+            f"Wymiary {image.width}×{image.height} poniżej min {AVATAR_MIN_W}×{AVATAR_MIN_H} px."
+        )
 
 
 class User(AbstractUser):
@@ -23,7 +47,7 @@ class User(AbstractUser):
     signature = models.TextField(blank=True, default="")
     website = models.URLField(blank=True, default="")
     location = models.CharField(max_length=100, blank=True, default="")
-    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
+    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True, validators=[validate_avatar])
     post_count = models.PositiveIntegerField(default=0)
     rank = models.CharField(max_length=64, blank=True, default="")
     is_ghost = models.BooleanField(
@@ -225,7 +249,7 @@ class Post(models.Model):
     content_bbcode = models.TextField()
     content_html = models.TextField(blank=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(null=True, blank=True)
     updated_by = models.ForeignKey(
         User, on_delete=models.SET_NULL,

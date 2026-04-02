@@ -19,10 +19,15 @@ Usage examples:
 """
 
 import sqlite3
+from datetime import datetime
 from itertools import groupby
+from zoneinfo import ZoneInfo
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
+
+_WARSAW = ZoneInfo("Europe/Warsaw")
 
 from board import bbcode as bbcode_renderer
 from board.models import Forum, Post, Topic, User
@@ -36,6 +41,38 @@ TOPIC_TYPE_MAP = {
     "[ Ankieta ]": Topic.TopicType.NORMAL,   # polls → treat as normal for now
     "Przesunięty": Topic.TopicType.NORMAL,   # moved placeholder
 }
+
+# Polish month abbreviations used by phpBB/sfinia
+_PL_MONTHS = {
+    "Sty": 1, "Lut": 2, "Mar": 3, "Kwi": 4, "Maj": 5, "Cze": 6,
+    "Lip": 7, "Sie": 8, "Wrz": 9, "Paź": 10, "Lis": 11, "Gru": 12,
+}
+
+
+def parse_pl_date(s):
+    """Parse 'Nie 21:08, 22 Sty 2006' → aware datetime (UTC).
+
+    Interprets the time as Europe/Warsaw (handles DST automatically:
+    winter = UTC+1, summer = UTC+2). Returns None on failure.
+    """
+    if not s:
+        return None
+    try:
+        # Format: <DayAbbr> <HH:MM>, <DD> <MonthAbbr> <YYYY>
+        parts = s.split()
+        # parts: ['Nie', '21:08,', '22', 'Sty', '2006']
+        time_part = parts[1].rstrip(",")
+        hour, minute = map(int, time_part.split(":"))
+        day = int(parts[2])
+        month = _PL_MONTHS.get(parts[3])
+        year = int(parts[4])
+        if month is None:
+            return None
+        # Create naive datetime, then attach Warsaw zone — DST handled automatically
+        naive = datetime(year, month, day, hour, minute)
+        return naive.replace(tzinfo=_WARSAW)
+    except Exception:
+        return None
 
 
 class Command(BaseCommand):
@@ -142,6 +179,7 @@ class Command(BaseCommand):
             for archive_topic_id, group in groupby(rows, key=lambda r: r["topic_id"]):
                 posts_in_topic = list(group)
                 first = posts_in_topic[0]
+                last  = posts_in_topic[-1]
 
                 # Get or create Topic
                 if archive_topic_id not in topic_map:
@@ -150,7 +188,7 @@ class Command(BaseCommand):
                         skipped_forum += len(posts_in_topic)
                         continue
 
-                    topic_author = user_map.get(first["topic_author_name"])
+                    topic_author = user_map.get(first["topic_author_name"]) or user_map.get(first["author_name"])
                     topic_type   = TOPIC_TYPE_MAP.get(
                         first["topic_type"] or "", Topic.TopicType.NORMAL
                     )
@@ -173,6 +211,7 @@ class Command(BaseCommand):
                     author = user_map.get(row["author_name"])
                     content_bbcode = row["content"] or ""
                     content_html   = bbcode_renderer.render(content_bbcode)
+                    dt = parse_pl_date(row["created_at"])
                     post_objects.append(Post(
                         topic=topic,
                         author=author,
@@ -180,15 +219,29 @@ class Command(BaseCommand):
                         content_bbcode=content_bbcode,
                         content_html=content_html,
                         post_order=new_order,
+                        **({"created_at": dt} if dt else {}),
                     ))
                     posts_created += 1
 
                 Post.objects.bulk_create(post_objects)
 
-                # Update topic reply_count cache
+                # Update topic reply_count and last_post_at
                 total = len(post_objects)
                 topic.reply_count = max(total - 1, 0)
-                topic.save(update_fields=["reply_count"])
+                last_dt = parse_pl_date(last["created_at"])
+                update_fields = ["reply_count"]
+                if last_dt:
+                    topic.last_post_at = last_dt
+                    update_fields.append("last_post_at")
+                topic.save(update_fields=update_fields)
+
+        # --- Set topic.last_post FK ---
+        self.stdout.write("Ustawiam last_post na wątkach…")
+        for topic in Topic.objects.prefetch_related("posts"):
+            last_post = topic.posts.order_by("post_order").last()
+            if last_post:
+                topic.last_post = last_post
+                topic.save(update_fields=["last_post"])
 
         # --- Update forum counters (recursive, like phpBB) ---
         self.stdout.write("Aktualizuję liczniki forów (rekurencyjnie)…")

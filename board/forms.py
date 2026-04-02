@@ -71,10 +71,52 @@ class RegisterForm(UserCreationForm):
         return proposed
 
 
+def _validate_post_content(content: str, original_size: int = 0) -> str:
+    """Validate post content size.
+
+    original_size — byte length of the existing post being edited (0 for new posts).
+    Rule: new_size <= max(original_size, SOFT_MAX).
+    Hard limit is always enforced.
+    """
+    hard = getattr(settings, "POST_CONTENT_HARD_MAX_BYTES", 64 * 1024)
+    soft = getattr(settings, "POST_CONTENT_SOFT_MAX_BYTES", 20_000)
+
+    new_size = len(content.encode("utf-8"))
+
+    if new_size > hard:
+        raise forms.ValidationError(
+            f"Treść za długa: {new_size} B (twardy limit: {hard // 1024} kB)."
+        )
+
+    allowed = max(original_size, soft)
+    if new_size > allowed:
+        if original_size > soft:
+            raise forms.ValidationError(
+                f"Treść za długa: {new_size} B. Post miał {original_size} B — "
+                f"przy edycji można tylko zmniejszyć (max {original_size} B)."
+            )
+        else:
+            raise forms.ValidationError(
+                f"Treść za długa: {new_size} B (limit: {soft} B = {soft // 1000} kB)."
+            )
+
+    return content
+
+
 class NewTopicForm(forms.Form):
     title = forms.CharField(max_length=255, label="Temat")
     content = forms.CharField(widget=forms.Textarea(attrs={"rows": 10}), label="Treść (BBCode)")
 
+    def clean_content(self):
+        return _validate_post_content(self.cleaned_data["content"])
+
 
 class ReplyForm(forms.Form):
     content = forms.CharField(widget=forms.Textarea(attrs={"rows": 8}), label="Odpowiedź (BBCode)")
+
+    def __init__(self, *args, original_size: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._original_size = original_size
+
+    def clean_content(self):
+        return _validate_post_content(self.cleaned_data["content"], self._original_size)
