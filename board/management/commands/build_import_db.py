@@ -33,16 +33,13 @@ ARGON2_SALTLEN  = 16
 
 
 def _hash_email(email: str) -> str:
-    """Return Django-compatible Argon2id hash of normalised email."""
-    from argon2 import PasswordHasher
-    ph = PasswordHasher(
-        memory_cost=ARGON2_MEMORY,
-        time_cost=ARGON2_TIME,
-        parallelism=ARGON2_PARALLEL,
-        hash_len=ARGON2_HASHLEN,
-        salt_len=ARGON2_SALTLEN,
-    )
-    return "argon2" + ph.hash(email.strip().lower())
+    """Return hex-encoded argon2id hash of normalised email (deterministic salt).
+
+    Uses board.email_utils.hash_email — same parameters and salt as the web app,
+    enabling O(1) DB lookup by email hash.
+    """
+    from board.email_utils import hash_email
+    return hash_email(email)
 
 
 CREATE_SQL = """

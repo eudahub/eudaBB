@@ -361,12 +361,10 @@ def find_account(request):
     if request.method == "POST":
         email_input = request.POST.get("email", "").strip().lower()
         if email_input:
-            # Szukamy ghosta z pasującym email_hash
-            user = None
-            for candidate in User.objects.filter(is_ghost=True, email_hash__gt=""):
-                if verify_email(email_input, candidate.email_hash):
-                    user = candidate
-                    break
+            # Deterministyczny hash → bezpośredni lookup O(1)
+            from .email_utils import hash_email
+            h = hash_email(email_input)
+            user = User.objects.filter(is_ghost=True, email_hash=h).first()
 
             if user:
                 token_obj, _ = ActivationToken.objects.get_or_create(

@@ -1,8 +1,15 @@
 """
 Email privacy utilities.
 
-Email is stored as Argon2 hash (with salt) — never in plaintext.
-Verification works identically to password: hash(input, stored_salt) == stored_hash.
+Email is stored as Argon2id hash with DETERMINISTIC salt — never in plaintext.
+Deterministic salt is required for O(1) lookup: client computes hash once,
+server does WHERE email_hash = ? with an index.
+
+Contrast with password hashes (random salt, verified per-user after username lookup).
+
+Salt scheme: b'sfiniabb:email' — constant for all emails.
+Email itself is unique, so a rainbow table would need one entry per email anyway,
+making the constant salt no weaker than per-email salt at Argon2id 256MB parameters.
 
 Display mask: jan.iksinski@gmail.com → j***i@gmail.com
 For unknown providers the domain host is also masked: sluzbowy@firma.pl → s**y@f***a.pl
@@ -10,10 +17,49 @@ For unknown providers the domain host is also masked: sluzbowy@firma.pl → s**y
 
 import re
 
-from django.contrib.auth.hashers import make_password, check_password
+from argon2.low_level import hash_secret_raw, Type
 
 
 SHORT_LOCAL_THRESHOLD = 4  # local parts this short get a weak-mask warning
+
+# Argon2 parameters — must match JS constants in find_account.html / register.html
+EMAIL_HASH_MEMORY   = 262144   # KB (256 MB)
+EMAIL_HASH_TIME     = 2
+EMAIL_HASH_PARALLEL = 1
+EMAIL_HASH_LEN      = 32       # bytes → 64 hex chars
+EMAIL_HASH_SALT     = b"sfiniabb:email"
+
+
+def hash_email(email: str) -> str:
+    """Return hex-encoded argon2id hash of normalised email (deterministic salt).
+
+    Same email always produces the same hash → supports O(1) DB lookup.
+    """
+    raw = hash_secret_raw(
+        secret=email.strip().lower().encode(),
+        salt=EMAIL_HASH_SALT,
+        time_cost=EMAIL_HASH_TIME,
+        memory_cost=EMAIL_HASH_MEMORY,
+        parallelism=EMAIL_HASH_PARALLEL,
+        hash_len=EMAIL_HASH_LEN,
+        type=Type.ID,
+    )
+    return raw.hex()
+
+
+def verify_email(email: str, stored_hash: str) -> bool:
+    """Return True if email matches stored hash.
+
+    Works with both old PHC-format hashes (random salt, from argon2-cffi PasswordHasher)
+    and new hex-format hashes (deterministic salt).
+    """
+    normalised = email.strip().lower()
+    # New format: 64-char hex string
+    if len(stored_hash) == 64 and all(c in "0123456789abcdef" for c in stored_hash):
+        return hash_email(normalised) == stored_hash
+    # Old PHC format (argon2$argon2id$...) — kept for backward compatibility during migration
+    from django.contrib.auth.hashers import check_password
+    return check_password(normalised, stored_hash)
 
 
 KNOWN_PROVIDERS = {
@@ -24,16 +70,6 @@ KNOWN_PROVIDERS = {
     "poczta.fm", "gazeta.pl", "op.pl",
     "protonmail.com", "proton.me", "icloud.com", "me.com",
 }
-
-
-def hash_email(email: str) -> str:
-    """Return Argon2 hash of normalised email (salt embedded in hash string)."""
-    return make_password(email.strip().lower(), hasher="argon2")
-
-
-def verify_email(email: str, stored_hash: str) -> bool:
-    """Return True if email matches the stored Argon2 hash."""
-    return check_password(email.strip().lower(), stored_hash)
 
 
 def _mask_part(s: str) -> str:
