@@ -179,3 +179,27 @@ Wymagania: serwer uruchomiony lokalnie, `TEST_MODE=true` w `.env` (chyba że zaz
 ---
 
 *Dodawać nowe scenariusze w miarę implementacji kolejnych funkcji.*
+
+---
+
+## 11. Przypinanie wątku przez admina ([Przyklejony])
+
+**Warunki wstępne:**
+- Istnieje forum z co najmniej 3 wątkami (A, B, C) — żaden nieprzypięty
+- Zalogowany jako admin (is_staff=True lub root)
+
+**Kroki:**
+1. Otwórz panel Django admin → Board → Topics
+2. Znajdź wątek B → zmień `topic_type` z `Normal` na `Sticky` → zapisz
+3. Wejdź na listę wątków danego forum w przeglądarce
+
+**Oczekiwany wynik:**
+- Wątek B wyświetla się jako pierwszy, przed A i C
+- Wątek B oznaczony jako `[Przyklejony]` w tytule (lub ikoną)
+- Pozostałe wątki posortowane jak zwykle (po dacie ostatniego posta — malejąco)
+- Jeśli jest kilka przypiętych — też posortowane między sobą po dacie ostatniego posta
+
+**Weryfikacja kolejności przy nowym poście:**
+1. Dodaj nowy post do wątku A (nieprzypięty)
+2. Odśwież listę wątków
+3. Wątek A powinien być teraz pierwszy wśród nieprzypiętych, ale B (przypięty) nadal wyżej
