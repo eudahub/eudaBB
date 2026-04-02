@@ -43,7 +43,8 @@ def _hash_email(email: str) -> str:
 
 
 CREATE_SQL = """
-CREATE TABLE IF NOT EXISTS users (
+DROP TABLE IF EXISTS users;
+CREATE TABLE users (
     user_id      INTEGER,
     username     TEXT    NOT NULL,
     has_email    INTEGER NOT NULL DEFAULT 0,
