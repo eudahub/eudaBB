@@ -3,12 +3,12 @@ from django.contrib.auth.forms import UserCreationForm
 from django.conf import settings
 from .models import User
 from .username_utils import normalize, find_similar
-from .email_utils import hash_email, mask_email, mask_email_variants
+from .email_utils import mask_email, mask_email_variants
 from .auth_utils import prehash_password
 
 
 class RegisterForm(UserCreationForm):
-    email = forms.EmailField(required=True, help_text="Nie jest przechowywany — tylko zaszyfrowany skrót.")
+    email = forms.EmailField(required=True)
     password_is_prehashed = forms.CharField(required=False, widget=forms.HiddenInput, initial="0")
 
     class Meta:
@@ -17,14 +17,7 @@ class RegisterForm(UserCreationForm):
 
     def save(self, commit=True, mask_variant=None):
         user = super().save(commit=False)
-        raw_email = self.cleaned_data.get("email", "")
-        user.email = ""
-        user.email_hash = hash_email(raw_email)
-        variants = mask_email_variants(raw_email)
-        if mask_variant and mask_variant in variants:
-            user.email_mask = mask_variant
-        else:
-            user.email_mask = mask_email(raw_email)
+        user.email = self.cleaned_data.get("email", "").strip().lower()
 
         # If password arrived as plaintext (no JS), prehash now for consistency
         if self.cleaned_data.get("password_is_prehashed") != "1":

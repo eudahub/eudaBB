@@ -32,17 +32,7 @@ class User(AbstractUser):
     Email is never stored in plaintext. AbstractUser.email is kept blank always.
     Use email_hash (Argon2) for verification and email_mask for display.
     """
-    # Override AbstractUser.email — always blank, real email stored as hash only
-    email = models.EmailField(blank=True, default="", editable=False)
-
-    email_hash = models.CharField(
-        max_length=255, blank=True, default="",
-        help_text="Argon2 hash of normalised email — used for password reset",
-    )
-    email_mask = models.CharField(
-        max_length=100, blank=True, default="",
-        help_text="Display mask, e.g. j***i@gmail.com",
-    )
+    email = models.EmailField(blank=True, default="")
 
     signature = models.TextField(blank=True, default="")
     website = models.URLField(blank=True, default="")

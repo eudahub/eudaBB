@@ -7,7 +7,7 @@ from .models import User, Section, Forum, Topic, Post
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ["username", "email_mask", "post_count", "is_ghost", "is_active", "is_banned", "is_staff"]
+    list_display = ["username", "email", "post_count", "is_ghost", "is_active", "is_banned", "is_staff"]
     list_filter = ["is_ghost", "is_active", "is_banned", "is_staff"]
     actions = ["activate_accounts"]
     fieldsets = BaseUserAdmin.fieldsets + (

@@ -12,7 +12,7 @@ from django.conf import settings
 
 from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP
 from .forms import RegisterForm, NewTopicForm, ReplyForm
-from .email_utils import verify_email, mask_email_variants, fix_email_mask_if_needed
+from .email_utils import mask_email, mask_email_variants
 from .spam_utils import get_author_spam_filter, filter_forums
 from .middleware import invalidate_blocked_ips_cache
 
@@ -322,18 +322,9 @@ def register(request):
                 return render(request, "registration/register.html", {
                     "form": form,
                     "ghost_username": ghost_username,
-                    "email_mask": user.email_mask,
+                    "email_mask": mask_email(user.email) if user.email else None,
                 })
-            raw_email = form.cleaned_data.get("email", "")
-            variants = mask_email_variants(raw_email)
-            mask_variant = request.POST.get("mask_variant", "")
-            if variants and mask_variant not in variants:
-                # Short email — ask user to pick a mask variant
-                return render(request, "registration/register.html", {
-                    "form": form,
-                    "mask_variants": variants,
-                })
-            user = form.save(mask_variant=mask_variant or None)
+            user = form.save()
             login(request, user)
             return redirect("/")
     else:
@@ -367,22 +358,19 @@ def activate_ghost(request):
             remaining = ActivationToken.WINDOW_MINUTES
             return render(request, "registration/activate_ghost.html", {
                 "username": username,
-                "email_mask": user.email_mask,
+                "email_mask": mask_email(user.email) if user.email else None,
                 "error": f"Zbyt wiele prób. Spróbuj ponownie za {remaining} minut.",
             })
 
-        email_input = request.POST.get("email", "").strip()
-        if not user.email_hash or not verify_email(email_input, user.email_hash):
+        email_input = request.POST.get("email", "").strip().lower()
+        if not user.email or email_input != user.email:
             token_obj.record_failed_attempt()
             remaining_attempts = ActivationToken.MAX_ATTEMPTS - token_obj.failed_attempts
             return render(request, "registration/activate_ghost.html", {
                 "username": username,
-                "email_mask": user.email_mask,
+                "email_mask": mask_email(user.email) if user.email else None,
                 "error": f"Podany email nie pasuje do konta. Pozostało prób: {max(remaining_attempts, 0)}.",
             })
-
-        # Email matches — napraw maskę jeśli niezgodna (błąd w bazie)
-        fix_email_mask_if_needed(user, email_input)
 
         if getattr(settings, "TEST_MODE", False):
             # TEST_MODE: activate immediately, no email link
@@ -416,7 +404,7 @@ def activate_ghost(request):
 
     return render(request, "registration/activate_ghost.html", {
         "username": username,
-        "email_mask": user.email_mask,
+        "email_mask": mask_email(user.email) if user.email else None,
     })
 
 
@@ -432,13 +420,9 @@ def find_account(request):
     if request.method == "POST":
         email_input = request.POST.get("email", "").strip().lower()
         if email_input:
-            # Deterministyczny hash → bezpośredni lookup O(1)
-            from .email_utils import hash_email
-            h = hash_email(email_input)
-            user = User.objects.filter(is_ghost=True, email_hash=h).first()
+            user = User.objects.filter(is_ghost=True, email=email_input).first()
 
             if user:
-                fix_email_mask_if_needed(user, email_input)
                 token_obj, _ = ActivationToken.objects.get_or_create(
                     user=user,
                     defaults={

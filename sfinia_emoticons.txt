@@ -1,0 +1,50 @@
+:) icon_biggrin.gif
+:( icon_sad.gif
+:shock: icon_eek.gif
+:szacunek: new_notworthy.gif
+:oops: icon_redface.gif
+:cry: 022.gif
+:->; icon_evil.gif
+:mrug: icon_wink.gif
+:rotfl: new_lol.gif
+:mrgreen: icon_mrgreen.gif
+:fuj: new_disgust.gif
+:fight: 027.gif
+:gitara: 035.gif
+:serce: 049.gif
+:brawo: 038.gif
+:*: 058.gif (całus)
+;-P: new_tongue.gif
+:nie: eusa_naughty.gif
+:think: eusa_think.gif
+:pidu: icon_pidu.gif
+
+			  <td><a href="javascript:emoticon(':)')"><img src="http://picsrv.fora.pl/images/smiles/icon_biggrin.gif" border="0" alt=":)" title=":)" /></a></td>
+				  <td><a href="javascript:emoticon(':(')"><img src="http://picsrv.fora.pl/images/smiles/icon_sad.gif" border="0" alt=":(" title=":(" /></a></td>
+				  <td><a href="javascript:emoticon(':shock:')"><img src="http://picsrv.fora.pl/images/smiles/icon_eek.gif" border="0" alt=":shock:" title=":shock:" /></a></td>
+				  <td><a href="javascript:emoticon(':szacunek:')"><img src="http://picsrv.fora.pl/images/smiles/new_notworthy.gif" border="0" alt=":szacunek:" title=":szacunek:" /></a></td>
+				</tr>
+				<tr align="center" valign="middle">
+				  <td><a href="javascript:emoticon(':oops:')"><img src="http://picsrv.fora.pl/images/smiles/icon_redface.gif" border="0" alt=":oops:" title=":oops:" /></a></td>
+				  <td><a href="javascript:emoticon(':cry:')"><img src="http://picsrv.fora.pl/images/smiles/022.gif" border="0" alt=":cry:" title=":cry:" /></a></td>
+				  <td><a href="javascript:emoticon(':-&gt;')"><img src="http://picsrv.fora.pl/images/smiles/icon_evil.gif" border="0" alt=":-&gt;" title=":-&gt;" /></a></td>
+				  <td><a href="javascript:emoticon(':mrug:')"><img src="http://picsrv.fora.pl/images/smiles/icon_wink.gif" border="0" alt=":wink:" title=":wink:" /></a></td>
+				</tr>
+				<tr align="center" valign="middle">
+				  <td><a href="javascript:emoticon(':rotfl:')"><img src="http://picsrv.fora.pl/images/smiles/new_lol.gif" border="0" alt=":rotfl:" title=":rotfl:" /></a></td>
+				  <td><a href="javascript:emoticon(':mrgreen:')"><img src="http://picsrv.fora.pl/images/smiles/icon_mrgreen.gif" border="0" alt=":mrgreen:" title=":mrgreen:" /></a></td>
+				  <td><a href="javascript:emoticon(':fuj:')"><img src="http://picsrv.fora.pl/images/smiles/new_disgust.gif" border="0" alt=":fuj:" title=":fuj:" /></a></td>
+				  <td><a href="javascript:emoticon(':fight:')"><img src="http://picsrv.fora.pl/images/smiles/027.gif" border="0" alt=":fight:" title=":fight:" /></a></td>
+				</tr>
+				<tr align="center" valign="middle">
+				  <td><a href="javascript:emoticon(':gitara:')"><img src="http://picsrv.fora.pl/images/smiles/035.gif" border="0" alt=":gitara:" title=":gitara:" /></a></td>
+				  <td><a href="javascript:emoticon(':serce:')"><img src="http://picsrv.fora.pl/images/smiles/049.gif" border="0" alt=":serce:" title=":serce:" /></a></td>
+				  <td><a href="javascript:emoticon(':brawo:')"><img src="http://picsrv.fora.pl/images/smiles/038.gif" border="0" alt=":brawo:" title=":brawo:" /></a></td>
+				  <td><a href="javascript:emoticon(':*')"><img src="http://picsrv.fora.pl/images/smiles/058.gif" border="0" alt=":*" title=":*" /></a></td>
+				</tr>
+				<tr align="center" valign="middle">
+				  <td><a href="javascript:emoticon(';-P')"><img src="http://picsrv.fora.pl/images/smiles/new_tongue.gif" border="0" alt=";-P" title=";-P" /></a></td>
+				  <td><a href="javascript:emoticon(':nie:')"><img src="http://picsrv.fora.pl/images/smiles/eusa_naughty.gif" border="0" alt=":nie:" title=":nie:" /></a></td>
+				  <td><a href="javascript:emoticon(':think:')"><img src="http://picsrv.fora.pl/images/smiles/eusa_think.gif" border="0" alt=":think:" title=":think:" /></a></td>
+				  <td><a href="javascript:emoticon(':pidu:')"><img src="http://picsrv.fora.pl/images/smiles/icon_pidu.gif" border="0" alt=":pidu:" title=":pidu:" /></a></td>
+				</tr>

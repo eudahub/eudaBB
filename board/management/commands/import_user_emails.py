@@ -1,76 +1,69 @@
-"""
-One-time import of emails from sfinia_users_admin.db into ghost accounts.
+"""Populate User.email from sfinia_users_admin.db by username match.
+
+Source: sfinia_users_admin.db → admin_users(username, email)
+Only updates users with empty email — does not overwrite existing values.
 
 Usage:
-    python manage.py import_user_emails /path/to/sfinia_users_admin.db
-
-For each ghost user whose username matches a record in admin_users:
-- Computes Argon2 hash of the email (slow, ~1s per user)
-- Stores email_hash and email_mask on the User record
-
-Progress is printed every 10 users. Safe to re-run — skips users
-that already have email_hash set.
+    python manage.py import_user_emails --db /path/to/sfinia_users_admin.db
 """
-
 import sqlite3
-
 from django.core.management.base import BaseCommand, CommandError
-
-from board.email_utils import hash_email, mask_email
 from board.models import User
 
 
 class Command(BaseCommand):
-    help = "Import email hashes from sfinia_users_admin.db into ghost accounts"
+    help = "Import plain emails from sfinia_users_admin.db into User.email."
 
     def add_arguments(self, parser):
-        parser.add_argument("db_path", help="Path to sfinia_users_admin.db")
         parser.add_argument(
-            "--force",
+            "--db",
+            default="/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_admin.db",
+            help="Path to sfinia_users_admin.db",
+        )
+        parser.add_argument(
+            "--overwrite",
             action="store_true",
-            help="Re-hash even if email_hash already set",
+            help="Overwrite existing non-empty emails (default: skip)",
         )
 
     def handle(self, *args, **options):
-        db_path = options["db_path"]
+        db_path = options["db"]
+        overwrite = options["overwrite"]
+
         try:
             conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-        except Exception as e:
-            raise CommandError(f"Cannot open {db_path}: {e}")
+        except Exception as exc:
+            raise CommandError(f"Nie mozna otworzyc {db_path}: {exc}")
 
         rows = conn.execute(
-            "SELECT username, email FROM admin_users "
-            "WHERE email IS NOT NULL AND email <> ''"
+            "SELECT username, email FROM admin_users WHERE email IS NOT NULL AND email != ''"
         ).fetchall()
         conn.close()
 
-        total = len(rows)
-        done = skipped = missing = 0
+        self.stdout.write(f"Wczytano {len(rows)} rekordow z bazy.")
 
-        self.stdout.write(f"Found {total} users with email in source DB.")
-        self.stdout.write("Hashing with Argon2 (~1s per user)...\n")
+        updated = skipped_no_user = skipped_has_email = 0
 
-        for i, row in enumerate(rows, 1):
+        for username, raw_email in rows:
+            email = raw_email.strip().lower()
+            if not email:
+                continue
             try:
-                user = User.objects.get(username=row["username"], is_ghost=True)
+                user = User.objects.get(username=username)
             except User.DoesNotExist:
-                missing += 1
+                skipped_no_user += 1
                 continue
 
-            if user.email_hash and not options["force"]:
-                skipped += 1
+            if user.email and not overwrite:
+                skipped_has_email += 1
                 continue
 
-            user.email_hash = hash_email(row["email"])
-            user.email_mask = mask_email(row["email"])
-            user.save(update_fields=["email_hash", "email_mask"])
-            done += 1
-
-            if i % 10 == 0:
-                self.stdout.write(f"  {i}/{total} processed...")
+            user.email = email
+            user.save(update_fields=["email"])
+            updated += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f"\nDone. Hashed: {done}, skipped (already set): {skipped}, "
-            f"not found as ghost: {missing}"
+            f"Zaktualizowano: {updated} | "
+            f"Pominieto (juz ma email): {skipped_has_email} | "
+            f"Pominieto (brak usera): {skipped_no_user}"
         ))
