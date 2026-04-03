@@ -29,7 +29,6 @@ from django.utils import timezone
 
 _WARSAW = ZoneInfo("Europe/Warsaw")
 
-from board import bbcode as bbcode_renderer
 from board.models import Forum, Post, Topic, User
 from board.management.commands.update_forum_counts import compute_recursive_counts
 
@@ -210,14 +209,12 @@ class Command(BaseCommand):
                 for new_order, row in enumerate(posts_in_topic, start=1):
                     author = user_map.get(row["author_name"])
                     content_bbcode = row["content"] or ""
-                    content_html   = bbcode_renderer.render(content_bbcode)
                     dt = parse_pl_date(row["created_at"])
                     post_objects.append(Post(
                         topic=topic,
                         author=author,
                         subject=row["subject"] or "",
                         content_bbcode=content_bbcode,
-                        content_html=content_html,
                         post_order=new_order,
                         **({"created_at": dt} if dt else {}),
                     ))

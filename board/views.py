@@ -10,11 +10,11 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, ActivationToken
+from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP
 from .forms import RegisterForm, NewTopicForm, ReplyForm
 from .email_utils import verify_email, mask_email_variants, fix_email_mask_if_needed
 from .spam_utils import get_author_spam_filter, filter_forums
-from . import bbcode as bbcode_renderer
+from .middleware import invalidate_blocked_ips_cache
 
 
 # ---------------------------------------------------------------------------
@@ -45,15 +45,23 @@ def _increment_user_post_count(user) -> None:
         user.save(update_fields=["post_count"])
 
 
-def _render_and_create_post(topic: Topic, author, content_bbcode: str, post_order: int) -> Post:
-    """Create a Post with rendered HTML cache."""
-    content_html = bbcode_renderer.render(content_bbcode)
+def _get_client_ip(request):
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR") or None
+
+
+def _render_and_create_post(topic: Topic, author, content_bbcode: str,
+                             post_order: int, author_ip: str = None) -> Post:
+    retain_until = _retain_until(flagged=False) if author_ip else None
     return Post.objects.create(
         topic=topic,
         author=author,
         content_bbcode=content_bbcode,
-        content_html=content_html,
         post_order=post_order,
+        author_ip=author_ip,
+        ip_retain_until=retain_until,
     )
 
 
@@ -75,7 +83,7 @@ def index(request):
     for section in sections:
         visible = list(filter_forums(section.forums.all(), request.user))
         if visible:
-            section._visible_forums = visible
+            section.visible_forums = visible
             filtered_sections.append(section)
     return render(request, "board/index.html", {
         "sections": filtered_sections,
@@ -123,12 +131,19 @@ def topic_detail(request, topic_id):
 
     reply_form = ReplyForm() if not topic.is_locked else None
 
+    is_mod = (
+        request.user.is_authenticated
+        and _is_moderator(request.user, topic.forum)
+    )
+
     return render(request, "board/topic_detail.html", {
         "topic": topic,
         "forum": topic.forum,
         "page": page,
         "reply_form": reply_form,
         "visible_post_ids": visible_post_ids,
+        "is_moderator": is_mod,
+        "dangerous_days": getattr(settings, "IP_BAN_DANGEROUS_DAYS", 90),
     })
 
 
@@ -156,6 +171,7 @@ def new_topic(request, forum_id):
                 author=request.user,
                 content_bbcode=form.cleaned_data["content"],
                 post_order=1,
+                author_ip=_get_client_ip(request),
             )
             _update_topic_stats(topic, post)
             _update_forum_stats(forum, post)
@@ -186,6 +202,7 @@ def reply(request, topic_id):
                 author=request.user,
                 content_bbcode=form.cleaned_data["content"],
                 post_order=next_order,
+                author_ip=_get_client_ip(request),
             )
             _update_topic_stats(topic, post)
             _update_forum_stats(topic.forum, post)
@@ -487,3 +504,93 @@ def activate_confirm(request, token):
     token_obj.delete()
     login(request, user)
     return render(request, "registration/activate_confirm.html", {"success": True, "username": user.username})
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _retain_until(flagged: bool) -> "datetime":
+    """Calculate IP retention deadline from current time."""
+    days = (
+        getattr(settings, "IP_RETAIN_DANGEROUS_DAYS", 90)
+        if flagged
+        else getattr(settings, "IP_RETAIN_NORMAL_DAYS", 30)
+    )
+    return timezone.now() + timedelta(days=days)
+
+
+def _is_moderator(user, forum) -> bool:
+    return user.is_root or forum.moderators.filter(pk=user.pk).exists()
+
+
+def _post_page(post: Post) -> int:
+    per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+    return (post.post_order - 1) // per_page + 1
+
+
+# ---------------------------------------------------------------------------
+# Admin: blocked IP management (root only)
+# ---------------------------------------------------------------------------
+
+@login_required
+def admin_blocked_ips(request):
+    if not request.user.is_root:
+        return HttpResponseForbidden()
+
+    error = None
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action == "add":
+            ip = request.POST.get("ip", "").strip()
+            reason = request.POST.get("reason", "").strip()
+            if not ip:
+                error = "Podaj adres IP."
+            else:
+                try:
+                    _, created = BlockedIP.objects.get_or_create(
+                        ip_address=ip,
+                        defaults={"reason": reason, "added_by": request.user},
+                    )
+                    if not created:
+                        error = f"{ip} już jest na liście."
+                    else:
+                        invalidate_blocked_ips_cache()
+                except Exception:
+                    error = "Nieprawidłowy adres IP."
+
+        elif action == "delete":
+            BlockedIP.objects.filter(pk=request.POST.get("ip_id")).delete()
+            invalidate_blocked_ips_cache()
+            return redirect("admin_blocked_ips")
+
+    blocked = BlockedIP.objects.select_related("added_by").order_by("-added_at")
+    return render(request, "board/admin_blocked_ips.html", {
+        "blocked": blocked,
+        "error": error,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Moderator: flag post as dangerous — extends IP retention period (!)
+# ---------------------------------------------------------------------------
+
+@login_required
+def flag_post_ip(request, post_id):
+    """Moderator clicks ! — marks post as dangerous, extends IP retention to 90d."""
+    if request.method != "POST":
+        return HttpResponseForbidden()
+
+    post = get_object_or_404(Post.objects.select_related("topic__forum"), pk=post_id)
+
+    if not _is_moderator(request.user, post.topic.forum):
+        return HttpResponseForbidden()
+
+    if not post.ip_flagged:
+        post.ip_flagged = True
+        post.ip_retain_until = _retain_until(flagged=True)
+        post.save(update_fields=["ip_flagged", "ip_retain_until"])
+
+    return redirect(f"/topic/{post.topic.pk}/?page={_post_page(post)}#post-{post.pk}")

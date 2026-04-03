@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Dostęp zablokowany{% endblock %}
+{% block content %}
+<article style="max-width: 520px; margin: 4rem auto; text-align: center;">
+  <h2>Dostęp zablokowany</h2>
+  {% if reason == "tor" %}
+    <p>Rejestracja i logowanie z sieci TOR jest wyłączone na tym forum.</p>
+  {% else %}
+    <p>Twój adres IP jest zablokowany. Jeśli uważasz, że to błąd, skontaktuj się z administratorem.</p>
+    <p><a href="{% url 'contact' %}">Formularz kontaktowy</a></p>
+  {% endif %}
+  <p><a href="{% url 'index' %}">← Powrót do forum</a></p>
+</article>
+{% endblock %}

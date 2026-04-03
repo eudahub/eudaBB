@@ -248,6 +248,41 @@ class Topic(models.Model):
         return self.title
 
 
+class BlockedIP(models.Model):
+    """Admin-managed IP blocklist for proxies, VPNs, abusers etc.
+
+    Unlike TorExitNode (auto-fetched), this list is maintained manually by root.
+    An IP here blocks login and registration, same as TOR IPs.
+    Bans are permanent until manually removed.
+    """
+    ip_address = models.GenericIPAddressField(unique=True, db_index=True)
+    reason = models.CharField(max_length=255, blank=True, default="")
+    added_by = models.ForeignKey(
+        "User", on_delete=models.SET_NULL,
+        null=True, related_name="+",
+    )
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "forum_blocked_ips"
+        ordering = ["-added_at"]
+
+    def __str__(self):
+        return self.ip_address
+
+
+class TorExitNode(models.Model):
+    """Cached list of TOR exit node IP addresses, refreshed hourly."""
+    ip_address = models.GenericIPAddressField(unique=True, db_index=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "forum_tor_exit_nodes"
+
+    def __str__(self):
+        return self.ip_address
+
+
 class Post(models.Model):
     """A single post within a topic."""
     topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="posts")
@@ -259,8 +294,6 @@ class Post(models.Model):
 
     # BBCode stored as-is; HTML is a render cache rebuilt on save
     content_bbcode = models.TextField()
-    content_html = models.TextField(blank=True)
-
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(null=True, blank=True)
     updated_by = models.ForeignKey(
@@ -268,6 +301,18 @@ class Post(models.Model):
         null=True, blank=True, related_name="edited_posts",
     )
     edit_count = models.PositiveSmallIntegerField(default=0)
+
+    # IP address of author — retained for law enforcement requests.
+    # Automatically nulled after ip_retain_until by: manage.py purge_expired_ips
+    author_ip = models.GenericIPAddressField(null=True, blank=True)
+    ip_retain_until = models.DateTimeField(
+        null=True, blank=True,
+        help_text="IP kasowane po tej dacie. Ustawiane przy tworzeniu posta.",
+    )
+    ip_flagged = models.BooleanField(
+        default=False,
+        help_text="Moderator oznaczył post jako groźny — dłuższa retencja IP.",
+    )
 
     # Sequential position within topic — used for pagination and quote references
     post_order = models.PositiveIntegerField(default=0)

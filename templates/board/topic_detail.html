@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load bbcode_tags %}
 {% block title %}{{ topic.title }}{% endblock %}
 
 {% block content %}
@@ -34,7 +35,7 @@
         {% endif %}
       </td>
       <td class="post-content">
-        {{ post.content_html|safe }}
+        {{ post.content_bbcode|bbcode }}
         {% if post.edit_count %}
           <hr>
           <small><em>Edytowano {{ post.edit_count }} raz.
@@ -45,6 +46,22 @@
         {% if post.author.signature %}
           <hr>
           <small>{{ post.author.signature }}</small>
+        {% endif %}
+        {% if is_moderator and post.author_ip %}
+          <div style="text-align:right; margin-top:.4rem;">
+            {% if post.ip_flagged %}
+              <span title="Post oznaczony jako groźny — retencja IP {{ dangerous_days }}d"
+                    style="color:#c00; font-size:.8em; font-weight:bold;">&#9888;</span>
+            {% else %}
+              <form method="post" action="{% url 'flag_post_ip' post.pk %}" style="display:inline;"
+                    onsubmit="return confirm('Oznaczyć post jako groźny?\nRetencja IP wydłużona do {{ dangerous_days }} dni.');">
+                {% csrf_token %}
+                <button type="submit" title="Oznacz jako groźny — retencja IP {{ dangerous_days }}d"
+                        style="background:none; border:1px solid #c00; color:#c00; border-radius:3px;
+                               padding:1px 6px; cursor:pointer; font-size:.8em;">&#33;</button>
+              </form>
+            {% endif %}
+          </div>
         {% endif %}
       </td>
     </tr>
@@ -63,7 +80,7 @@
     <table style="width:100%; border-collapse: collapse;">
       <tr>
         <td class="post-author"><strong>{{ post.author.username|default:"[usunięty]" }}</strong></td>
-        <td class="post-content">{{ post.content_html|safe }}</td>
+        <td class="post-content">{{ post.content_bbcode|bbcode }}</td>
       </tr>
     </table>
   </div>

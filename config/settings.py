@@ -30,6 +30,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "board.middleware.TorBlockMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -106,3 +107,13 @@ POST_CONTENT_SOFT_MAX_BYTES = 20_000      # admin-configurable default
 # Contact form — jedyny plaintext email w systemie (email admina)
 CONTACT_FORM_RECIPIENT = config("CONTACT_FORM_RECIPIENT", default="")
 CONTACT_FORM_RATE_LIMIT = 3   # max wiadomości z jednego IP na godzinę
+
+# TOR exit node blocking — refreshed hourly by: python manage.py refresh_tor_list
+# Add to cron: 0 * * * * /path/to/venv/bin/python /path/to/manage.py refresh_tor_list
+TOR_BLOCK_ENABLED = config("TOR_BLOCK_ENABLED", default=True, cast=bool)
+
+# IP retention for law enforcement — how long author_ip is kept on posts.
+# Normal posts: 30 days. Posts flagged dangerous by moderator: 90 days.
+# After expiry the ip is nulled by: manage.py purge_expired_ips
+IP_RETAIN_NORMAL_DAYS    = config("IP_RETAIN_NORMAL_DAYS",    default=30, cast=int)
+IP_RETAIN_DANGEROUS_DAYS = config("IP_RETAIN_DANGEROUS_DAYS", default=90, cast=int)

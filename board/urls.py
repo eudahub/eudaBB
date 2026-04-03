@@ -12,4 +12,6 @@ urlpatterns = [
     path("activate/<str:token>/", views.activate_confirm, name="activate_confirm"),
     path("znajdz-konto/", views.find_account, name="find_account"),
     path("kontakt/", views.contact, name="contact"),
+    path("admin/blocked-ips/", views.admin_blocked_ips, name="admin_blocked_ips"),
+    path("post/<int:post_id>/flag-ip/", views.flag_post_ip, name="flag_post_ip"),
 ]
