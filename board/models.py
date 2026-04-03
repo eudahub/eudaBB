@@ -56,6 +56,11 @@ class User(AbstractUser):
         help_text="Klasa spamu: 0=normalny, 1=gray, 2=web. Używana przez PLONK do filtrowania.",
     )
 
+    username_normalized = models.CharField(
+        max_length=150, blank=True, default="", db_index=True,
+        help_text="Lowercase, no diacritics, alphanumeric only. Used for uniqueness checks.",
+    )
+
     is_banned = models.BooleanField(default=False)
     ban_reason = models.TextField(blank=True, default="")
     archive_access = models.SmallIntegerField(
@@ -66,6 +71,11 @@ class User(AbstractUser):
         default=False,
         help_text="Superadmin: manages users and forum structure. Cannot post, has no email, no password reset.",
     )
+
+    def save(self, *args, **kwargs):
+        from .username_utils import normalize
+        self.username_normalized = normalize(self.username)
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "forum_users"

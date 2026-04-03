@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.conf import settings
 from .models import User
-from .username_utils import normalize, find_similar
+from .username_utils import normalize
 from .email_utils import mask_email, mask_email_variants
 from .auth_utils import prehash_password
 
@@ -33,33 +33,19 @@ class RegisterForm(UserCreationForm):
         proposed = self.cleaned_data["username"]
         norm_proposed = normalize(proposed)
 
-        all_users = User.objects.values_list("username", flat=True)
-
-        # Exact normalized match
-        for existing in all_users:
-            if normalize(existing) == norm_proposed:
-                user = User.objects.get(username=existing)
-                if user.is_ghost:
-                    if proposed == existing:
-                        # Exact string match — allow registration, flag as pending activation
-                        self._ghost_username = existing
-                        return proposed
-                    else:
-                        # Same normalized form but different string — blocked
-                        raise forms.ValidationError(
-                            f"Nazwa zarezerwowana przez konto archiwalne '{existing}'. "
-                            "Skontaktuj się z administratorem."
-                        )
-                raise forms.ValidationError("Ta nazwa użytkownika jest już zajęta.")
-
-        # Similarity check (0 = disabled, default 1)
-        max_dist = getattr(settings, "USERNAME_SIMILARITY_MAX_DIST", 1)
-        similar = find_similar(proposed, list(all_users), max_dist=max_dist) if max_dist > 0 else []
-        if similar:
-            raise forms.ValidationError(
-                f"Nazwa zbyt podobna do istniejącej: {', '.join(similar)}. "
-                "Wybierz inną lub skontaktuj się z administratorem."
-            )
+        # O(1) lookup via indexed username_normalized column
+        conflict = User.objects.filter(username_normalized=norm_proposed).first()
+        if conflict:
+            if conflict.is_ghost and conflict.username == proposed:
+                # Exact match to ghost account — allow, trigger activation flow
+                self._ghost_username = conflict.username
+                return proposed
+            if conflict.is_ghost:
+                raise forms.ValidationError(
+                    f"Nazwa zarezerwowana przez konto archiwalne '{conflict.username}'. "
+                    "Skontaktuj się z administratorem."
+                )
+            raise forms.ValidationError("Ta nazwa użytkownika jest już zajęta.")
 
         return proposed
 
