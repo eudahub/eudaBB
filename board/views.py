@@ -363,7 +363,7 @@ def activate_ghost(request):
             })
 
         email_input = request.POST.get("email", "").strip().lower()
-        if not user.email or email_input != user.email:
+        if not user.email or email_input != user.email.lower():
             token_obj.record_failed_attempt()
             remaining_attempts = ActivationToken.MAX_ATTEMPTS - token_obj.failed_attempts
             return render(request, "registration/activate_ghost.html", {
@@ -420,7 +420,7 @@ def find_account(request):
     if request.method == "POST":
         email_input = request.POST.get("email", "").strip().lower()
         if email_input:
-            user = User.objects.filter(is_ghost=True, email=email_input).first()
+            user = User.objects.filter(is_ghost=True, email__iexact=email_input).first()
 
             if user:
                 token_obj, _ = ActivationToken.objects.get_or_create(
