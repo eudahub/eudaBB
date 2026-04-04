@@ -44,8 +44,6 @@ class Command(BaseCommand):
             is_staff=True,
             is_active=True,
             email="",
-            email_hash="",
-            email_mask="",
         )
         root.set_password(prehash_password(password, "root"))
         root.save()

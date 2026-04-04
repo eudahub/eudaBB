@@ -1,5 +1,5 @@
 """
-Import users from sfinia_import.db (pre-hashed, no plaintext emails).
+Import users from sfinia_import.db (plaintext emails, lowercase).
 
 Usage:
     python manage.py import_from_sfinia /path/to/sfinia_import.db [--avatars-dir DIR]
@@ -23,7 +23,7 @@ from board.models import User
 
 
 class Command(BaseCommand):
-    help = "Import ghost users from sfinia_import.db (pre-hashed emails)"
+    help = "Import ghost users from sfinia_import.db (plaintext emails)"
 
     def add_arguments(self, parser):
         parser.add_argument("import_db", help="Path to sfinia_import.db")
@@ -53,8 +53,7 @@ class Command(BaseCommand):
             raise CommandError(f"Cannot open {db_path}: {e}")
 
         rows = conn.execute(
-            "SELECT username, has_email, email_hash, email_mask, "
-            "       signature, website, location, avatar_local_path "
+            "SELECT user_id, username, email, signature, website, location, avatar "
             "FROM users ORDER BY user_id"
         ).fetchall()
         conn.close()
@@ -63,12 +62,11 @@ class Command(BaseCommand):
 
         created = updated = avatars_set = 0
         for row in rows:
+            email = (row["email"] or "").strip().lower()
             defaults = dict(
                 is_ghost=True,
                 is_active=False,
-                email="",
-                email_hash=row["email_hash"] or "",
-                email_mask=row["email_mask"] or "",
+                email=email,
                 signature=row["signature"] or "",
                 website=row["website"]   or "",
                 location=row["location"] or "",
@@ -80,20 +78,17 @@ class Command(BaseCommand):
             )
 
             if not was_created:
-                # Update profile fields but never touch password or active status
-                # of already-active (non-ghost) accounts
                 if user.is_ghost:
                     for field, value in defaults.items():
                         setattr(user, field, value)
                     update_fields = list(defaults.keys())
                 else:
                     # Active user: only update profile metadata, not auth fields
-                    for field in ("email_hash", "email_mask", "signature", "website", "location"):
+                    for field in ("signature", "website", "location"):
                         setattr(user, field, defaults[field])
-                    update_fields = ["email_hash", "email_mask", "signature", "website", "location"]
+                    update_fields = ["signature", "website", "location"]
 
-                # Handle avatar
-                local_path = row["avatar_local_path"] or ""
+                local_path = row["avatar"] or ""
                 if local_path and avatars_dir and not user.avatar:
                     filename = os.path.basename(local_path)
                     full_path = os.path.join(avatars_dir, filename)
@@ -107,8 +102,7 @@ class Command(BaseCommand):
                 updated += 1
                 continue
 
-            # Newly created — handle avatar
-            local_path = row["avatar_local_path"] or ""
+            local_path = row["avatar"] or ""
             if local_path and avatars_dir:
                 filename = os.path.basename(local_path)
                 full_path = os.path.join(avatars_dir, filename)
