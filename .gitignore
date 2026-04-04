@@ -16,3 +16,7 @@ venv/
 # Django static/media
 staticfiles/
 media/
+
+# Database snapshots (pg_dump files — can be large)
+snapshots/
+*.dump

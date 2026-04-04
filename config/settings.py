@@ -119,6 +119,9 @@ TOR_BLOCK_ENABLED = config("TOR_BLOCK_ENABLED", default=True, cast=bool)
 IP_RETAIN_NORMAL_DAYS    = config("IP_RETAIN_NORMAL_DAYS",    default=30, cast=int)
 IP_RETAIN_DANGEROUS_DAYS = config("IP_RETAIN_DANGEROUS_DAYS", default=90, cast=int)
 
+# Snapshot directory for pg_dump backups (snapshot_create / snapshot_restore)
+SNAPSHOT_DIR = config("SNAPSHOT_DIR", default=str(BASE_DIR / "snapshots"))
+
 # Private Messages limits
 PM_INBOX_LIMIT  = config("PM_INBOX_LIMIT",  default=300, cast=int)
 PM_SENT_LIMIT   = config("PM_SENT_LIMIT",   default=300, cast=int)
