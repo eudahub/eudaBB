@@ -70,19 +70,18 @@
     .messages .success { background: #dfd; }
 
     /* Pagination */
-    .pagination-nav { border: none; padding: .3rem 0; margin: .4rem 0; display: block; }
-    .page-links { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
-    .page-btn {
-      display: inline-block; padding: 2px 7px; font-size: 11px;
-      border: 1px solid #BC8F8F; border-radius: 3px;
-      background: #f8f8e8; color: #800000; text-decoration: none; cursor: pointer;
-      line-height: 1.6; font-family: inherit;
-    }
-    .page-btn:hover { background: #f0ee81; color: #800000; text-decoration: none; }
-    .page-btn.current { background: #800000; color: #fff; border-color: #800000; font-weight: bold; }
-    .page-btn.outline { background: #fff; border-color: #800000; }
-    .page-btn.outline:hover { background: #f0ee81; }
-    .page-ellipsis { font-size: 11px; padding: 0 2px; color: #666; }
+    .pagination-nav { border: none; padding: .2rem 0; margin: .3rem 0; display: block; font-size: 11px; }
+    .page-links { display: flex; flex-wrap: wrap; gap: 3px; align-items: baseline; }
+    .page-label { color: #444; }
+    .page-num { color: #800000; text-decoration: none; }
+    .page-num:hover { text-decoration: underline; color: #DD6900; }
+    .page-num.current { font-weight: bold; color: #000; }
+    .page-nav { color: #800000; text-decoration: none; }
+    .page-nav:hover { text-decoration: underline; color: #DD6900; }
+    .page-ellipsis { color: #666; }
+    .page-goto { color: #800000; font-size: 11px; cursor: pointer;
+                 background: none; border: none; padding: 0; font-family: inherit; }
+    .page-goto:hover { text-decoration: underline; color: #DD6900; }
   </style>
 </head>
 <body>

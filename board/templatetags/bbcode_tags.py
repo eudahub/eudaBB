@@ -7,30 +7,44 @@ register = template.Library()
 
 @register.filter
 def pagination_range(page_obj):
-    """Return list of page numbers to display, with None meaning ellipsis.
+    """Return list for pagination display.
 
-    Always shows first 3, last 3, and cur-1..cur+1.
-    Merges adjacent windows, inserts None for gaps.
+    Each item is either an int (page number) or the string '…' (ellipsis).
+    Commas are appended to int items as needed (stored as negative ints won't
+    work — instead we return dicts with 'n' and 'comma' keys so the template
+    can render cleanly without look-ahead).
+
+    Format: list of dicts:
+      {'n': int, 'comma': bool}   — page number, comma after?
+      {'ellipsis': True}          — gap marker
     """
     cur = page_obj.number
     total = page_obj.paginator.num_pages
 
-    # Build the set of pages to show
     visible = set()
-    visible.update(range(1, min(4, total + 1)))            # first 3
-    visible.update(range(max(1, total - 2), total + 1))    # last 3
-    visible.update(range(max(1, cur - 1), min(total, cur + 1) + 1))  # window
+    visible.update(range(1, min(4, total + 1)))
+    visible.update(range(max(1, total - 2), total + 1))
+    visible.update(range(max(1, cur - 1), min(total, cur + 1) + 1))
 
     pages = sorted(visible)
 
-    # Insert None where there are gaps
-    result = []
+    # Build raw list with None gaps
+    raw = []
     prev = None
     for p in pages:
         if prev is not None and p > prev + 1:
-            result.append(None)  # ellipsis
-        result.append(p)
+            raw.append(None)
+        raw.append(p)
         prev = p
+
+    # Convert to dicts; comma after a number only if next item is also a number
+    result = []
+    for i, item in enumerate(raw):
+        if item is None:
+            result.append({'ellipsis': True})
+        else:
+            next_item = raw[i + 1] if i + 1 < len(raw) else None
+            result.append({'n': item, 'comma': isinstance(next_item, int)})
     return result
 
 @register.filter

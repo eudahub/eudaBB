@@ -4,26 +4,28 @@
 <nav aria-label="Paginacja" class="pagination-nav">
   <span class="page-links">
 
+    <span class="page-label">Idź do strony:</span>
+
     {% if page.has_previous %}
-      <a href="?page={{ page.previous_page_number }}" class="page-btn outline">&#8592; Poprzedni</a>
+      <a href="?page={{ page.previous_page_number }}" class="page-nav">&#8592;&nbsp;Poprzedni</a>
     {% endif %}
 
-    {% for p in pages %}
-      {% if not p %}
+    {% for item in pages %}
+      {% if item.ellipsis %}
         <span class="page-ellipsis">…</span>
-      {% elif p == cur %}
-        <strong class="page-btn current">{{ p }}</strong>
+      {% elif item.n == cur %}
+        <strong class="page-num current">{{ item.n }}</strong>{% if item.comma %},{% endif %}
       {% else %}
-        <a href="?page={{ p }}" class="page-btn">{{ p }}</a>
+        <a href="?page={{ item.n }}" class="page-num">{{ item.n }}</a>{% if item.comma %},{% endif %}
       {% endif %}
     {% endfor %}
 
     {% if page.has_next %}
-      <a href="?page={{ page.next_page_number }}" class="page-btn outline">Następny &#8594;</a>
+      <a href="?page={{ page.next_page_number }}" class="page-nav">Następny&nbsp;&#8594;</a>
     {% endif %}
 
-    <button type="button" class="page-btn outline"
-            onclick="showGoto({{ total }}, {{ cur }})">&#8227; Idź do</button>
+    <button type="button" class="page-goto"
+            onclick="showGoto({{ total }}, {{ cur }})">[&nbsp;Idź&nbsp;do&nbsp;]</button>
 
   </span>
 </nav>
