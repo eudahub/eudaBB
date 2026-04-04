@@ -21,8 +21,11 @@ Usage:
     python manage.py enrich_quotes /path/to/sfiniabb.db --propagate      # chain-fix nested quotes
 """
 
+import bisect
+import pickle
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -40,14 +43,32 @@ _QUOTE_OPEN_RE  = re.compile(r'\[quote(?:="([^"]*)")?\]', re.IGNORECASE)
 _QUOTE_CLOSE_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
 _BBCODE_RE      = re.compile(r'\[[^\]]*\]')
 
+# Manual quote prefixes: "Username napisał:\n" or "Cytat:\n"
+# These appear when users hand-format a quote instead of using BBCode
+_NAPISAL_PREFIX_RE = re.compile(r'^\s*\S[^\n]*napisał:\s*\n+', re.IGNORECASE)
+_CYTAT_PREFIX_RE   = re.compile(r'^\s*Cytat:\s*\n+', re.IGNORECASE)
+
 # Ellipsis markers inserted by users when omitting part of a quote
 # e.g. (...)  /.../  [...]  (…)
-_ELLIPSIS_RE = re.compile(r'[\(\[/]\s*\.{2,}\s*[\)\]/]|[\(\[]\s*…\s*[\)\]]')
+_ELLIPSIS_RE = re.compile(
+    r'[\(\[/]\s*\.{2,}\s*[\)\]/]'  # (...) /.../ [...]
+    r'|[\(\[]\s*…\s*[\)\]]'         # (…) […]
+    r'|\s+\.{2,}\s+'                # spaces ... spaces  (inline ellipsis)
+    r'|\s+…\s+'                     # spaces … spaces
+)
+
+# BBCode-wrapped URLs: [https://...] → unwrap to https://... before stripping tags
+_URL_BRACKET_RE = re.compile(r'\[(https?://[^\]]+)\]', re.IGNORECASE)
 
 # Minimum fingerprint length to attempt matching
-_MIN_FINGERPRINT = 20
+_MIN_FINGERPRINT = 5
 # Fingerprint lengths tried in order (longest first to avoid false positives)
-_FINGERPRINT_LENS = [120, 80, 60, 40]
+_FINGERPRINT_LENS = [120, 80, 60, 40, 20, 10]
+# Short fingerprints (below this) are only tried in a small nearby window,
+# never in the full topic or global fallback (too many false positives)
+_SHORT_FP_LIMIT = 20
+# How many preceding posts to search when using short fingerprints
+_SHORT_FP_WINDOW = 10
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +104,23 @@ def _to_unix(created_at: str) -> int:
 # ---------------------------------------------------------------------------
 
 def _strip_bbcode(text: str) -> str:
-    """Remove BBCode tags and normalize whitespace."""
+    """Remove BBCode tags and normalize whitespace.
+    [https://url] is first unwrapped to https://url so bare and bracketed
+    URLs match each other.
+    """
+    text = _URL_BRACKET_RE.sub(r'\1', text)
     stripped = _BBCODE_RE.sub("", text)
     return " ".join(stripped.split()).lower()
+
+
+def _to_ascii(text: str) -> str:
+    """Strip diacritics: 'żółw' → 'zolw'. Used for diacritics-insensitive matching."""
+    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode()
+
+
+def _strip_bbcode_ascii(text: str) -> str:
+    """Like _strip_bbcode but also strips diacritics."""
+    return _to_ascii(_strip_bbcode(text))
 
 
 def _own_text_segments(inner: str) -> list[str]:
@@ -130,10 +165,76 @@ def _split_on_ellipsis(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+# ---------------------------------------------------------------------------
+# Bible detection
+# ---------------------------------------------------------------------------
+
+_BIBLE_NGRAM_INDEX: dict | None = None   # loaded lazily from --bible-index pickle
+_BIBLE_NGRAM_SIZE = 5
+
+def _load_bible_index(path: str) -> None:
+    global _BIBLE_NGRAM_INDEX
+    with open(path, 'rb') as f:
+        data = pickle.load(f)
+    _BIBLE_NGRAM_INDEX = data['ngrams']
+
+
+def _norm_for_bible(text: str) -> str:
+    """Normalize text: lowercase, strip diacritics, keep only alnum+space."""
+    text = unicodedata.normalize('NFKD', text.lower())
+    return ''.join(c for c in text if unicodedata.category(c) != 'Mn' and (c.isalnum() or c == ' '))
+
+
+def _lookup_bible(inner: str) -> str | None:
+    """Return Bible reference string if inner text matches a Bible verse, else None.
+
+    Uses the n-gram index loaded via --bible-index.  Returns the best matching
+    reference (e.g. "J 3,16") or book-only string for OT (e.g. "Ps").
+
+    Confidence rules:
+      - NT refs (contain comma, e.g. "J 3,16"): 1 matching n-gram is enough.
+        The NT mapping is exact so a single match is reliable.
+      - OT refs (book name only, e.g. "Ps"): require at least 2 matching n-grams
+        with the same ref, because the OT mapping is approximate and single common
+        phrases can produce false positives.
+    """
+    if _BIBLE_NGRAM_INDEX is None:
+        return None
+    # Strip BBCode and prefixes, then normalize
+    text = _NAPISAL_PREFIX_RE.sub('', inner, count=1).strip()
+    text = _CYTAT_PREFIX_RE.sub('', text, count=1).strip()
+    text = _strip_bbcode(text)
+    ws = _norm_for_bible(text).split()
+    if not ws:
+        return None
+    n = _BIBLE_NGRAM_SIZE
+    if len(ws) < n:
+        key = ' '.join(ws)
+        ref = _BIBLE_NGRAM_INDEX.get(key)
+        if ref and (',' in ref or len(ws) >= 4):
+            return ref
+        return None
+    # Count n-gram votes per reference
+    ref_votes: dict[str, int] = {}
+    for i in range(len(ws) - n + 1):
+        key = ' '.join(ws[i:i + n])
+        ref = _BIBLE_NGRAM_INDEX.get(key)
+        if ref:
+            ref_votes[ref] = ref_votes.get(ref, 0) + 1
+    if not ref_votes:
+        return None
+    best_ref = max(ref_votes, key=ref_votes.get)
+    best_count = ref_votes[best_ref]
+    is_nt = ',' in best_ref   # NT refs have chapter,verse like "J 3,16"
+    min_votes = 1 if is_nt else 2
+    return best_ref if best_count >= min_votes else None
+
+
 def _fingerprints(inner: str) -> list[str]:
     """Return ordered list of candidate search needles for a [quote] block.
 
     Pipeline:
+    0. Strip manual "Username napisał:" / "Cytat:" prefix (hand-formatted quotes)
     1. _own_text_segments — removes nested [quote] blocks, keeps poster's own text
     2. _split_on_ellipsis — splits each segment at (...) and /.../ markers;
        each part is searched independently so "A /.../ B" finds posts containing
@@ -142,6 +243,10 @@ def _fingerprints(inner: str) -> list[str]:
        avoid false positives; shorter catches emoticon/word-level edits)
     4. Fallback: full inner text stripped (when all segments are too short)
     """
+    # Strip manual quote prefixes before any processing
+    inner = _NAPISAL_PREFIX_RE.sub('', inner, count=1).strip()
+    inner = _CYTAT_PREFIX_RE.sub('', inner, count=1).strip()
+
     fps_seen: set[str] = set()
     fps: list[str] = []
 
@@ -239,38 +344,66 @@ def _canonicalize(username: str | None, known_users: dict) -> str | None:
 # Post matching
 # ---------------------------------------------------------------------------
 
-def _match_post(fps: list[str], window: list, canonical: str | None) -> dict | None:
-    """Search window (list of post dicts, most recent last) using fps needles.
+def _match_post(fps: list[str], window: list, canonical: str | None,
+                global_fallback: list | None = None,
+                short_window: list | None = None) -> dict | None:
+    """Search window then optional global_fallback using fps needles.
 
-    Each window entry has a precomputed "stripped" key with the full
-    lowercase stripped text (not truncated) used as the haystack.
+    window          — posts from the same topic, ordered by post_order
+    global_fallback — N preceding posts globally by post_id (cross-topic)
+    short_window    — last _SHORT_FP_WINDOW posts in topic; used ONLY for
+                      short fingerprints (< _SHORT_FP_LIMIT) to avoid false
+                      positives — never searched globally
 
-    For each fingerprint, tries author-filtered posts first (if canonical
-    given), then all posts. Returns the most-recent matching post or None.
+    For each fingerprint, tries author-filtered first, then all posts.
+    Regular fps: topic window → global fallback.
+    Short fps:   short_window only (nearby context, no global).
     """
     if not fps:
         return None
 
-    def _try_one(fp: str, posts) -> dict | None:
+    regular_fps = [fp for fp in fps if len(fp) >= _SHORT_FP_LIMIT]
+    tiny_fps    = [fp for fp in fps if len(fp) <  _SHORT_FP_LIMIT]
+
+    def _try_one(fp: str, fp_ascii: str, posts) -> dict | None:
         for p in reversed(posts):
             if fp in p["stripped"]:
                 return p
+            # Diacritics fallback: both sides normalized to ASCII
+            if fp_ascii and fp_ascii != fp and fp_ascii in p["stripped_ascii"]:
+                return p
         return None
 
-    def _try_fps(posts):
-        for fp in fps:
-            hit = _try_one(fp, posts)
+    def _try_fps_list(fp_list, posts):
+        for fp in fp_list:
+            fp_ascii = _to_ascii(fp)
+            hit = _try_one(fp, fp_ascii, posts)
             if hit:
                 return hit
         return None
 
-    if canonical:
-        by_author = [p for p in window if p["author_name"] == canonical]
-        found = _try_fps(by_author)
-        if found:
-            return found
+    def _search(fp_list, posts):
+        if canonical:
+            by_author = [p for p in posts if p["author_name"] == canonical]
+            found = _try_fps_list(fp_list, by_author)
+            if found:
+                return found
+        return _try_fps_list(fp_list, posts)
 
-    return _try_fps(window)
+    # Phase 1: regular-length fps in full topic window
+    result = _search(regular_fps, window) if regular_fps else None
+
+    # Phase 1b: global fallback — only by canonical author (no fall-through to all)
+    # Wider window (250 posts) is safe only when author-filtered
+    if result is None and regular_fps and global_fallback and canonical:
+        by_author = [p for p in global_fallback if p["author_name"] == canonical]
+        result = _try_fps_list(regular_fps, by_author) if by_author else None
+
+    # Phase 2: short fps — only in the small nearby window (no global)
+    if result is None and tiny_fps and short_window:
+        result = _search(tiny_fps, short_window)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +412,9 @@ def _match_post(fps: list[str], window: list, canonical: str | None) -> dict | N
 
 def _enrich_content(post_id: int, content: str,
                     window: list, known_users: dict,
-                    quotes_out: list) -> str:
+                    quotes_out: list,
+                    global_fallback: list | None = None,
+                    short_window: list | None = None) -> str:
     """Replace top-level [quote] tags with enriched versions.
 
     Appends dicts to quotes_out for each quote found.
@@ -296,7 +431,7 @@ def _enrich_content(post_id: int, content: str,
         canonical = _canonicalize(raw_username, known_users)
         inner     = content[tag_end:block_end - len("[/quote]")]
         fps       = _fingerprints(inner)
-        match     = _match_post(fps, window, canonical)
+        match     = _match_post(fps, window, canonical, global_fallback, short_window)
 
         if match:
             cited_id  = match["post_id"]
@@ -419,15 +554,35 @@ def _propagate_chain_quotes(conn, stdout) -> int:
             "created_at": row[3] or "",
         })
 
+    # Only process posts that:
+    #   a) have at least one found outer citation (q_outer.found=1)
+    #   b) whose cited post itself has found citations (q_inner.found=1)
+    # This avoids scanning all 200k+ posts — SQL join identifies exact candidates.
+    candidate_ids = {
+        row[0] for row in conn.execute(
+            "SELECT DISTINCT q_outer.citing_post_id "
+            "FROM quotes q_outer "
+            "JOIN quotes q_inner ON q_outer.cited_post_id = q_inner.citing_post_id "
+            "WHERE q_outer.found = 1 AND q_inner.found = 1"
+        )
+    }
+    stdout.write(f"  Kandydatów do propagacji: {len(candidate_ids)}")
+
+    if not candidate_ids:
+        return 0
+
+    placeholders = ','.join('?' * len(candidate_ids))
+    candidate_rows = conn.execute(
+        f"SELECT post_id, content_quotes FROM posts "
+        f"WHERE post_id IN ({placeholders}) AND content_quotes IS NOT NULL",
+        list(candidate_ids)
+    ).fetchall()
+
     # Process posts that have found outer citations
     updates = []
     enriched_total = 0
 
-    for row in conn.execute(
-        "SELECT p.post_id, p.content_quotes "
-        "FROM posts p "
-        "WHERE p.quote_status IN (1, 3) AND p.content_quotes IS NOT NULL"
-    ):
+    for row in candidate_rows:
         post_id  = row[0]
         content  = row[1]
         if not _PLAIN_TAG_RE.search(content):
@@ -485,7 +640,7 @@ def _propagate_chain_quotes(conn, stdout) -> int:
                 return f"[quote post_id={cited_pid} time={unix}]"
 
             new_inner, n = _PLAIN_TAG_RE.subn(_replace_plain, inner)
-            if n:
+            if n and new_inner != inner:
                 new_content = (
                     new_content[:inner_start + offset]
                     + new_inner
@@ -548,14 +703,29 @@ class Command(BaseCommand):
                             help="Only reprocess posts with quote_status 2 or 3 (faster re-run)")
         parser.add_argument("--propagate", action="store_true",
                             help="Propagate enrichments to nested quotes via the quotes chain table")
+        parser.add_argument("--bible-index", default="",
+                            help="Path to bible_ngram.pkl; enables Bible-verse detection on unfound quotes")
+        parser.add_argument("--detect-bible", action="store_true",
+                            help="Run Bible-detection pass on posts with unfound quotes (requires --bible-index)")
 
     def handle(self, *args, **options):
-        db_path      = options["archive_db"]
-        users_path   = options["users_db"]
-        lookahead    = options["lookahead"]
-        reset        = options["reset"]
-        only_unfound = options["only_unfound"]
-        do_propagate = options["propagate"]
+        db_path        = options["archive_db"]
+        users_path     = options["users_db"]
+        lookahead      = options["lookahead"]
+        reset          = options["reset"]
+        only_unfound   = options["only_unfound"]
+        do_propagate   = options["propagate"]
+        bible_idx_path = options["bible_index"]
+        do_bible       = options["detect_bible"]
+
+        if bible_idx_path:
+            try:
+                _load_bible_index(bible_idx_path)
+                self.stdout.write(f"Załadowano indeks Biblii z {bible_idx_path} ({len(_BIBLE_NGRAM_INDEX)} n-gramów)")
+            except Exception as e:
+                raise CommandError(f"Nie można otworzyć bible-index: {e}")
+        elif do_bible:
+            raise CommandError("--detect-bible wymaga --bible-index")
 
         try:
             conn = sqlite3.connect(db_path)
@@ -601,6 +771,9 @@ class Command(BaseCommand):
                 known_users[name.lower()] = name
             self.stdout.write(f"Załadowano {len(known_users)//2} userów z posts.author_name")
 
+        # When only Bible detection is requested, skip the main enrichment loop
+        run_main_loop = not (do_bible and not only_unfound and not reset)
+
         # --- Count posts to process ---
         if only_unfound:
             total_posts = conn.execute(
@@ -618,22 +791,50 @@ class Command(BaseCommand):
             self.stdout.write(f"Postów z cytatami: {total_posts}")
             unfound_ids = None
 
+        # --- Build global index for cross-topic fallback (50 preceding posts by post_id) ---
+        # Load all posts once; only stripped content needed for matching
+        _GLOBAL_FALLBACK_N = 250
+        global_sorted: list[dict] = []   # sorted by post_id ASC
+        global_post_ids: list[int] = []  # parallel list for bisect
+
+        for row in conn.execute(
+            "SELECT post_id, author_name, content, created_at FROM posts ORDER BY post_id ASC"
+        ):
+            raw = row[2] or ""
+            s   = _strip_bbcode(raw)
+            d = {
+                "post_id":      row[0],
+                "author_name":  row[1] or "",
+                "content":      raw,
+                "created_at":   row[3] or "",
+                "stripped":     s,
+                "stripped_ascii": _to_ascii(s),
+            }
+            global_sorted.append(d)
+            global_post_ids.append(row[0])
+
         # --- Process topic by topic ---
-        topics = [
-            row[0] for row in
-            conn.execute("SELECT DISTINCT topic_id FROM posts ORDER BY topic_id")
-        ]
-        self.stdout.write(f"Tematów: {len(topics)}")
+        if run_main_loop:
+            topics = [
+                row[0] for row in
+                conn.execute("SELECT DISTINCT topic_id FROM posts ORDER BY topic_id")
+            ]
+            self.stdout.write(f"Tematów: {len(topics)}")
+        else:
+            topics = []
 
         processed = found_count = not_found_count = 0
         all_quote_rows: list[dict] = []
 
         for topic_id in topics:
             topic_posts = conn.execute(
-                "SELECT post_id, author_name, content, created_at "
+                "SELECT post_id, author_name, content, content_quotes, quote_status, created_at "
                 "FROM posts WHERE topic_id=? ORDER BY post_order ASC, post_id ASC",
                 (topic_id,)
             ).fetchall()
+
+            # Set of post_ids in this topic — used to exclude from global fallback
+            topic_post_id_set = {row["post_id"] for row in topic_posts}
 
             # window: list of post dicts for this topic (all preceding posts)
             window: list[dict] = []
@@ -641,8 +842,10 @@ class Command(BaseCommand):
             updates: list[tuple[str, int]] = []
 
             for row in topic_posts:
-                post_id = row["post_id"]
-                content = row["content"] or ""
+                post_id      = row["post_id"]
+                content      = row["content"] or ""
+                content_q    = row["content_quotes"] or ""
+                post_qs      = row["quote_status"] or 0
 
                 should_process = (
                     "[quote" in content.lower() and
@@ -650,8 +853,29 @@ class Command(BaseCommand):
                 )
 
                 if should_process:
+                    # Cross-topic fallback: N posts globally preceding this post_id,
+                    # excluding posts from the same topic (already in window)
+                    idx = bisect.bisect_left(global_post_ids, post_id)
+                    fallback_slice = global_sorted[max(0, idx - _GLOBAL_FALLBACK_N): idx]
+                    global_fallback = [p for p in fallback_slice
+                                       if p["post_id"] not in topic_post_id_set]
+
+                    short_window = window[-_SHORT_FP_WINDOW:] if window else None
+
+                    # For status=3 (mixed), use content_quotes as base so already-found
+                    # enriched tags [quote=X post_id=N time=T] are preserved and skipped
+                    # by _extract_top_quotes (which only matches plain [quote]/[quote="X"]).
+                    # For status=0/2 (none found or fresh), use original content.
+                    if only_unfound and post_qs == 3 and content_q:
+                        base_content = content_q
+                    else:
+                        base_content = content
+
                     quotes_for_post: list[dict] = []
-                    enriched = _enrich_content(post_id, content, window, known_users, quotes_for_post)
+                    enriched = _enrich_content(
+                        post_id, base_content, window, known_users,
+                        quotes_for_post, global_fallback or None, short_window,
+                    )
                     updates.append((enriched, post_id))
                     for q in quotes_for_post:
                         if q["found"]:
@@ -659,21 +883,28 @@ class Command(BaseCommand):
                         else:
                             not_found_count += 1
                     if only_unfound:
-                        # Replace existing quotes rows for this post
-                        conn.execute(
-                            "DELETE FROM quotes WHERE citing_post_id=?", (post_id,)
-                        )
+                        if post_qs == 3:
+                            # Preserve already-found citations; only replace unfound ones
+                            conn.execute(
+                                "DELETE FROM quotes WHERE citing_post_id=? AND found=0",
+                                (post_id,)
+                            )
+                        else:
+                            conn.execute(
+                                "DELETE FROM quotes WHERE citing_post_id=?", (post_id,)
+                            )
                     all_quote_rows.extend(quotes_for_post)
                     processed += 1
 
                 # Add current post to window AFTER processing (can't quote yourself)
+                _s = _strip_bbcode(content)
                 window.append({
-                    "post_id":    post_id,
-                    "author_name": row["author_name"] or "",
-                    "content":    content,
-                    "created_at": row["created_at"] or "",
-                    # Precompute full stripped text for O(n) haystack search
-                    "stripped":   _strip_bbcode(content),
+                    "post_id":       post_id,
+                    "author_name":   row["author_name"] or "",
+                    "content":       content,
+                    "created_at":    row["created_at"] or "",
+                    "stripped":      _s,
+                    "stripped_ascii": _to_ascii(_s),
                 })
                 # lookahead=0 means full topic (no limit)
                 if lookahead and len(window) > lookahead:
@@ -716,6 +947,12 @@ class Command(BaseCommand):
 
         conn.commit()
 
+        # Optional Bible detection pass
+        if do_bible and _BIBLE_NGRAM_INDEX:
+            bible_count = self._detect_bible_quotes(conn)
+            conn.commit()
+            self.stdout.write(f"Biblia: znaleziono {bible_count} cytatów biblijnych.")
+
         # Optional propagation pass
         if do_propagate:
             prop_count = _propagate_chain_quotes(conn, self.stdout)
@@ -737,3 +974,93 @@ class Command(BaseCommand):
             f"  JOIN posts p ON q.citing_post_id=p.post_id\n"
             f"  WHERE q.found=0 LIMIT 20;"
         ))
+
+    # -----------------------------------------------------------------------
+    # Bible detection pass
+    # -----------------------------------------------------------------------
+
+    def _detect_bible_quotes(self, conn) -> int:
+        """Scan posts with unfound quotes; replace matching [quote] blocks with [Bible=ref].
+
+        Returns total number of Bible tags inserted.
+        """
+        # Regex for Bible tag detection (already tagged from a previous pass)
+        _BIBLE_TAG_RE = re.compile(r'\[Bible=[^\]]*\]', re.IGNORECASE)
+
+        # Posts that still have unfound quotes
+        post_rows = conn.execute(
+            "SELECT post_id, content_quotes, content "
+            "FROM posts WHERE quote_status IN (2, 3)"
+        ).fetchall()
+
+        # Regex patterns for counting found/unfound tags in content_quotes
+        _UNFOUND_TAG_RE = re.compile(
+            r'\[quote(?:="[^"]*")?\]',   # [quote] or [quote="X"] — no post_id
+            re.IGNORECASE
+        )
+        _FOUND_TAG_RE = re.compile(
+            r'\[(?:quote[^\]]+post_id=|Bible=)[^\]]*\]',  # [quote ... post_id=] or [Bible=...]
+            re.IGNORECASE
+        )
+
+        updates = []
+        bible_total = 0
+
+        for row in post_rows:
+            post_id  = row[0]
+            base     = row[1] or row[2] or ""
+            if not base:
+                continue
+
+            blocks = _extract_top_quotes(base)
+            if not blocks:
+                continue
+
+            new_content = base
+            offset = 0
+            found_any = False
+
+            for block_start, block_end, tag_end, raw_username in blocks:
+                inner = base[tag_end:block_end - len("[/quote]")]
+                ref = _lookup_bible(inner)
+                if ref is None:
+                    continue
+
+                # Build [Bible=ref] replacement tag
+                new_tag = f"[Bible={ref}]"
+                # Replace the opening tag only; keep inner content and [/quote]
+                adj_start = block_start + offset
+                adj_tag_end = tag_end + offset
+                new_content = (
+                    new_content[:adj_start]
+                    + new_tag
+                    + new_content[adj_tag_end:]
+                )
+                offset += len(new_tag) - (tag_end - block_start)
+                bible_total += 1
+                found_any = True
+
+            if found_any:
+                updates.append((new_content, post_id))
+                # Save updated content_quotes
+                conn.execute(
+                    "UPDATE posts SET content_quotes=? WHERE post_id=?",
+                    (new_content, post_id)
+                )
+                # Recompute quote_status from tag counts in new content_quotes
+                # (Don't touch quotes table — we can't map blocks to rows reliably)
+                n_unfound = len(_UNFOUND_TAG_RE.findall(new_content))
+                n_found   = len(_FOUND_TAG_RE.findall(new_content))
+                if n_unfound == 0 and n_found > 0:
+                    status = 1
+                elif n_found == 0:
+                    status = 2
+                else:
+                    status = 3
+                conn.execute(
+                    "UPDATE posts SET quote_status=? WHERE post_id=?",
+                    (status, post_id)
+                )
+
+        self.stdout.write(f"  Zaktualizowano {len(updates)} postów ({bible_total} tagów [Bible]).")
+        return bible_total
