@@ -10,7 +10,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP
+from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP, PasswordResetCode
 from .forms import RegisterForm, NewTopicForm, ReplyForm
 from .email_utils import mask_email, mask_email_variants
 from .spam_utils import get_author_spam_filter, filter_forums
@@ -578,3 +578,205 @@ def flag_post_ip(request, post_id):
         post.save(update_fields=["ip_flagged", "ip_retain_until"])
 
     return redirect(f"/topic/{post.topic.pk}/?page={_post_page(post)}#post-{post.pk}")
+
+
+# ---------------------------------------------------------------------------
+# Auth: custom login (detects invalidated password) + password reset via code
+# ---------------------------------------------------------------------------
+
+def _generate_reset_code() -> str:
+    """Return a cryptographically random 6-digit string."""
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+def _can_send_reset_code(user) -> tuple[bool, int]:
+    """Check rate limit. Returns (allowed, codes_sent_this_hour)."""
+    since = timezone.now() - timedelta(hours=1)
+    sent = PasswordResetCode.objects.filter(user=user, created_at__gte=since).count()
+    return sent < PasswordResetCode.MAX_PER_HOUR, sent
+
+
+def _find_valid_code(user, code_input: str):
+    """Return the matching PasswordResetCode if valid, else None.
+
+    Accepts:
+    - The most recent unused+unexpired code — always.
+    - The second most recent — only if created within GRACE_MINUTES ago
+      (handles impatient 'resend' when the first email is just delayed).
+    """
+    now = timezone.now()
+    candidates = list(
+        PasswordResetCode.objects.filter(
+            user=user, is_used=False, expires_at__gt=now
+        ).order_by("-created_at")[:2]
+    )
+    if not candidates:
+        return None
+
+    # Latest code
+    if candidates[0].code == code_input:
+        return candidates[0]
+
+    # Previous code within grace window
+    if len(candidates) == 2:
+        prev = candidates[1]
+        if prev.code == code_input:
+            grace_cutoff = now - timedelta(minutes=PasswordResetCode.GRACE_MINUTES)
+            if prev.created_at >= grace_cutoff:
+                return prev
+
+    return None
+
+
+def _send_reset_code_email(user, code: str, recipient_email: str) -> None:
+    from django.utils.formats import date_format
+    sent_at = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
+    send_mail(
+        subject="[Forum] Kod do resetowania hasła",
+        message=(
+            f"Nick: {user.username}\n"
+            f"Kod: {code}\n"
+            f"Wysłano: {sent_at}\n\n"
+            f"Kod jest ważny przez {PasswordResetCode.CODE_EXPIRY_HOURS} godziny.\n"
+            f"Wejdź na forum → Zresetuj hasło i wpisz ten kod razem z nowym hasłem.\n\n"
+            f"Jeśli to nie Ty prosiłeś — zignoruj tę wiadomość."
+        ),
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+        recipient_list=[recipient_email],
+        fail_silently=False,
+    )
+
+
+def login_view(request):
+    """Custom login: detects unusable password and redirects to reset flow."""
+    from django.contrib.auth import authenticate
+    from .models import User as ForumUser
+
+    if request.user.is_authenticated:
+        return redirect("/")
+
+    error = None
+
+    if request.method == "POST":
+        username = request.POST.get("username", "").strip()
+        password = request.POST.get("password", "")
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            login(request, user)
+            return redirect(request.POST.get("next") or request.GET.get("next") or "/")
+
+        # Auth failed — check if password is unusable (invalidated)
+        try:
+            candidate = ForumUser.objects.get(username=username)
+            if not candidate.has_usable_password():
+                return redirect(
+                    f"/reset-hasla/?username={candidate.username}&reason=invalidated"
+                )
+        except ForumUser.DoesNotExist:
+            pass
+
+        error = "Nieprawidłowy nick lub hasło."
+
+    return render(request, "registration/login.html", {
+        "error": error,
+        "next": request.GET.get("next", ""),
+    })
+
+
+def request_reset(request):
+    """Step 1: user asks for a reset code. Sends 6-digit code by email."""
+    from .models import User as ForumUser
+
+    reason = request.GET.get("reason", "")          # 'invalidated' or '' (forgot)
+    prefill_username = request.GET.get("username", "")
+
+    sent = False
+    error = None
+
+    if request.method == "POST":
+        username = request.POST.get("username", "").strip()
+        try:
+            user = ForumUser.objects.get(username=username)
+        except ForumUser.DoesNotExist:
+            # Don't reveal whether user exists — same message
+            sent = True
+        else:
+            if not user.email:
+                error = (
+                    "To konto nie ma przypisanego adresu email. "
+                    "Skontaktuj się z administratorem."
+                )
+            else:
+                allowed, sent_count = _can_send_reset_code(user)
+                if not allowed:
+                    error = (
+                        f"Wysłano już {PasswordResetCode.MAX_PER_HOUR} kody w ciągu ostatniej godziny. "
+                        "Sprawdź skrzynkę lub spróbuj ponownie za chwilę."
+                    )
+                else:
+                    code = _generate_reset_code()
+                    expires = timezone.now() + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
+                    PasswordResetCode.objects.create(user=user, code=code, expires_at=expires)
+                    if getattr(settings, "TEST_MODE", False):
+                        # TEST_MODE: show code on screen instead of sending email
+                        return render(request, "registration/request_reset.html", {
+                            "sent": True,
+                            "test_code": code,
+                            "username": username,
+                            "email_mask": mask_email(user.email),
+                        })
+                    _send_reset_code_email(user, code, user.email)
+                    sent = True
+
+    return render(request, "registration/request_reset.html", {
+        "sent": sent,
+        "error": error,
+        "reason": reason,
+        "prefill_username": prefill_username,
+    })
+
+
+def do_reset(request):
+    """Step 2: user enters username + new password × 2 + the code."""
+    from .models import User as ForumUser
+
+    error = None
+    success = False
+    prefill_username = request.GET.get("username", "")
+
+    if request.method == "POST":
+        username  = request.POST.get("username", "").strip()
+        password1 = request.POST.get("password1", "")
+        password2 = request.POST.get("password2", "")
+        code_input = request.POST.get("code", "").strip()
+
+        if not username or not password1 or not password2 or not code_input:
+            error = "Wypełnij wszystkie pola."
+        elif password1 != password2:
+            error = "Hasła nie są zgodne."
+        else:
+            try:
+                user = ForumUser.objects.get(username=username)
+            except ForumUser.DoesNotExist:
+                error = "Nieprawidłowy nick lub kod."
+            else:
+                code_obj = _find_valid_code(user, code_input)
+                if code_obj is None:
+                    error = "Nieprawidłowy lub wygasły kod."
+                else:
+                    from .auth_utils import prehash_password
+                    is_prehashed = request.POST.get("password_is_prehashed") == "1"
+                    if not is_prehashed:
+                        password1 = prehash_password(password1, username)
+                    user.set_password(password1)
+                    user.save(update_fields=["password"])
+                    # Mark this and all older codes as used
+                    PasswordResetCode.objects.filter(user=user, is_used=False).update(is_used=True)
+                    login(request, user)
+                    success = True
+
+    return render(request, "registration/do_reset.html", {
+        "error": error,
+        "success": success,
+        "prefill_username": prefill_username,
+    })

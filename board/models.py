@@ -88,6 +88,35 @@ class User(AbstractUser):
         ]
 
 
+class PasswordResetCode(models.Model):
+    """6-digit numeric code for password reset (forgot password or invalidated password).
+
+    Flow:
+    - Up to MAX_PER_HOUR codes may be sent per hour (rate limit).
+    - Each new code does NOT immediately invalidate the previous one.
+    - The previous code remains valid for GRACE_MINUTES after it was created,
+      to handle delayed mail delivery (user requests a second code impatiently).
+    - A code becomes permanently invalid when: used, expired (EXPIRY_HOURS), or
+      the grace window has elapsed and a newer code exists.
+    """
+    user       = models.ForeignKey(User, on_delete=models.CASCADE, related_name="reset_codes")
+    code       = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used    = models.BooleanField(default=False)
+
+    CODE_EXPIRY_HOURS = 24
+    GRACE_MINUTES     = 7
+    MAX_PER_HOUR      = 3
+
+    class Meta:
+        db_table = "forum_password_reset_codes"
+        ordering = ["-created_at"]
+
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+
 class ActivationToken(models.Model):
     """Short-lived token for ghost account activation via email link."""
     user = models.OneToOneField(

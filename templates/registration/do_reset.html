@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Ustaw nowe hasło{% endblock %}
+
+{% block content %}
+<article style="max-width: 420px; margin: 4rem auto;">
+  <h2>Ustaw nowe hasło</h2>
+
+  {% if success %}
+    <p style="background:#dfd; padding:.6rem; border-radius:4px;">
+      Hasło zostało zmienione. Jesteś teraz zalogowany.
+    </p>
+    <p><a href="/">Przejdź na forum →</a></p>
+  {% else %}
+    <p>Wpisz nick, nowe hasło (dwukrotnie) oraz kod z emaila.</p>
+    {% if error %}
+      <p style="color:red;">{{ error }}</p>
+    {% endif %}
+    <form method="post" id="reset-form">
+      {% csrf_token %}
+      <input type="hidden" name="password_is_prehashed" value="0" id="prehashed-flag">
+      <label>Nick:
+        <input type="text" name="username" value="{{ prefill_username }}" required
+               autocomplete="username" id="reset-username">
+      </label>
+      <label>Nowe hasło:
+        <input type="password" name="password1" required
+               autocomplete="new-password" id="reset-pw1">
+      </label>
+      <label>Powtórz hasło:
+        <input type="password" name="password2" required
+               autocomplete="new-password" id="reset-pw2">
+      </label>
+      <label>Kod z emaila (6 cyfr):
+        <input type="text" name="code" required pattern="[0-9]{6}"
+               inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+               id="reset-code" style="letter-spacing:.15em; font-size:1.1em;">
+      </label>
+      <button type="submit" id="reset-btn">Ustaw hasło</button>
+    </form>
+    <p><a href="{% url 'request_reset' %}">Wyślij kod ponownie</a></p>
+
+<script>
+(function() {
+  var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
+  var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
+  function saltFor(u) { return u.toLowerCase() + ':sfiniabb'; }
+
+  var form = document.getElementById('reset-form');
+  var flag = document.getElementById('prehashed-flag');
+  var btn  = document.getElementById('reset-btn');
+
+  var script = document.createElement('script');
+  script.src = WASM_CDN;
+  script.onload = function() {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      btn.disabled = true;
+      var username = document.getElementById('reset-username').value;
+      var p1 = document.getElementById('reset-pw1');
+      var p2 = document.getElementById('reset-pw2');
+      var salt = saltFor(username);
+      Promise.all([
+        hashwasm.argon2id(Object.assign({}, PARAMS, { password: p1.value, salt: salt })),
+        hashwasm.argon2id(Object.assign({}, PARAMS, { password: p2.value, salt: salt })),
+      ]).then(function(hashes) {
+        p1.value = hashes[0];
+        p2.value = hashes[1];
+        flag.value = '1';
+        form.submit();
+      }).catch(function() {
+        btn.disabled = false;
+        form.submit();
+      });
+    });
+  };
+  document.head.appendChild(script);
+})();
+</script>
+  {% endif %}
+</article>
+{% endblock %}

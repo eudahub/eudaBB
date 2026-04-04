@@ -199,6 +199,73 @@ Wymagania: serwer uruchomiony lokalnie, `TEST_MODE=true` w `.env` (chyba że zaz
 - Pozostałe wątki posortowane jak zwykle (po dacie ostatniego posta — malejąco)
 - Jeśli jest kilka przypiętych — też posortowane między sobą po dacie ostatniego posta
 
+---
+
+## 12. Reset hasła — zapomniałem hasła (kod emailowy)
+
+**Warunki wstępne:**
+- Istnieje aktywne konto `janek` z emailem `janek@przyklad.pl`
+- `TEST_MODE=true`
+
+**Kroki:**
+1. Wejdź na `/login/` → kliknij „Nie pamiętasz hasła? Zresetuj je."
+2. Wpisz nick `janek` → kliknij „Wyślij kod na email"
+3. W TEST_MODE: kod pojawia się na ekranie — skopiuj go
+4. Kliknij „wpisz kod i ustaw nowe hasło"
+5. Wpisz nick `janek`, nowe hasło dwukrotnie, skopiowany kod → „Ustaw hasło"
+
+**Oczekiwany wynik:**
+- Hasło zmienione, user zalogowany, przekierowanie na `/`
+- Stary kod oznaczony jako użyty — ponowne użycie tego samego kodu → błąd
+
+**Weryfikacja rate limitu:**
+1. Wróć do kroku 2 i wyślij kod 3 razy z rzędu
+2. Czwarta próba → błąd „Wysłano już 3 kody w ciągu ostatniej godziny"
+
+**Weryfikacja nieistniejącego nicka:**
+- Wpisz nick którego nie ma → ta sama odpowiedź „jeśli konto istnieje…" (nie zdradza)
+
+---
+
+## 13. Reset hasła — hasło unieważnione przez admina
+
+**Warunki wstępne:**
+- Istnieje konto `marta` z hasłem i emailem
+- Admin w panelu Django (lub przez shell): `User.objects.filter(username='marta').update(password='!')` (ustawia unusable password)
+
+**Kroki:**
+1. Wejdź na `/login/`, wpisz nick `marta` i stare hasło → wyślij
+2. Forum wykrywa unusable password → przekierowanie na `/reset-hasla/?username=marta&reason=invalidated`
+3. Strona pokazuje komunikat „Twoje hasło zostało unieważnione…"
+4. Nick `marta` wstępnie wypełniony — kliknij „Wyślij kod na email"
+5. (TEST_MODE) Skopiuj kod z ekranu → przejdź do `/ustaw-haslo/`
+6. Wpisz nick, nowe hasło × 2, kod → „Ustaw hasło"
+
+**Oczekiwany wynik:**
+- Hasło ustawione, user zalogowany
+- Przy następnym logowaniu nowe hasło działa
+
+---
+
+## 14. Reset hasła — grace period poprzedniego kodu
+
+**Cel:** sprawdzić że gdy user dostanie dwa kody, oba działają przez 7 minut.
+
+**Warunki wstępne:**
+- Konto `piotr` z emailem, `TEST_MODE=true`
+
+**Kroki:**
+1. Wejdź na `/reset-hasla/`, wpisz `piotr` → wyślij → skopiuj **kod #1**
+2. Natychmiast wróć i wyślij ponownie → skopiuj **kod #2**
+3. Wejdź na `/ustaw-haslo/`, wpisz nick + nowe hasło + **kod #1** → wyślij
+
+**Oczekiwany wynik (w ciągu 7 minut od kroku 1):**
+- Kod #1 nadal ważny — hasło zmienione, user zalogowany
+
+**Oczekiwany wynik (po upływie 7 minut od kroku 1):**
+- Kod #1 odrzucony — „Nieprawidłowy lub wygasły kod"
+- Kod #2 nadal działa
+
 **Weryfikacja kolejności przy nowym poście:**
 1. Dodaj nowy post do wątku A (nieprzypięty)
 2. Odśwież listę wątków

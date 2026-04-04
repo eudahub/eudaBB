@@ -6,17 +6,20 @@
   <h2>Logowanie</h2>
   <form method="post" id="login-form">
     {% csrf_token %}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
     <input type="hidden" name="password_is_prehashed" value="0" id="prehashed-flag">
-    {% for field in form %}
-      <label>{{ field.label }}{{ field }}
-        {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
-      </label>
-    {% endfor %}
-    {% if form.non_field_errors %}
-      <p style="color:red;">{{ form.non_field_errors|join:", " }}</p>
+    {% if error %}
+      <p style="color:red;">{{ error }}</p>
     {% endif %}
+    <label>Nick:
+      <input type="text" name="username" required autocomplete="username" autofocus>
+    </label>
+    <label>Hasło:
+      <input type="password" name="password" required autocomplete="current-password">
+    </label>
     <button type="submit" id="login-btn">Zaloguj</button>
   </form>
+  <p><a href="{% url 'request_reset' %}">Nie pamiętasz hasła? Zresetuj je.</a></p>
   <p><a href="{% url 'register' %}">Nie masz konta? Zarejestruj się.</a></p>
   <p><a href="{% url 'find_account' %}">Nie pamiętasz nicka? Podaj email → odzyskaj konto.</a></p>
   <p><a href="{% url 'contact' %}">Problem z logowaniem? Napisz do administratora.</a></p>
