@@ -715,6 +715,8 @@ class Command(BaseCommand):
                             help="Run Bible-detection pass on posts with unfound quotes (requires --bible-index)")
         parser.add_argument("--search-not-found", action="store_true",
                             help="Search all posts by known author for not_found quotes (unlimited distance)")
+        parser.add_argument("--search-anonymous", action="store_true",
+                            help="Search for anonymous [quote]...[/quote] blocks via 5-gram index")
 
     def handle(self, *args, **options):
         db_path          = options["archive_db"]
@@ -726,6 +728,7 @@ class Command(BaseCommand):
         bible_idx_path   = options["bible_index"]
         do_bible         = options["detect_bible"]
         do_search_nf     = options["search_not_found"]
+        do_search_anon   = options["search_anonymous"]
 
         if bible_idx_path:
             try:
@@ -781,7 +784,7 @@ class Command(BaseCommand):
             self.stdout.write(f"Załadowano {len(known_users)//2} userów z posts.author_name")
 
         # Skip main enrichment loop when running a standalone auxiliary pass
-        _aux_only = (do_bible or do_search_nf) and not only_unfound and not reset
+        _aux_only = (do_bible or do_search_nf or do_search_anon) and not only_unfound and not reset
         run_main_loop = not _aux_only
 
         # --- Count posts to process ---
@@ -957,6 +960,12 @@ class Command(BaseCommand):
 
         conn.commit()
 
+        # Optional anonymous n-gram search pass
+        if do_search_anon:
+            anon_found = self._search_anonymous_by_ngram(conn, self.stdout)
+            conn.commit()
+            self.stdout.write(f"Search-anonymous: znaleziono {anon_found} cytatów.")
+
         # Optional search-not-found pass
         if do_search_nf:
             nf_found = self._search_not_found_by_author(conn, self.stdout)
@@ -1080,6 +1089,199 @@ class Command(BaseCommand):
 
         self.stdout.write(f"  Zaktualizowano {len(updates)} postów ({bible_total} tagów [Bible]).")
         return bible_total
+
+    # -----------------------------------------------------------------------
+    # Search anonymous unfound quotes via n-gram index
+    # -----------------------------------------------------------------------
+
+    def _search_anonymous_by_ngram(self, conn, stdout) -> int:
+        """Find posts for anonymous [quote]...[/quote] blocks using a 5-gram index.
+
+        Builds a 5-gram → [post_id] index from content_user for all posts.
+        For each anonymous unfound quote, votes on candidate posts via n-gram
+        lookups.  Requires ≥2 matching 5-grams pointing to the same post
+        (or ≥1 when inner text yields only 1–4 distinct 5-grams and that
+        single post is unambiguous).
+
+        Returns number of blocks resolved.
+        """
+        stdout.write("Budowanie 5-gram indeksu z content_user (wszystkie posty)...")
+        import time as _time
+        t0 = _time.time()
+
+        # ngram → list of post_ids (only keep unique lists — skip common phrases)
+        ngram_index: dict[str, list] = {}
+        post_author: dict[int, tuple] = {}  # post_id → (author_name, created_at)
+
+        _MAX_POSTS_PER_GRAM = 5   # skip very common 5-grams (stop-phrase style)
+
+        for row in conn.execute(
+            "SELECT post_id, author_name, content_user, created_at FROM posts "
+            "WHERE content_user IS NOT NULL AND content_user != ''"
+        ):
+            pid, author, cu, cat = row[0], row[1] or "", row[2] or "", row[3] or ""
+            post_author[pid] = (author, cat)
+            ws = _norm_for_bible(cu).split()   # reuse normalizer (alnum + space)
+            for i in range(len(ws) - 4):
+                key = ' '.join(ws[i:i+5])
+                lst = ngram_index.get(key)
+                if lst is None:
+                    ngram_index[key] = [pid]
+                elif len(lst) < _MAX_POSTS_PER_GRAM:
+                    lst.append(pid)
+                # else: already marked as common — leave as-is
+
+        t1 = _time.time()
+        stdout.write(
+            f"  {len(ngram_index):,} unikalnych 5-gramów, "
+            f"zbudowano w {t1-t0:.1f}s"
+        )
+
+        # Find anonymous unfound quotes
+        # Join with posts to get content_quotes; quote has canonical_author IS NULL
+        anon_posts = conn.execute(
+            "SELECT DISTINCT p.post_id, p.content_quotes "
+            "FROM posts p "
+            "JOIN quotes q ON q.citing_post_id = p.post_id "
+            "WHERE q.found=0 AND q.canonical_author IS NULL "
+            "AND p.content_quotes IS NOT NULL"
+        ).fetchall()
+        stdout.write(f"  Postów z anonimowymi unfound: {len(anon_posts)}")
+
+        found_total = 0
+        _CLOSE_RE    = re.compile(r'\[/quote\]', re.IGNORECASE)
+        _ANY_OPEN_RE = _QUOTE_ANY_OPEN_RE
+
+        for citing_post_id, cq in anon_posts:
+            # Parse all top-level quote blocks
+            events = []
+            for m in _ANY_OPEN_RE.finditer(cq):
+                events.append((m.start(), "open", m.group(0), m.end()))
+            for m in _CLOSE_RE.finditer(cq):
+                events.append((m.start(), "close", None, m.end()))
+            events.sort(key=lambda x: x[0])
+
+            depth = 0
+            block_start = tag_end = -1
+            opening_tag = ""
+            blocks = []
+            for pos, kind, tag_text, end in events:
+                if kind == "open":
+                    if depth == 0:
+                        block_start = pos
+                        tag_end     = end
+                        opening_tag = tag_text or ""
+                    depth += 1
+                else:
+                    if depth > 0:
+                        depth -= 1
+                        if depth == 0 and block_start >= 0:
+                            blocks.append((block_start, end, tag_end, opening_tag))
+                            block_start = -1
+
+            new_cq = cq
+            offset = 0
+            changed = False
+
+            for block_start, block_end, tag_end, opening_tag in blocks:
+                # Only process truly anonymous plain [quote] or [quote=""] blocks
+                # Skip enriched [quote=X post_id=N], [quote=X post_id=not_found], [Bible=]
+                if 'post_id=' in opening_tag.lower() or opening_tag.lower().startswith('[bible'):
+                    continue
+                # Skip named quotes (they have an author and were handled by main pass)
+                nf_m = _QUOTE_OPEN_RE.match(opening_tag)
+                if nf_m is None:
+                    continue   # not a plain [quote] or [quote="X"]
+                raw_author = nf_m.group(1)  # None for bare [quote]
+                if raw_author:
+                    continue   # has author → was already tried, skip
+
+                inner = cq[tag_end: block_end - len("[/quote]")]
+                ws    = _norm_for_bible(_strip_bbcode(inner)).split()
+                if len(ws) < 5:
+                    continue
+
+                # Vote on candidate posts via 5-gram lookup
+                votes: dict[int, int] = {}
+                grams_tried = 0
+                for i in range(0, len(ws) - 4, 2):   # stride 2 for speed
+                    key = ' '.join(ws[i:i+5])
+                    pids = ngram_index.get(key)
+                    if pids and len(pids) <= _MAX_POSTS_PER_GRAM:
+                        for p in pids:
+                            votes[p] = votes.get(p, 0) + 1
+                    grams_tried += 1
+                    if grams_tried > 60:
+                        break   # enough evidence
+
+                if not votes:
+                    continue
+
+                best_pid = max(votes, key=votes.get)
+                best_cnt = votes[best_pid]
+
+                # Require ≥2 matching grams, OR ≥1 if inner text is very short
+                min_votes = 1 if grams_tried <= 3 else 2
+                if best_cnt < min_votes:
+                    continue
+                # Ensure it's not ambiguous (no other candidate with same score)
+                if best_cnt > 1:
+                    rivals = [p for p, c in votes.items() if c == best_cnt and p != best_pid]
+                    if rivals:
+                        continue   # ambiguous
+
+                if best_pid == citing_post_id:
+                    continue   # can't cite yourself
+
+                author_name, created_at = post_author[best_pid]
+                unix_time  = _to_unix(created_at)
+                if author_name:
+                    new_tag = f"[quote={author_name} post_id={best_pid} time={unix_time}]"
+                else:
+                    new_tag = f"[quote post_id={best_pid} time={unix_time}]"
+
+                adj_start   = block_start + offset
+                adj_tag_end = tag_end     + offset
+                new_cq = (
+                    new_cq[:adj_start]
+                    + new_tag
+                    + new_cq[adj_tag_end:]
+                )
+                offset  += len(new_tag) - (tag_end - block_start)
+                found_total += 1
+                changed = True
+
+                conn.execute(
+                    "UPDATE quotes SET found=1, cited_post_id=?, canonical_author=? "
+                    "WHERE citing_post_id=? AND found=0 AND canonical_author IS NULL "
+                    "ORDER BY id LIMIT 1",
+                    (best_pid, author_name or None, citing_post_id)
+                )
+
+            if changed:
+                _UNFOUND = re.compile(
+                    r'\[quote(?:="[^"]*")?\]|\[quote=[^ \]]+\s+post_id=not_found\]',
+                    re.IGNORECASE
+                )
+                _FOUND = re.compile(
+                    r'\[(?:quote[^\]]+post_id=(?!not_found)|Bible=)[^\]]*\]',
+                    re.IGNORECASE
+                )
+                n_u = len(_UNFOUND.findall(new_cq))
+                n_f = len(_FOUND.findall(new_cq))
+                if n_u == 0 and n_f > 0:
+                    status = 1
+                elif n_f == 0:
+                    status = 2
+                else:
+                    status = 3
+                conn.execute(
+                    "UPDATE posts SET content_quotes=?, quote_status=? WHERE post_id=?",
+                    (new_cq, status, citing_post_id)
+                )
+
+        stdout.write(f"  Znaleziono {found_total} anonimowych cytatów.")
+        return found_total
 
     # -----------------------------------------------------------------------
     # Search not-found quotes by author (unlimited distance)
