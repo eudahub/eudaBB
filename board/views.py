@@ -982,15 +982,24 @@ def pm_compose(request):
                         f"(limit: {outbox_limit}). Poczekaj aż odbiorcy je odbiorą."
                     )
                 else:
-                    # Compress content
-                    if b64_compressed:
-                        try:
-                            content_bytes = compress_from_b64(b64_compressed)
-                        except ValueError:
-                            content_bytes = compress(raw_content)
+                    # Repair + validate BBCode
+                    from .bbcode_lint import repair_and_validate
+                    repaired_content, changes, lint_errors = repair_and_validate(raw_content)
+                    if lint_errors:
+                        error_lines = "\n".join(f"• {e}" for e in lint_errors)
+                        error = f"Błędy w kodzie BBCode:\n{error_lines}"
                     else:
-                        content_bytes = compress(raw_content)
+                        raw_content = repaired_content
+                        # Compress content
+                        if b64_compressed:
+                            try:
+                                content_bytes = compress_from_b64(b64_compressed)
+                            except ValueError:
+                                content_bytes = compress(raw_content)
+                        else:
+                            content_bytes = compress(raw_content)
 
+                if not error:
                     pm = PrivateMessage.objects.create(
                         sender=request.user,
                         recipient=recipient,
@@ -1036,17 +1045,24 @@ def pm_edit(request, box_id):
         if not subject or not raw_content:
             error = "Wypełnij wszystkie pola."
         else:
-            if b64_compressed:
-                try:
-                    content_bytes = compress_from_b64(b64_compressed)
-                except ValueError:
-                    content_bytes = compress(raw_content)
+            from .bbcode_lint import repair_and_validate
+            repaired_content, changes, lint_errors = repair_and_validate(raw_content)
+            if lint_errors:
+                error_lines = "\n".join(f"• {e}" for e in lint_errors)
+                error = f"Błędy w kodzie BBCode:\n{error_lines}"
             else:
-                content_bytes = compress(raw_content)
-            pm.subject = subject
-            pm.content_compressed = content_bytes
-            pm.save(update_fields=["subject", "content_compressed"])
-            return redirect("pm_outbox")
+                raw_content = repaired_content
+                if b64_compressed:
+                    try:
+                        content_bytes = compress_from_b64(b64_compressed)
+                    except ValueError:
+                        content_bytes = compress(raw_content)
+                else:
+                    content_bytes = compress(raw_content)
+                pm.subject = subject
+                pm.content_compressed = content_bytes
+                pm.save(update_fields=["subject", "content_compressed"])
+                return redirect("pm_outbox")
 
     current_content = decompress(pm.content_compressed)
     return render(request, "board/pm_edit.html", {

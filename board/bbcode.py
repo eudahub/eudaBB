@@ -62,6 +62,86 @@ _parser.add_formatter("font", _render_size)
 
 
 # ---------------------------------------------------------------------------
+# [quote=Author post_id=N time=T]  — enriched quote with optional link
+#
+# Overrides the library default to support the enriched format produced by
+# enrich_quotes: [quote=Username post_id=12345 time=1133305680]
+# The option string is "Username post_id=12345 time=1133305680" — parsed here.
+# Also handles the plain sfinia format [quote="Username"] (no post_id).
+# ---------------------------------------------------------------------------
+
+import re as _re2
+
+_QUOTE_OPT_RE = _re2.compile(
+    r'^(?P<author>[^ ]+)?'
+    r'(?:\s+post_id=(?P<post_id>\d+))?'
+    r'(?:\s+time=(?P<time>\d+))?',
+    _re2.IGNORECASE,
+)
+
+
+def _render_quote(tag_name, value, options, parent, context):
+    raw_opt = (options.get("quote") or "").strip()
+    author = ""
+    post_id = ""
+    ts = ""
+
+    if raw_opt:
+        m = _QUOTE_OPT_RE.match(raw_opt)
+        if m:
+            author  = m.group("author")  or ""
+            post_id = m.group("post_id") or ""
+            ts      = m.group("time")    or ""
+
+    if author and post_id and ts:
+        # Format timestamp as "YYYY-MM-DD HH:MM"
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+            date_str = dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            date_str = ts
+        # Link points to the anchor #post-<id>; import_posts fills the id
+        cite = (
+            f'<a href="#post-{post_id}" class="quote-link">'
+            f'{author} pisze: ↑{date_str}</a>'
+        )
+    elif author:
+        cite = f'{author} pisze:'
+    else:
+        cite = "Cytat:"
+
+    return (
+        f'<blockquote class="bbquote">'
+        f'<cite>{cite}</cite>'
+        f'{value}'
+        f'</blockquote>'
+    )
+
+
+_parser.add_formatter("quote", _render_quote, render_embedded=True,
+                      swallow_trailing_newline=True)
+
+
+# ---------------------------------------------------------------------------
+# [fquote]  — foreign quote (from outside the forum, e.g. internet)
+# ---------------------------------------------------------------------------
+
+def _render_fquote(tag_name, value, options, parent, context):
+    label = (options.get("fquote") or "").strip() or "Źródło zewnętrzne"
+    return (
+        f'<blockquote class="bbquote bbquote--foreign">'
+        f'<cite>{label}</cite>'
+        f'{value}'
+        f'</blockquote>'
+    )
+
+
+_parser.add_formatter("fquote", _render_fquote, render_embedded=True,
+                      swallow_trailing_newline=True)
+
+
+# ---------------------------------------------------------------------------
 # [spoiler] / [spoiler=Label]
 # ---------------------------------------------------------------------------
 

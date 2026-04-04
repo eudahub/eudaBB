@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 PAIRED_TAGS = {
     'b', 'i', 'u', 's', 'sub', 'sup', 'center',
     'color', 'size', 'font',
-    'code', 'quote', 'spoiler',
+    'code', 'quote', 'fquote', 'spoiler',
     'url', 'img', 'youtube',
     'list',
 }
@@ -49,7 +49,7 @@ AUTO_CLOSE_TAGS = {'b', 'i', 'u', 's', 'sub', 'sup', 'center'}
 LITERAL_TAGS = {'code'}
 
 # Tags where we don't wrap URLs (already semantic)
-NO_URL_WRAP_TAGS = {'url', 'img', 'youtube', 'code'}
+NO_URL_WRAP_TAGS = {'url', 'img', 'youtube', 'code', 'fquote'}
 
 
 # ---------------------------------------------------------------------------

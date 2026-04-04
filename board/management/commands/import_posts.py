@@ -208,7 +208,13 @@ class Command(BaseCommand):
                 post_objects = []
                 for new_order, row in enumerate(posts_in_topic, start=1):
                     author = user_map.get(row["author_name"])
-                    content_bbcode = row["content"] or ""
+                    # Use enriched content_quotes if available (enrich_quotes command)
+                    keys = row.keys()
+                    content_bbcode = (
+                        (row["content_quotes"] if "content_quotes" in keys else None)
+                        or row["content"]
+                        or ""
+                    )
                     dt = parse_pl_date(row["created_at"])
                     post_objects.append(Post(
                         topic=topic,
