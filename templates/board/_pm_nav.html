@@ -1,0 +1,7 @@
+{% load bbcode_tags %}
+<nav style="font-size:11px; margin-bottom:.5rem;">
+  <a href="{% url 'pm_inbox' %}">Odbiorcza{% if pm_unread %} (<strong>{{ pm_unread }}</strong>){% endif %}</a> |
+  <a href="{% url 'pm_outbox' %}">Oczekujące</a> |
+  <a href="{% url 'pm_sent' %}">Wysłane</a> |
+  <a href="{% url 'pm_compose' %}">+ Nowa wiadomość</a>
+</nav>

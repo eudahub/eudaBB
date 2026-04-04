@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Nowa wiadomość{% endblock %}
+{% block content %}
+{% include "board/_pm_nav.html" %}
+<h2>Nowa wiadomość</h2>
+
+{% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
+
+<form method="post" id="pm-form" style="max-width:700px;">
+  {% csrf_token %}
+  <input type="hidden" name="content_compressed" id="pm-compressed">
+  <label>Do (nick): <input type="text" name="recipient" value="{{ prefill_recipient }}" required autocomplete="off"></label>
+  <label>Temat: <input type="text" name="subject" value="{{ prefill_subject }}" required maxlength="255"></label>
+  <label>Treść (BBCode):
+    <textarea name="content" id="pm-content" rows="12" required>{{ prefill_content }}</textarea>
+  </label>
+  <button type="submit" id="pm-btn">Wyślij</button>
+</form>
+
+<script>
+(function() {
+  var CDN = 'https://cdn.jsdelivr.net/npm/fflate@0.8/umd/index.js';
+  var form = document.getElementById('pm-form');
+  var btn  = document.getElementById('pm-btn');
+  var compressedField = document.getElementById('pm-compressed');
+
+  var script = document.createElement('script');
+  script.src = CDN;
+  script.onload = function() {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      btn.disabled = true;
+      var text = document.getElementById('pm-content').value;
+      try {
+        var bytes = new TextEncoder().encode(text);
+        var compressed = fflate.zlibSync(bytes);
+        // base64 encode
+        var b64 = btoa(String.fromCharCode.apply(null, compressed));
+        compressedField.value = b64;
+      } catch(err) {
+        // fallback: send plaintext, server will compress
+        compressedField.value = '';
+      }
+      form.submit();
+    });
+  };
+  script.onerror = function() { /* CDN unavailable — server compresses */ };
+  document.head.appendChild(script);
+})();
+</script>
+{% endblock %}

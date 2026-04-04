@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Wysłane{% endblock %}
+{% block content %}
+<h2>Wysłane ({{ sent_count }}/{{ sent_limit }})</h2>
+{% include "board/_pm_nav.html" %}
+
+{% if boxes %}
+<table>
+  <thead><tr>
+    <th>Temat</th><th>Do</th><th>Doręczona</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for box in boxes %}
+  <tr class="{% cycle 'row1' 'row2' %}">
+    <td><a href="{% url 'pm_view' box.pk %}">{{ box.message.subject }}</a></td>
+    <td>{% if box.message.recipient %}{{ box.message.recipient.username }}{% else %}[usunięty]{% endif %}</td>
+    <td><small>{{ box.message.delivered_at|date:"Y-m-d H:i" }}</small></td>
+    <td>
+      <form method="post" action="{% url 'pm_delete' box.pk %}" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit" style="background:none;border:none;color:#800000;cursor:pointer;padding:0;font-size:inherit;"
+                onclick="return confirm('Usunąć z wysłanych?')">Usuń</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Skrzynka wysłanych jest pusta.</p>
+{% endif %}
+{% endblock %}

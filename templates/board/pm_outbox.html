@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Wiadomości oczekujące{% endblock %}
+{% block content %}
+<h2>Oczekujące na dostarczenie ({{ outbox_count }}/{{ outbox_limit }})</h2>
+{% include "board/_pm_nav.html" %}
+<p style="font-size:11px; color:#666;">
+  Wiadomości czekają aż odbiorcy odwiedzą swoje skrzynki (lub zwolnią miejsce).
+  Możesz je edytować lub cofnąć do tego czasu.
+</p>
+
+{% if boxes %}
+<table>
+  <thead><tr>
+    <th>Temat</th><th>Do</th><th>Wysłana</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for box in boxes %}
+  <tr class="{% cycle 'row1' 'row2' %}">
+    <td><a href="{% url 'pm_view' box.pk %}">{{ box.message.subject }}</a></td>
+    <td>{% if box.message.recipient %}{{ box.message.recipient.username }}{% else %}[usunięty]{% endif %}</td>
+    <td><small>{{ box.message.created_at|date:"Y-m-d H:i" }}</small></td>
+    <td style="white-space:nowrap;">
+      <a href="{% url 'pm_edit' box.pk %}">Edytuj</a> |
+      <form method="post" action="{% url 'pm_delete' box.pk %}" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit" style="background:none;border:none;color:#800000;cursor:pointer;padding:0;font-size:inherit;"
+                onclick="return confirm('Cofnąć tę wiadomość?')">Cofnij</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Brak wiadomości oczekujących.</p>
+{% endif %}
+{% endblock %}

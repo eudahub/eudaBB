@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Skrzynka odbiorcza{% endblock %}
+{% block content %}
+<h2>Skrzynka odbiorcza ({{ inbox_count }}/{{ inbox_limit }})</h2>
+{% include "board/_pm_nav.html" %}
+
+{% if boxes %}
+<table>
+  <thead><tr>
+    <th></th><th>Temat</th><th>Od</th><th>Doręczona</th>
+  </tr></thead>
+  <tbody>
+  {% for box in boxes %}
+  <tr class="{% cycle 'row1' 'row2' %}">
+    <td style="width:12px;">{% if not box.is_read %}<strong>•</strong>{% endif %}</td>
+    <td><a href="{% url 'pm_view' box.pk %}">
+      {% if not box.is_read %}<strong>{{ box.message.subject }}</strong>{% else %}{{ box.message.subject }}{% endif %}
+    </a></td>
+    <td>{% if box.message.sender %}{{ box.message.sender.username }}{% else %}[usunięty]{% endif %}</td>
+    <td><small>{{ box.message.delivered_at|date:"Y-m-d H:i" }}</small></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Skrzynka odbiorcza jest pusta.</p>
+{% endif %}
+{% endblock %}

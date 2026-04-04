@@ -88,6 +88,48 @@ class User(AbstractUser):
         ]
 
 
+class PrivateMessage(models.Model):
+    """A PM stored once; delivery tracked via PrivateMessageBox entries."""
+    sender    = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="sent_pms")
+    recipient = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="received_pms")
+    subject   = models.CharField(max_length=255)
+    # zlib-compressed UTF-8 BBCode — readable only after zlib.decompress()
+    content_compressed = models.BinaryField()
+    created_at   = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True,
+        help_text="Set when recipient visits inbox. Null = still in sender's outbox.")
+
+    class Meta:
+        db_table = "forum_pms"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"PM #{self.pk}: {self.subject}"
+
+
+class PrivateMessageBox(models.Model):
+    """One row per user-side of a message (sender or recipient)."""
+    class BoxType(models.TextChoices):
+        OUTBOX = "OUTBOX", "Outbox"
+        SENT   = "SENT",   "Sent"
+        INBOX  = "INBOX",  "Inbox"
+
+    message  = models.ForeignKey(PrivateMessage, on_delete=models.CASCADE, related_name="boxes")
+    owner    = models.ForeignKey(User, on_delete=models.CASCADE, related_name="pm_boxes")
+    box_type = models.CharField(max_length=6, choices=BoxType.choices)
+    is_read  = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "forum_pm_boxes"
+        unique_together = [("message", "owner")]
+        indexes = [
+            models.Index(fields=["owner", "box_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.owner} / {self.box_type} / PM#{self.message_id}"
+
+
 class PasswordResetCode(models.Model):
     """6-digit numeric code for password reset (forgot password or invalidated password).
 

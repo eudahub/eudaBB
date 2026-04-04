@@ -50,3 +50,14 @@ def pagination_range(page_obj):
 @register.filter
 def bbcode(value):
     return mark_safe(render(value or ""))
+
+
+@register.filter
+def pm_bbcode(pm):
+    """Decompress PM content and render BBCode."""
+    from board.pm_utils import decompress
+    try:
+        text = decompress(pm.content_compressed)
+    except Exception:
+        return mark_safe("<em>[błąd odczytu wiadomości]</em>")
+    return mark_safe(render(text))

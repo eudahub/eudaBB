@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load bbcode_tags %}
+{% block title %}{{ box.message.subject }}{% endblock %}
+{% block content %}
+{% include "board/_pm_nav.html" %}
+
+<div class="post-box" style="margin-top:.5rem;">
+  <div class="post-header">
+    <span>
+      {% if box.box_type == "INBOX" %}
+        Od: <strong>{% if box.message.sender %}{{ box.message.sender.username }}{% else %}[usunięty]{% endif %}</strong>
+      {% else %}
+        Do: <strong>{% if box.message.recipient %}{{ box.message.recipient.username }}{% else %}[usunięty]{% endif %}</strong>
+      {% endif %}
+    </span>
+    <span>{{ box.message.created_at|date:"Y-m-d H:i" }}</span>
+  </div>
+  <table style="width:100%; border:none;"><tr>
+    <td class="post-author">
+      {% if box.box_type == "INBOX" and box.message.sender %}
+        <strong>{{ box.message.sender.username }}</strong><br>
+        {% if box.message.sender.avatar %}<img src="{{ box.message.sender.avatar.url }}" style="max-width:80px;max-height:80px;"><br>{% endif %}
+        <small>Postów: {{ box.message.sender.post_count }}</small>
+      {% elif box.message.recipient %}
+        <strong>→ {{ box.message.recipient.username }}</strong>
+      {% endif %}
+    </td>
+    <td class="post-content">
+      <strong>{{ box.message.subject }}</strong><br><br>
+      {{ box|pm_bbcode }}
+      {% if box.box_type == "INBOX" and box.message.sender and box.message.sender.signature %}
+        <hr style="border:none;border-top:1px solid #ddd;margin:.6rem 0;">
+        <small style="color:#666;">{{ box.message.sender.signature|bbcode }}</small>
+      {% endif %}
+    </td>
+  </tr></table>
+</div>
+
+<div style="margin-top:.5rem; font-size:11px;">
+  {% if box.box_type == "INBOX" and box.message.sender %}
+    <a href="{% url 'pm_compose' %}?to={{ box.message.sender.username }}&subject=Re%3A+{{ box.message.subject|urlencode }}&content=%5Bquote%3D{{ box.message.sender.username }}%5D{{ box.message.subject }}%5B%2Fquote%5D%0A">Odpowiedz</a> |
+  {% endif %}
+  {% if box.box_type == "OUTBOX" %}
+    <a href="{% url 'pm_edit' box.pk %}">Edytuj</a> |
+  {% endif %}
+  <form method="post" action="{% url 'pm_delete' box.pk %}" style="display:inline;">
+    {% csrf_token %}
+    <button type="submit" style="background:none;border:none;color:#800000;cursor:pointer;padding:0;font-size:inherit;"
+            onclick="return confirm('Usunąć tę wiadomość?')">Usuń</button>
+  </form>
+  | <a href="{% if box.box_type == 'INBOX' %}{% url 'pm_inbox' %}{% elif box.box_type == 'OUTBOX' %}{% url 'pm_outbox' %}{% else %}{% url 'pm_sent' %}{% endif %}">← Wróć</a>
+</div>
+{% endblock %}

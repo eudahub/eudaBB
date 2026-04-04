@@ -47,6 +47,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "board.context_processors.test_mode",
+                "board.context_processors.pm_unread_count",
             ],
         },
     },
@@ -117,3 +118,8 @@ TOR_BLOCK_ENABLED = config("TOR_BLOCK_ENABLED", default=True, cast=bool)
 # After expiry the ip is nulled by: manage.py purge_expired_ips
 IP_RETAIN_NORMAL_DAYS    = config("IP_RETAIN_NORMAL_DAYS",    default=30, cast=int)
 IP_RETAIN_DANGEROUS_DAYS = config("IP_RETAIN_DANGEROUS_DAYS", default=90, cast=int)
+
+# Private Messages limits
+PM_INBOX_LIMIT  = config("PM_INBOX_LIMIT",  default=300, cast=int)
+PM_SENT_LIMIT   = config("PM_SENT_LIMIT",   default=300, cast=int)
+PM_OUTBOX_LIMIT = config("PM_OUTBOX_LIMIT", default=50,  cast=int)  # anti-spam: max in-flight

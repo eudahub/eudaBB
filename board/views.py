@@ -1,6 +1,7 @@
 import secrets
 from datetime import timedelta
 
+from django.db import models as django_models
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -10,7 +11,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP, PasswordResetCode
+from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox
 from .forms import RegisterForm, NewTopicForm, ReplyForm
 from .email_utils import mask_email, mask_email_variants
 from .spam_utils import get_author_spam_filter, filter_forums
@@ -816,3 +817,259 @@ def do_reset(request):
         "success": success,
         "prefill_username": prefill_username,
     })
+
+
+# ---------------------------------------------------------------------------
+# Private Messages
+# ---------------------------------------------------------------------------
+
+def _pm_counts(user):
+    """Return (inbox_count, outbox_count, sent_count) for user."""
+    boxes = (
+        PrivateMessageBox.objects.filter(owner=user)
+        .values("box_type")
+        .annotate(n=django_models.Count("id"))
+    )
+    counts = {row["box_type"]: row["n"] for row in boxes}
+    return (
+        counts.get("INBOX",  0),
+        counts.get("OUTBOX", 0),
+        counts.get("SENT",   0),
+    )
+
+
+def _deliver_pending(user):
+    """Deliver all OUTBOX messages addressed to user that fit in their inbox."""
+    inbox_limit = getattr(settings, "PM_INBOX_LIMIT", 300)
+    inbox_count = PrivateMessageBox.objects.filter(
+        owner=user, box_type=PrivateMessageBox.BoxType.INBOX
+    ).count()
+    free = inbox_limit - inbox_count
+    if free <= 0:
+        return 0
+
+    pending = PrivateMessage.objects.filter(
+        recipient=user, delivered_at=None
+    ).select_related("sender").order_by("created_at")[:free]
+
+    delivered = 0
+    now = timezone.now()
+    for pm in pending:
+        # Move sender's box: OUTBOX → SENT
+        PrivateMessageBox.objects.filter(
+            message=pm, box_type=PrivateMessageBox.BoxType.OUTBOX
+        ).update(box_type=PrivateMessageBox.BoxType.SENT)
+        # Create recipient's INBOX entry
+        PrivateMessageBox.objects.create(
+            message=pm,
+            owner=user,
+            box_type=PrivateMessageBox.BoxType.INBOX,
+            is_read=False,
+        )
+        pm.delivered_at = now
+        pm.save(update_fields=["delivered_at"])
+        delivered += 1
+    return delivered
+
+
+@login_required
+def pm_inbox(request):
+    _deliver_pending(request.user)
+    inbox_count, outbox_count, sent_count = _pm_counts(request.user)
+    boxes = (
+        PrivateMessageBox.objects.filter(
+            owner=request.user, box_type=PrivateMessageBox.BoxType.INBOX
+        )
+        .select_related("message__sender")
+        .order_by("-message__delivered_at")
+    )
+    return render(request, "board/pm_inbox.html", {
+        "boxes": boxes,
+        "inbox_count": inbox_count,
+        "outbox_count": outbox_count,
+        "sent_count": sent_count,
+        "inbox_limit": getattr(settings, "PM_INBOX_LIMIT", 300),
+    })
+
+
+@login_required
+def pm_outbox(request):
+    _, outbox_count, sent_count = _pm_counts(request.user)
+    inbox_count = PrivateMessageBox.objects.filter(
+        owner=request.user, box_type=PrivateMessageBox.BoxType.INBOX
+    ).count()
+    boxes = (
+        PrivateMessageBox.objects.filter(
+            owner=request.user, box_type=PrivateMessageBox.BoxType.OUTBOX
+        )
+        .select_related("message__recipient")
+        .order_by("-message__created_at")
+    )
+    return render(request, "board/pm_outbox.html", {
+        "boxes": boxes,
+        "inbox_count": inbox_count,
+        "outbox_count": outbox_count,
+        "sent_count": sent_count,
+        "outbox_limit": getattr(settings, "PM_OUTBOX_LIMIT", 50),
+    })
+
+
+@login_required
+def pm_sent(request):
+    inbox_count, outbox_count, sent_count = _pm_counts(request.user)
+    boxes = (
+        PrivateMessageBox.objects.filter(
+            owner=request.user, box_type=PrivateMessageBox.BoxType.SENT
+        )
+        .select_related("message__recipient")
+        .order_by("-message__delivered_at")
+    )
+    return render(request, "board/pm_sent.html", {
+        "boxes": boxes,
+        "inbox_count": inbox_count,
+        "outbox_count": outbox_count,
+        "sent_count": sent_count,
+        "sent_limit": getattr(settings, "PM_SENT_LIMIT", 300),
+    })
+
+
+@login_required
+def pm_view(request, box_id):
+    box = get_object_or_404(
+        PrivateMessageBox.objects.select_related(
+            "message__sender", "message__recipient"
+        ),
+        pk=box_id, owner=request.user,
+    )
+    if box.box_type == PrivateMessageBox.BoxType.INBOX and not box.is_read:
+        box.is_read = True
+        box.save(update_fields=["is_read"])
+    return render(request, "board/pm_view.html", {"box": box})
+
+
+@login_required
+def pm_compose(request):
+    from .pm_utils import compress, compress_from_b64
+    from .models import User as ForumUser
+
+    error = None
+    prefill_recipient = request.GET.get("to", "")
+    prefill_subject   = request.GET.get("subject", "")
+    prefill_content   = request.GET.get("content", "")  # pre-filled quote for reply
+
+    if request.method == "POST":
+        recipient_name = request.POST.get("recipient", "").strip()
+        subject        = request.POST.get("subject",   "").strip()
+        raw_content    = request.POST.get("content",   "")
+        b64_compressed = request.POST.get("content_compressed", "").strip()
+
+        if not recipient_name or not subject or not raw_content:
+            error = "Wypełnij wszystkie pola."
+        else:
+            try:
+                recipient = ForumUser.objects.get(username=recipient_name, is_active=True)
+            except ForumUser.DoesNotExist:
+                error = f'Użytkownik "{recipient_name}" nie istnieje.'
+            else:
+                # Anti-spam: check sender's outbox limit
+                outbox_limit = getattr(settings, "PM_OUTBOX_LIMIT", 50)
+                in_flight = PrivateMessage.objects.filter(
+                    sender=request.user, delivered_at=None
+                ).count()
+                if in_flight >= outbox_limit:
+                    error = (
+                        f"Masz już {in_flight} wiadomości oczekujących na dostarczenie "
+                        f"(limit: {outbox_limit}). Poczekaj aż odbiorcy je odbiorą."
+                    )
+                else:
+                    # Compress content
+                    if b64_compressed:
+                        try:
+                            content_bytes = compress_from_b64(b64_compressed)
+                        except ValueError:
+                            content_bytes = compress(raw_content)
+                    else:
+                        content_bytes = compress(raw_content)
+
+                    pm = PrivateMessage.objects.create(
+                        sender=request.user,
+                        recipient=recipient,
+                        subject=subject,
+                        content_compressed=content_bytes,
+                    )
+                    PrivateMessageBox.objects.create(
+                        message=pm,
+                        owner=request.user,
+                        box_type=PrivateMessageBox.BoxType.OUTBOX,
+                    )
+                    return redirect("pm_outbox")
+
+    return render(request, "board/pm_compose.html", {
+        "error": error,
+        "prefill_recipient": prefill_recipient,
+        "prefill_subject": prefill_subject,
+        "prefill_content": prefill_content,
+    })
+
+
+@login_required
+def pm_edit(request, box_id):
+    """Edit a message still in OUTBOX (not yet delivered)."""
+    from .pm_utils import compress, compress_from_b64, decompress
+
+    box = get_object_or_404(
+        PrivateMessageBox.objects.select_related("message__recipient"),
+        pk=box_id, owner=request.user, box_type=PrivateMessageBox.BoxType.OUTBOX,
+    )
+    pm = box.message
+
+    # Double-check it's still undelivered
+    if pm.delivered_at is not None:
+        return redirect("pm_outbox")
+
+    error = None
+    if request.method == "POST":
+        subject        = request.POST.get("subject", "").strip()
+        raw_content    = request.POST.get("content", "")
+        b64_compressed = request.POST.get("content_compressed", "").strip()
+
+        if not subject or not raw_content:
+            error = "Wypełnij wszystkie pola."
+        else:
+            if b64_compressed:
+                try:
+                    content_bytes = compress_from_b64(b64_compressed)
+                except ValueError:
+                    content_bytes = compress(raw_content)
+            else:
+                content_bytes = compress(raw_content)
+            pm.subject = subject
+            pm.content_compressed = content_bytes
+            pm.save(update_fields=["subject", "content_compressed"])
+            return redirect("pm_outbox")
+
+    current_content = decompress(pm.content_compressed)
+    return render(request, "board/pm_edit.html", {
+        "box": box,
+        "current_content": current_content,
+        "error": error,
+    })
+
+
+@login_required
+def pm_delete(request, box_id):
+    """Delete a box entry. Deletes the PM itself if no other box entries remain."""
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    box = get_object_or_404(PrivateMessageBox, pk=box_id, owner=request.user)
+    pm = box.message
+    redirect_url = {
+        "INBOX":  "pm_inbox",
+        "OUTBOX": "pm_outbox",
+        "SENT":   "pm_sent",
+    }.get(box.box_type, "pm_inbox")
+    box.delete()
+    # If no box entries remain, delete the message itself
+    if not pm.boxes.exists():
+        pm.delete()
+    return redirect(redirect_url)

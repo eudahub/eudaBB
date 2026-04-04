@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Edytuj wiadomość{% endblock %}
+{% block content %}
+{% include "board/_pm_nav.html" %}
+<h2>Edytuj wiadomość (jeszcze niedostarczona)</h2>
+<p style="font-size:11px; color:#666;">
+  Do: <strong>{% if box.message.recipient %}{{ box.message.recipient.username }}{% else %}[usunięty]{% endif %}</strong>
+</p>
+
+{% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
+
+<form method="post" id="pm-edit-form" style="max-width:700px;">
+  {% csrf_token %}
+  <input type="hidden" name="content_compressed" id="pm-compressed">
+  <label>Temat: <input type="text" name="subject" value="{{ box.message.subject }}" required maxlength="255"></label>
+  <label>Treść (BBCode):
+    <textarea name="content" id="pm-content" rows="12" required>{{ current_content }}</textarea>
+  </label>
+  <button type="submit" id="pm-btn">Zapisz zmiany</button>
+  <a href="{% url 'pm_outbox' %}" style="margin-left:1rem;">Anuluj</a>
+</form>
+
+<script>
+(function() {
+  var CDN = 'https://cdn.jsdelivr.net/npm/fflate@0.8/umd/index.js';
+  var form = document.getElementById('pm-edit-form');
+  var btn  = document.getElementById('pm-btn');
+  var compressedField = document.getElementById('pm-compressed');
+  var script = document.createElement('script');
+  script.src = CDN;
+  script.onload = function() {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault(); btn.disabled = true;
+      try {
+        var bytes = new TextEncoder().encode(document.getElementById('pm-content').value);
+        var b64 = btoa(String.fromCharCode.apply(null, fflate.zlibSync(bytes)));
+        compressedField.value = b64;
+      } catch(err) { compressedField.value = ''; }
+      form.submit();
+    });
+  };
+  document.head.appendChild(script);
+})();
+</script>
+{% endblock %}
