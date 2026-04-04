@@ -43,6 +43,12 @@ _QUOTE_OPEN_RE  = re.compile(r'\[quote(?:="([^"]*)")?\]', re.IGNORECASE)
 _QUOTE_CLOSE_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
 _BBCODE_RE      = re.compile(r'\[[^\]]*\]')
 
+# Matches [quote=Author post_id=not_found] tags specifically
+_NOT_FOUND_TAG_RE = re.compile(
+    r'\[quote=(?P<author>[^ \]]+)\s+post_id=not_found\]',
+    re.IGNORECASE
+)
+
 # Manual quote prefixes: "Username napisał:\n" or "Cytat:\n"
 # These appear when users hand-format a quote instead of using BBCode
 _NAPISAL_PREFIX_RE = re.compile(r'^\s*\S[^\n]*napisał:\s*\n+', re.IGNORECASE)
@@ -707,16 +713,19 @@ class Command(BaseCommand):
                             help="Path to bible_ngram.pkl; enables Bible-verse detection on unfound quotes")
         parser.add_argument("--detect-bible", action="store_true",
                             help="Run Bible-detection pass on posts with unfound quotes (requires --bible-index)")
+        parser.add_argument("--search-not-found", action="store_true",
+                            help="Search all posts by known author for not_found quotes (unlimited distance)")
 
     def handle(self, *args, **options):
-        db_path        = options["archive_db"]
-        users_path     = options["users_db"]
-        lookahead      = options["lookahead"]
-        reset          = options["reset"]
-        only_unfound   = options["only_unfound"]
-        do_propagate   = options["propagate"]
-        bible_idx_path = options["bible_index"]
-        do_bible       = options["detect_bible"]
+        db_path          = options["archive_db"]
+        users_path       = options["users_db"]
+        lookahead        = options["lookahead"]
+        reset            = options["reset"]
+        only_unfound     = options["only_unfound"]
+        do_propagate     = options["propagate"]
+        bible_idx_path   = options["bible_index"]
+        do_bible         = options["detect_bible"]
+        do_search_nf     = options["search_not_found"]
 
         if bible_idx_path:
             try:
@@ -771,8 +780,9 @@ class Command(BaseCommand):
                 known_users[name.lower()] = name
             self.stdout.write(f"Załadowano {len(known_users)//2} userów z posts.author_name")
 
-        # When only Bible detection is requested, skip the main enrichment loop
-        run_main_loop = not (do_bible and not only_unfound and not reset)
+        # Skip main enrichment loop when running a standalone auxiliary pass
+        _aux_only = (do_bible or do_search_nf) and not only_unfound and not reset
+        run_main_loop = not _aux_only
 
         # --- Count posts to process ---
         if only_unfound:
@@ -947,6 +957,12 @@ class Command(BaseCommand):
 
         conn.commit()
 
+        # Optional search-not-found pass
+        if do_search_nf:
+            nf_found = self._search_not_found_by_author(conn, self.stdout)
+            conn.commit()
+            self.stdout.write(f"Search-not-found: znaleziono {nf_found} cytatów.")
+
         # Optional Bible detection pass
         if do_bible and _BIBLE_NGRAM_INDEX:
             bible_count = self._detect_bible_quotes(conn)
@@ -1064,3 +1080,172 @@ class Command(BaseCommand):
 
         self.stdout.write(f"  Zaktualizowano {len(updates)} postów ({bible_total} tagów [Bible]).")
         return bible_total
+
+    # -----------------------------------------------------------------------
+    # Search not-found quotes by author (unlimited distance)
+    # -----------------------------------------------------------------------
+
+    def _search_not_found_by_author(self, conn, stdout) -> int:
+        """Try to find real posts for [quote=Author post_id=not_found] blocks.
+
+        Builds a per-author full-text index from content_user, then for each
+        not_found block searches ALL posts by that author using fingerprints
+        (same algorithm as the main pass, but without distance limit).
+
+        Returns number of blocks successfully resolved.
+        """
+        stdout.write("Budowanie indeksu per-autor z content_user...")
+
+        # author_lower → list of post dicts (stripped content_user)
+        author_index: dict[str, list[dict]] = {}
+        for row in conn.execute(
+            "SELECT post_id, author_name, content_user, created_at FROM posts "
+            "WHERE content_user IS NOT NULL AND content_user != ''"
+        ):
+            author = (row[1] or "").lower()
+            if not author:
+                continue
+            s = _strip_bbcode(row[2] or "")
+            author_index.setdefault(author, []).append({
+                "post_id":       row[0],
+                "author_name":   row[1] or "",
+                "stripped":      s,
+                "stripped_ascii": _to_ascii(s),
+                "created_at":    row[3] or "",
+            })
+
+        total_authors = len(author_index)
+        total_posts_indexed = sum(len(v) for v in author_index.values())
+        stdout.write(
+            f"  {total_authors} autorów, {total_posts_indexed:,} postów zaindeksowanych."
+        )
+
+        # Find all posts with not_found blocks
+        nf_posts = conn.execute(
+            "SELECT post_id, content_quotes FROM posts "
+            "WHERE content_quotes LIKE '%post_id=not_found%'"
+        ).fetchall()
+        stdout.write(f"  Postów z not_found do przeszukania: {len(nf_posts)}")
+
+        found_total = 0
+        post_updates: list[tuple[str, int]] = []
+
+        # Regex to find all not_found opening tags with their author
+        _NF_OPEN_RE  = _NOT_FOUND_TAG_RE   # [quote=Author post_id=not_found]
+        _CLOSE_RE    = re.compile(r'\[/quote\]', re.IGNORECASE)
+        _ANY_OPEN_RE = _QUOTE_ANY_OPEN_RE  # any [quote...] opening
+
+        for citing_post_id, cq in nf_posts:
+            if not cq:
+                continue
+
+            # Find all not_found blocks using a depth-aware scan
+            # We need to pair each not_found opening tag with its [/quote]
+            new_cq = cq
+            offset = 0
+            changed = False
+
+            # Collect all events: (pos, kind, tag_text, end)
+            events = []
+            for m in _ANY_OPEN_RE.finditer(cq):
+                events.append((m.start(), "open", m.group(0), m.end()))
+            for m in _CLOSE_RE.finditer(cq):
+                events.append((m.start(), "close", None, m.end()))
+            events.sort(key=lambda x: x[0])
+
+            # Walk events to find top-level not_found blocks
+            depth = 0
+            block_start = tag_end = -1
+            opening_tag = ""
+
+            blocks: list[tuple[int, int, int, str]] = []  # (block_start, block_end, tag_end, opening_tag)
+            for pos, kind, tag_text, end in events:
+                if kind == "open":
+                    if depth == 0:
+                        block_start = pos
+                        tag_end     = end
+                        opening_tag = tag_text or ""
+                    depth += 1
+                else:
+                    if depth > 0:
+                        depth -= 1
+                        if depth == 0 and block_start >= 0:
+                            blocks.append((block_start, end, tag_end, opening_tag))
+                            block_start = -1
+
+            for block_start, block_end, tag_end, opening_tag in blocks:
+                # Only process not_found blocks
+                nf_m = _NF_OPEN_RE.match(opening_tag)
+                if not nf_m:
+                    continue
+                raw_author = nf_m.group("author")
+                author_key = raw_author.lower()
+
+                posts_by_author = author_index.get(author_key, [])
+                if not posts_by_author:
+                    continue
+
+                inner = cq[tag_end: block_end - len("[/quote]")]
+                fps   = _fingerprints(inner)
+                if not fps:
+                    continue
+
+                # Search all posts by this author — no distance limit
+                match = _match_post(fps, posts_by_author, raw_author)
+                if match is None:
+                    continue
+
+                # Found — build replacement tag
+                cited_id  = match["post_id"]
+                unix_time = _to_unix(match["created_at"])
+                new_tag   = f"[quote={raw_author} post_id={cited_id} time={unix_time}]"
+
+                # Apply replacement in new_cq (adjusting for prior offset changes)
+                adj_start   = block_start + offset
+                adj_tag_end = tag_end    + offset
+                new_cq = (
+                    new_cq[:adj_start]
+                    + new_tag
+                    + new_cq[adj_tag_end:]
+                )
+                offset  += len(new_tag) - (tag_end - block_start)
+                found_total += 1
+                changed = True
+
+                # Update quotes table: mark the corresponding row as found
+                conn.execute(
+                    "UPDATE quotes SET found=1, cited_post_id=? "
+                    "WHERE citing_post_id=? AND found=0 AND canonical_author=? "
+                    "ORDER BY id LIMIT 1",
+                    (cited_id, citing_post_id, raw_author)
+                )
+
+            if changed:
+                # Recompute quote_status from tag counts
+                _UNFOUND = re.compile(
+                    r'\[quote(?:="[^"]*")?\]|\[quote=[^ \]]+\s+post_id=not_found\]',
+                    re.IGNORECASE
+                )
+                _FOUND   = re.compile(
+                    r'\[(?:quote[^\]]+post_id=(?!not_found)|Bible=)[^\]]*\]',
+                    re.IGNORECASE
+                )
+                n_u = len(_UNFOUND.findall(new_cq))
+                n_f = len(_FOUND.findall(new_cq))
+                if n_u == 0 and n_f > 0:
+                    status = 1
+                elif n_f == 0:
+                    status = 2
+                else:
+                    status = 3
+                conn.execute(
+                    "UPDATE posts SET content_quotes=?, quote_status=? WHERE post_id=?",
+                    (new_cq, status, citing_post_id)
+                )
+                post_updates.append(citing_post_id)
+
+        stdout.write(
+            f"  Zaktualizowano {len(post_updates)} postów, "
+            f"znaleziono {found_total} cytatów."
+        )
+        return found_total
