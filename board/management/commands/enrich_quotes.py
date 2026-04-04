@@ -124,42 +124,53 @@ def _own_text_segments(inner: str) -> list[str]:
     return segments
 
 
-def _clean_for_fp(text: str) -> str:
-    """Strip BBCode and ellipsis markers, normalize whitespace, lowercase."""
-    text = _ELLIPSIS_RE.sub(" ", text)
-    text = _strip_bbcode(text)
-    return text
+def _split_on_ellipsis(text: str) -> list[str]:
+    """Split text on ellipsis markers (...) /.../ [...] returning non-empty parts."""
+    parts = _ELLIPSIS_RE.split(text)
+    return [p.strip() for p in parts if p.strip()]
 
 
 def _fingerprints(inner: str) -> list[str]:
     """Return ordered list of candidate search needles for a [quote] block.
 
-    Strategy:
-    1. Each own-text segment cleaned; each segment tried at multiple lengths
-       (120 → 80 → 60 → 40) so that minor edits (e.g. removed emoticons)
-       don't prevent matching on the first clean portion of text.
-    2. Fallback: full inner text (includes nested-quote text).
-
-    Longer fingerprints are tried before shorter to reduce false positives.
+    Pipeline:
+    1. _own_text_segments — removes nested [quote] blocks, keeps poster's own text
+    2. _split_on_ellipsis — splits each segment at (...) and /.../ markers;
+       each part is searched independently so "A /.../ B" finds posts containing
+       either "A" or "B" rather than the impossible joined string "A B"
+    3. Each sub-segment tried at lengths 120→80→60→40 chars (long first to
+       avoid false positives; shorter catches emoticon/word-level edits)
+    4. Fallback: full inner text stripped (when all segments are too short)
     """
     fps_seen: set[str] = set()
     fps: list[str] = []
 
     def _add(text: str) -> None:
-        cleaned = _clean_for_fp(text)
+        cleaned = _strip_bbcode(text)
         for length in _FINGERPRINT_LENS:
             fp = cleaned[:length].strip()
             if len(fp) >= _MIN_FINGERPRINT and fp not in fps_seen:
                 fps_seen.add(fp)
                 fps.append(fp)
 
-    segments = _own_text_segments(inner)
-    for seg in segments:
-        _add(seg)
+    for seg in _own_text_segments(inner):
+        for sub in _split_on_ellipsis(seg):
+            _add(sub)
+        # Also add the whole segment (ellipsis replaced by space) for cases
+        # where /.../ appears at start/end and the rest is long enough
+        cleaned_whole = _strip_bbcode(_ELLIPSIS_RE.sub(" ", seg))
+        for length in _FINGERPRINT_LENS:
+            fp = cleaned_whole[:length].strip()
+            if len(fp) >= _MIN_FINGERPRINT and fp not in fps_seen:
+                fps_seen.add(fp)
+                fps.append(fp)
 
     if not fps:
-        # Fallback: use full stripped text including nested-quote content
-        _add(inner)
+        # Fallback: full inner text including nested-quote content
+        for sub in _split_on_ellipsis(inner):
+            _add(sub)
+        if not fps:
+            _add(_ELLIPSIS_RE.sub(" ", inner))
 
     return fps
 
