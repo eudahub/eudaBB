@@ -314,6 +314,12 @@ _SETUP_SQL = """
 -- Add content_quotes column if missing
 -- (SQLite doesn't have IF NOT EXISTS for ALTER TABLE, handled in Python)
 
+-- quote_status per post:
+--   0 = brak cytatów (default)
+--   1 = wszystkie cytaty znalezione
+--   2 = żadne cytaty nieznalezione
+--   3 = część znaleziona, część nie
+
 CREATE TABLE IF NOT EXISTS quotes (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     citing_post_id   INTEGER NOT NULL,
@@ -459,6 +465,27 @@ class Command(BaseCommand):
             "VALUES (:citing_post_id, :cited_post_id, :quote_author, :canonical_author, :found, :is_foreign)",
             all_quote_rows
         )
+
+        # Add quote_status column if missing, then populate
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(posts)")}
+        if "quote_status" not in cols:
+            conn.execute("ALTER TABLE posts ADD COLUMN quote_status INTEGER NOT NULL DEFAULT 0")
+        else:
+            conn.execute("UPDATE posts SET quote_status = 0")   # reset before repopulating
+
+        conn.execute("""
+            UPDATE posts SET quote_status = (
+                SELECT
+                    CASE
+                        WHEN sum(found) = count(*) THEN 1
+                        WHEN sum(found) = 0         THEN 2
+                        ELSE                              3
+                    END
+                FROM quotes q
+                WHERE q.citing_post_id = posts.post_id
+            )
+            WHERE post_id IN (SELECT DISTINCT citing_post_id FROM quotes)
+        """)
 
         conn.commit()
         conn.close()
