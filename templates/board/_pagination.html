@@ -14,9 +14,9 @@
       {% if item.ellipsis %}
         <span class="page-ellipsis">…</span>
       {% elif item.n == cur %}
-        <strong class="page-num current">{{ item.n }}</strong>{% if item.comma %},{% endif %}
+        <span class="page-item"><strong class="page-num current">{{ item.n }}</strong>{% if item.comma %},{% endif %}</span>
       {% else %}
-        <a href="?page={{ item.n }}" class="page-num">{{ item.n }}</a>{% if item.comma %},{% endif %}
+        <span class="page-item"><a href="?page={{ item.n }}" class="page-num">{{ item.n }}</a>{% if item.comma %},{% endif %}</span>
       {% endif %}
     {% endfor %}
 
