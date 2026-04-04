@@ -12,6 +12,8 @@ Custom tags added here:
     [font=N]...[/font]       — alias for [size]
     [spoiler]...[/spoiler]   — collapsible block (HTML5 <details>)
     [spoiler=Label]...       — collapsible block with custom label
+    [youtube=URL]            — embedded YouTube video (auto-inserted by bbcode_lint)
+                               [url=youtube-url] stays as a plain link (user's choice)
 
 Backslash escapes (processed before BBCode parsing):
     \\  →  literal backslash
@@ -68,6 +70,44 @@ def _render_spoiler(tag_name, value, options, parent, context):
     return f"<details><summary>{label}</summary>{value}</details>"
 
 _parser.add_formatter("spoiler", _render_spoiler, swallow_trailing_newline=True)
+
+
+# ---------------------------------------------------------------------------
+# [youtube=URL]  — embedded video
+# [url=youtube-url] is intentionally NOT converted (user chose plain link)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_YT_ID_RE = _re.compile(
+    r'(?:youtube\.com/(?:watch\?(?:[^&\s]+&)*v=|shorts/|embed/)|youtu\.be/)'
+    r'([A-Za-z0-9_-]{11})',
+    _re.IGNORECASE,
+)
+
+
+def _extract_yt_id(url: str) -> str:
+    """Return YouTube video ID or empty string."""
+    m = _YT_ID_RE.search(url)
+    return m.group(1) if m else ""
+
+
+def _render_youtube(tag_name, value, options, parent, context):
+    url = (options.get("youtube") or value or "").strip()
+    url = _RE_STRIP_TAGS.sub("", url)
+    vid = _extract_yt_id(url)
+    if not vid:
+        return f'[youtube={url}]'   # fallback: show as-is
+    return (
+        f'<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;">'
+        f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" '
+        f'src="https://www.youtube-nocookie.com/embed/{vid}" '
+        f'frameborder="0" allowfullscreen loading="lazy"></iframe></div>'
+    )
+
+
+_parser.add_formatter("youtube", _render_youtube,
+                      render_embedded=False, swallow_trailing_newline=True)
 
 
 # ---------------------------------------------------------------------------

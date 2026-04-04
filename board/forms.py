@@ -51,12 +51,26 @@ class RegisterForm(UserCreationForm):
 
 
 def _validate_post_content(content: str, original_size: int = 0) -> str:
-    """Validate post content size.
+    """Repair BBCode, validate markup, then check size limits.
 
+    Returns repaired content if valid; raises ValidationError otherwise.
     original_size — byte length of the existing post being edited (0 for new posts).
-    Rule: new_size <= max(original_size, SOFT_MAX).
-    Hard limit is always enforced.
     """
+    from .bbcode_lint import repair_and_validate
+
+    repaired, changes, errors = repair_and_validate(content)
+
+    if errors:
+        error_lines = "\n".join(f"• {e}" for e in errors)
+        hint = ""
+        if changes:
+            hint = "\n\nAutomatycznie naprawiono:\n" + "\n".join(f"✓ {c}" for c in changes)
+        raise forms.ValidationError(
+            f"Błędy w kodzie BBCode:\n{error_lines}{hint}"
+        )
+
+    content = repaired
+
     hard = getattr(settings, "POST_CONTENT_HARD_MAX_BYTES", 64 * 1024)
     soft = getattr(settings, "POST_CONTENT_SOFT_MAX_BYTES", 20_000)
 
