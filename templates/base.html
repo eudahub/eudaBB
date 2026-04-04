@@ -68,6 +68,21 @@
     .messages li { padding: 3px 6px; list-style: none; font-size: 11px; }
     .messages .error   { background: #fdd; }
     .messages .success { background: #dfd; }
+
+    /* Pagination */
+    .pagination-nav { border: none; padding: .3rem 0; margin: .4rem 0; display: block; }
+    .page-links { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+    .page-btn {
+      display: inline-block; padding: 2px 7px; font-size: 11px;
+      border: 1px solid #BC8F8F; border-radius: 3px;
+      background: #f8f8e8; color: #800000; text-decoration: none; cursor: pointer;
+      line-height: 1.6; font-family: inherit;
+    }
+    .page-btn:hover { background: #f0ee81; color: #800000; text-decoration: none; }
+    .page-btn.current { background: #800000; color: #fff; border-color: #800000; font-weight: bold; }
+    .page-btn.outline { background: #fff; border-color: #800000; }
+    .page-btn.outline:hover { background: #f0ee81; }
+    .page-ellipsis { font-size: 11px; padding: 0 2px; color: #666; }
   </style>
 </head>
 <body>
@@ -95,5 +110,52 @@
   {% endif %}
 
   {% block content %}{% endblock %}
+
+  {# Global "go to page" overlay — used by _pagination.html includes #}
+  <div id="goto-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+       background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:8px;padding:1.5rem 2rem;min-width:260px;
+                box-shadow:0 4px 24px rgba(0,0,0,.3);">
+      <label style="display:block;margin-bottom:.6rem;font-weight:600;">
+        Idź do strony <span id="goto-range"></span>:
+      </label>
+      <input id="goto-input" type="number" min="1"
+             style="width:100%;font-size:1.1rem;padding:.4rem .6rem;box-sizing:border-box;">
+      <div style="margin-top:1rem;display:flex;gap:.6rem;justify-content:flex-end;">
+        <button type="button" onclick="hideGoto()" class="outline secondary">Anuluj</button>
+        <button type="button" id="goto-go-btn">Przejdź</button>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var _total = 0;
+    function overlay(){ return document.getElementById('goto-overlay'); }
+    function inp()    { return document.getElementById('goto-input');   }
+    window.showGoto = function(total, cur){
+      _total = total;
+      document.getElementById('goto-range').textContent = '(1\u2013' + total + ')';
+      var i = inp(); i.max = total; i.value = cur;
+      overlay().style.display = 'flex';
+      i.focus(); i.select();
+    };
+    window.hideGoto = function(){ overlay().style.display = 'none'; };
+    function doGoto(){
+      var v = parseInt(inp().value, 10);
+      if (isNaN(v) || v < 1 || v > _total){ inp().focus(); return; }
+      var url = new URL(window.location.href);
+      url.searchParams.set('page', v);
+      window.location.href = url.toString();
+    }
+    document.getElementById('goto-go-btn').addEventListener('click', doGoto);
+    inp().addEventListener('keydown', function(e){
+      if (e.key === 'Enter')  doGoto();
+      if (e.key === 'Escape') hideGoto();
+    });
+    overlay().addEventListener('click', function(e){
+      if (e.target === overlay()) hideGoto();
+    });
+  })();
+  </script>
 </body>
 </html>

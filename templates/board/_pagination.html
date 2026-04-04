@@ -1,15 +1,31 @@
+{% load bbcode_tags %}
 {% if page.has_other_pages %}
-<nav aria-label="Paginacja" style="margin-top: 1rem;">
-  {% if page.has_previous %}
-    <a href="?page={{ page.previous_page_number }}" role="button" class="secondary outline">« Poprzednia</a>
-  {% endif %}
+{% with pages=page|pagination_range cur=page.number total=page.paginator.num_pages %}
+<nav aria-label="Paginacja" class="pagination-nav">
+  <span class="page-links">
 
-  <small style="margin: 0 1rem;">
-    Strona {{ page.number }} z {{ page.paginator.num_pages }}
-  </small>
+    {% if page.has_previous %}
+      <a href="?page={{ page.previous_page_number }}" class="page-btn outline">&#8592; Poprzedni</a>
+    {% endif %}
 
-  {% if page.has_next %}
-    <a href="?page={{ page.next_page_number }}" role="button" class="secondary outline">Następna »</a>
-  {% endif %}
+    {% for p in pages %}
+      {% if not p %}
+        <span class="page-ellipsis">…</span>
+      {% elif p == cur %}
+        <strong class="page-btn current">{{ p }}</strong>
+      {% else %}
+        <a href="?page={{ p }}" class="page-btn">{{ p }}</a>
+      {% endif %}
+    {% endfor %}
+
+    {% if page.has_next %}
+      <a href="?page={{ page.next_page_number }}" class="page-btn outline">Następny &#8594;</a>
+    {% endif %}
+
+    <button type="button" class="page-btn outline"
+            onclick="showGoto({{ total }}, {{ cur }})">&#8227; Idź do</button>
+
+  </span>
 </nav>
+{% endwith %}
 {% endif %}
