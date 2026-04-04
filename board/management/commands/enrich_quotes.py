@@ -1,23 +1,24 @@
 """
 Enrich [quote] tags in sfiniabb.db with post_id and Unix timestamps.
 
-For each post containing [quote="Username"]...[/quote] or [quote]...[/quote]:
-  - Validates the username against known users
-  - Searches up to --lookahead preceding posts in the same topic for a text match
-  - If found: rewrites tag as [quote=Username post_id=X time=Y]
-  - If not found with valid username: keeps [quote=Username]
-  - If not found without username: keeps [quote]
-  - Writes result to posts.content_quotes
-  - Records each quote relationship in the quotes table
+Matching pipeline per quote block:
+  1. Strip ellipsis markers: (...)  /.../  [...]  before fingerprinting
+  2. Extract "own text" segments (between nested [quote] blocks)
+  3. Try multiple fingerprint lengths: 120 → 80 → 60 → 40 chars
+  4. Search preceding posts in same topic (full topic window by default)
+  5. Author-filtered search first, then all posts
 
-The quotes table (citing_post_id, cited_post_id, quote_author, canonical_author,
-found, is_foreign) is used for later analysis — is_foreign can be set manually
-after reviewing unmatched [quote] blocks to decide which are [fquote].
+After the main pass, --propagate fixes nested [quote] blocks inside already-
+resolved citations by chaining through the quotes table:
+  post P cites Q (found) → nested [quote=A] in P's copy of Q can be resolved
+  if Q also cited A (from quotes table).
 
 Usage:
     python manage.py enrich_quotes /path/to/sfiniabb.db
     python manage.py enrich_quotes /path/to/sfiniabb.db --users-db sfinia_users_real.db
-    python manage.py enrich_quotes /path/to/sfiniabb.db --lookahead 100 --reset
+    python manage.py enrich_quotes /path/to/sfiniabb.db --reset
+    python manage.py enrich_quotes /path/to/sfiniabb.db --only-unfound   # reprocess status 2+3
+    python manage.py enrich_quotes /path/to/sfiniabb.db --propagate      # chain-fix nested quotes
 """
 
 import re
@@ -39,10 +40,14 @@ _QUOTE_OPEN_RE  = re.compile(r'\[quote(?:="([^"]*)")?\]', re.IGNORECASE)
 _QUOTE_CLOSE_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
 _BBCODE_RE      = re.compile(r'\[[^\]]*\]')
 
+# Ellipsis markers inserted by users when omitting part of a quote
+# e.g. (...)  /.../  [...]  (…)
+_ELLIPSIS_RE = re.compile(r'[\(\[/]\s*\.{2,}\s*[\)\]/]|[\(\[]\s*…\s*[\)\]]')
+
 # Minimum fingerprint length to attempt matching
 _MIN_FINGERPRINT = 20
-# Length of fingerprint to extract (chars)
-_FINGERPRINT_LEN = 120
+# Fingerprint lengths tried in order (longest first to avoid false positives)
+_FINGERPRINT_LENS = [120, 80, 60, 40]
 
 
 # ---------------------------------------------------------------------------
@@ -119,24 +124,43 @@ def _own_text_segments(inner: str) -> list[str]:
     return segments
 
 
+def _clean_for_fp(text: str) -> str:
+    """Strip BBCode and ellipsis markers, normalize whitespace, lowercase."""
+    text = _ELLIPSIS_RE.sub(" ", text)
+    text = _strip_bbcode(text)
+    return text
+
+
 def _fingerprints(inner: str) -> list[str]:
     """Return ordered list of candidate search needles for a [quote] block.
 
-    Strategy (best → worst):
-    1. Each own-text segment (text between/after nested quotes), stripped
-    2. Fallback: full inner text stripped (used when all segments are too short)
+    Strategy:
+    1. Each own-text segment cleaned; each segment tried at multiple lengths
+       (120 → 80 → 60 → 40) so that minor edits (e.g. removed emoticons)
+       don't prevent matching on the first clean portion of text.
+    2. Fallback: full inner text (includes nested-quote text).
 
-    Each needle is at most _FINGERPRINT_LEN chars.
+    Longer fingerprints are tried before shorter to reduce false positives.
     """
-    fps = []
-    for seg in _own_text_segments(inner):
-        fp = _strip_bbcode(seg)[:_FINGERPRINT_LEN]
-        if len(fp) >= _MIN_FINGERPRINT:
-            fps.append(fp)
+    fps_seen: set[str] = set()
+    fps: list[str] = []
+
+    def _add(text: str) -> None:
+        cleaned = _clean_for_fp(text)
+        for length in _FINGERPRINT_LENS:
+            fp = cleaned[:length].strip()
+            if len(fp) >= _MIN_FINGERPRINT and fp not in fps_seen:
+                fps_seen.add(fp)
+                fps.append(fp)
+
+    segments = _own_text_segments(inner)
+    for seg in segments:
+        _add(seg)
+
     if not fps:
-        full = _strip_bbcode(inner)[:_FINGERPRINT_LEN]
-        if len(full) >= _MIN_FINGERPRINT:
-            fps.append(full)
+        # Fallback: use full stripped text including nested-quote content
+        _add(inner)
+
     return fps
 
 
@@ -307,6 +331,169 @@ def _enrich_content(post_id: int, content: str,
 
 
 # ---------------------------------------------------------------------------
+# Chain propagation
+# ---------------------------------------------------------------------------
+
+# Matches enriched quote tags: [quote=Author post_id=N time=T] or [quote post_id=N time=T]
+_ENRICHED_TAG_RE = re.compile(
+    r'\[quote(?:=(?P<author>[^ \]]+))?\s+post_id=(?P<post_id>\d+)\s+time=(?P<time>\d+)\]',
+    re.IGNORECASE,
+)
+# Matches unenriched opening tags (no post_id): [quote=Author] or [quote]
+_PLAIN_TAG_RE = re.compile(
+    r'\[quote(?:="?(?P<author>[^"\]\s]+)"?)?\](?!\s*[^\[]*post_id=)',
+    re.IGNORECASE,
+)
+# Matches ANY [quote...] opening tag (both sfinia and enriched formats)
+# Used in propagation where content_quotes may contain enriched top-level tags
+_QUOTE_ANY_OPEN_RE = re.compile(r'\[quote(?:[^\]]*?)?\]', re.IGNORECASE)
+_QUOTE_CLOSE_PLAIN_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
+
+
+def _extract_top_quotes_enriched(content: str) -> list:
+    """Like _extract_top_quotes but also recognises enriched [quote=X post_id=N] tags."""
+    events = []
+    for m in _QUOTE_ANY_OPEN_RE.finditer(content):
+        events.append((m.start(), "open", m.group(0), m.end()))
+    for m in _QUOTE_CLOSE_PLAIN_RE.finditer(content):
+        events.append((m.start(), "close", None, m.end()))
+    events.sort(key=lambda x: x[0])
+
+    result = []
+    depth = 0
+    block_start = tag_end = -1
+    opening_tag = ""
+
+    for pos, kind, tag_text, end in events:
+        if kind == "open":
+            if depth == 0:
+                block_start = pos
+                tag_end     = end
+                opening_tag = tag_text or ""
+            depth += 1
+        else:
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and block_start >= 0:
+                    result.append((block_start, end, tag_end, opening_tag))
+                    block_start = -1
+    return result
+
+
+def _propagate_chain_quotes(conn, stdout) -> int:
+    """Enrich nested [quote] blocks inside already-resolved top-level citations.
+
+    For each post P that cites post Q (found in quotes table):
+      - Extract top-level [quote=Q_author post_id=Q_id] blocks from P's content_quotes
+      - Within each such block, find unenriched nested [quote=A] tags
+      - Look up quotes table: does Q cite A with a found citation?
+      - If yes (unambiguously), replace [quote=A] with [quote=A post_id=R time=T]
+
+    Returns count of nested tags enriched.
+    """
+    # Build map: cited_post_id → list of {canonical_author, cited_post_id, created_at}
+    # i.e. "what did each post cite?"
+    post_citations: dict[int, list[dict]] = {}
+    for row in conn.execute(
+        "SELECT q.citing_post_id, q.canonical_author, q.cited_post_id, p.created_at "
+        "FROM quotes q JOIN posts p ON q.cited_post_id = p.post_id "
+        "WHERE q.found = 1 ORDER BY q.citing_post_id"
+    ):
+        cit_id = row[0]
+        if cit_id not in post_citations:
+            post_citations[cit_id] = []
+        post_citations[cit_id].append({
+            "author":     row[1] or "",
+            "post_id":    row[2],
+            "created_at": row[3] or "",
+        })
+
+    # Process posts that have found outer citations
+    updates = []
+    enriched_total = 0
+
+    for row in conn.execute(
+        "SELECT p.post_id, p.content_quotes "
+        "FROM posts p "
+        "WHERE p.quote_status IN (1, 3) AND p.content_quotes IS NOT NULL"
+    ):
+        post_id  = row[0]
+        content  = row[1]
+        if not _PLAIN_TAG_RE.search(content):
+            continue  # no unenriched nested tags at all
+
+        # Find top-level blocks (enriched AND unenriched) in this post
+        top_quotes = _extract_top_quotes_enriched(content)
+        if not top_quotes:
+            continue
+
+        new_content = content
+        offset = 0   # shift as we make replacements
+
+        for block_start, block_end, tag_end, opening_tag in top_quotes:
+            # Identify which cited post this outer block links to
+            m = _ENRICHED_TAG_RE.match(opening_tag)
+            if not m:
+                continue
+            outer_cited_id = int(m.group("post_id"))
+            inner_citations = post_citations.get(outer_cited_id)
+            if not inner_citations:
+                continue
+
+            # Build lookup: author → (post_id, created_at) — skip truly ambiguous authors
+            author_map: dict[str, tuple[int, str] | None] = {}
+            for c in inner_citations:
+                a   = c["author"].lower()
+                val = (c["post_id"], c["created_at"])
+                if a in author_map:
+                    if author_map[a] != val:
+                        author_map[a] = None  # genuinely different targets → ambiguous
+                    # else: duplicate entry for same target — keep as-is
+                else:
+                    author_map[a] = val
+
+            # Replace plain [quote=A] / [quote] tags within this block's inner content
+            inner_start = block_start + (tag_end - block_start)
+            inner_end   = block_end - len("[/quote]")
+            inner       = new_content[inner_start + offset: inner_end + offset]
+
+            def _replace_plain(m2):
+                raw_author = (m2.group("author") or "").strip('"').strip()
+                key = raw_author.lower()
+                hit = author_map.get(key) if key else None
+                # For anonymous [quote]: try if there's exactly one inner citation
+                if not key and len([v for v in author_map.values() if v]) == 1:
+                    hit = next(v for v in author_map.values() if v)
+                    raw_author = next(k for k, v in author_map.items() if v)
+                if hit is None:
+                    return m2.group(0)  # keep as-is
+                cited_pid, cited_cat = hit
+                unix = _to_unix(cited_cat)
+                if raw_author:
+                    return f"[quote={raw_author} post_id={cited_pid} time={unix}]"
+                return f"[quote post_id={cited_pid} time={unix}]"
+
+            new_inner, n = _PLAIN_TAG_RE.subn(_replace_plain, inner)
+            if n:
+                new_content = (
+                    new_content[:inner_start + offset]
+                    + new_inner
+                    + new_content[inner_end + offset:]
+                )
+                offset += len(new_inner) - len(inner)
+                enriched_total += n
+
+        if new_content != content:
+            updates.append((new_content, post_id))
+
+    conn.executemany(
+        "UPDATE posts SET content_quotes=? WHERE post_id=?", updates
+    )
+    stdout.write(f"  Zaktualizowano {len(updates)} postów.")
+    return enriched_total
+
+
+# ---------------------------------------------------------------------------
 # Management command
 # ---------------------------------------------------------------------------
 
@@ -346,12 +533,18 @@ class Command(BaseCommand):
                             help="Max preceding posts per topic to search (0 = full topic, default)")
         parser.add_argument("--reset", action="store_true",
                             help="Drop and recreate quotes table; reprocess all posts")
+        parser.add_argument("--only-unfound", action="store_true",
+                            help="Only reprocess posts with quote_status 2 or 3 (faster re-run)")
+        parser.add_argument("--propagate", action="store_true",
+                            help="Propagate enrichments to nested quotes via the quotes chain table")
 
     def handle(self, *args, **options):
-        db_path    = options["archive_db"]
-        users_path = options["users_db"]
-        lookahead  = options["lookahead"]
-        reset      = options["reset"]
+        db_path      = options["archive_db"]
+        users_path   = options["users_db"]
+        lookahead    = options["lookahead"]
+        reset        = options["reset"]
+        only_unfound = options["only_unfound"]
+        do_propagate = options["propagate"]
 
         try:
             conn = sqlite3.connect(db_path)
@@ -398,8 +591,21 @@ class Command(BaseCommand):
             self.stdout.write(f"Załadowano {len(known_users)//2} userów z posts.author_name")
 
         # --- Count posts to process ---
-        total_posts = conn.execute("SELECT count(*) FROM posts WHERE content LIKE '%[quote%'").fetchone()[0]
-        self.stdout.write(f"Postów z cytatami: {total_posts}")
+        if only_unfound:
+            total_posts = conn.execute(
+                "SELECT count(*) FROM posts WHERE quote_status IN (2,3)"
+            ).fetchone()[0]
+            self.stdout.write(f"Postów do ponownego przetworzenia (status 2+3): {total_posts}")
+            unfound_ids = {
+                row[0] for row in
+                conn.execute("SELECT post_id FROM posts WHERE quote_status IN (2,3)")
+            }
+        else:
+            total_posts = conn.execute(
+                "SELECT count(*) FROM posts WHERE content LIKE '%[quote%'"
+            ).fetchone()[0]
+            self.stdout.write(f"Postów z cytatami: {total_posts}")
+            unfound_ids = None
 
         # --- Process topic by topic ---
         topics = [
@@ -418,7 +624,7 @@ class Command(BaseCommand):
                 (topic_id,)
             ).fetchall()
 
-            # window: list of recent post dicts (up to lookahead)
+            # window: list of post dicts for this topic (all preceding posts)
             window: list[dict] = []
 
             updates: list[tuple[str, int]] = []
@@ -427,7 +633,12 @@ class Command(BaseCommand):
                 post_id = row["post_id"]
                 content = row["content"] or ""
 
-                if "[quote" in content.lower():
+                should_process = (
+                    "[quote" in content.lower() and
+                    (unfound_ids is None or post_id in unfound_ids)
+                )
+
+                if should_process:
                     quotes_for_post: list[dict] = []
                     enriched = _enrich_content(post_id, content, window, known_users, quotes_for_post)
                     updates.append((enriched, post_id))
@@ -436,6 +647,11 @@ class Command(BaseCommand):
                             found_count += 1
                         else:
                             not_found_count += 1
+                    if only_unfound:
+                        # Replace existing quotes rows for this post
+                        conn.execute(
+                            "DELETE FROM quotes WHERE citing_post_id=?", (post_id,)
+                        )
                     all_quote_rows.extend(quotes_for_post)
                     processed += 1
 
@@ -488,6 +704,13 @@ class Command(BaseCommand):
         """)
 
         conn.commit()
+
+        # Optional propagation pass
+        if do_propagate:
+            prop_count = _propagate_chain_quotes(conn, self.stdout)
+            conn.commit()
+            self.stdout.write(f"Propagacja: wzbogacono {prop_count} zagnieżdżonych cytatów.")
+
         conn.close()
 
         total_quotes = found_count + not_found_count
