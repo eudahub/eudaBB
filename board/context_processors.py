@@ -2,7 +2,10 @@ from django.conf import settings
 
 
 def test_mode(request):
-    return {"TEST_MODE": getattr(settings, "TEST_MODE", False)}
+    return {
+        "TEST_MODE": getattr(settings, "TEST_MODE", False),
+        "SITE_NOTICE": getattr(settings, "SITE_NOTICE", ""),
+    }
 
 
 def pm_unread_count(request):

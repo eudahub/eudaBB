@@ -103,6 +103,13 @@
     </div>
   </nav>
 
+  {% if SITE_NOTICE %}
+  <div style="background:#800000;color:#fff;text-align:center;padding:.5rem 1rem;
+              font-weight:bold;font-size:13px;letter-spacing:.03em;">
+    ⚠ {{ SITE_NOTICE }}
+  </div>
+  {% endif %}
+
   {% if messages %}
     <ul class="messages">
       {% for msg in messages %}<li class="{{ msg.tags }}">{{ msg }}</li>{% endfor %}

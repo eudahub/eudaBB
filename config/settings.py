@@ -12,6 +12,10 @@ ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1").split(","
 # Set TEST_MODE=true in .env for development, never on production.
 TEST_MODE = config("TEST_MODE", default=False, cast=bool)
 
+# Optional banner shown on every page (empty = no banner).
+# Example: SITE_NOTICE="WERSJA TESTOWA — baza danych zostanie zresetowana, wszelkie zmiany będą utracone."
+SITE_NOTICE = config("SITE_NOTICE", default="")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
