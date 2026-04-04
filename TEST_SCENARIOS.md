@@ -227,14 +227,30 @@ Wymagania: serwer uruchomiony lokalnie, `TEST_MODE=true` w `.env` (chyba że zaz
 
 ---
 
-## 13. Reset hasła — hasło unieważnione przez admina
+## 13. Logowanie — rate limit (20 prób/godzinę)
+
+**Warunki wstępne:**
+- Istnieje konto `janek` z poprawnym hasłem
+
+**Kroki:**
+1. Wejdź na `/login/`, wpisz nick `janek` i **złe** hasło → powtórz 20 razy
+2. Przy 21. próbie wpisz **poprawne** hasło
+
+**Oczekiwany wynik:**
+- Przy próbach 1–20: komunikat „Nieprawidłowy nick lub hasło."
+- Przy próbie 21 (nawet z poprawnym hasłem): „Zbyt wiele nieudanych prób logowania. Spróbuj ponownie za godzinę lub zresetuj hasło."
+- Link „Nie pamiętasz hasła?" nadal dostępny — user może zresetować hasło emailem
+
+---
+
+## 14. Reset hasła — hasło unieważnione przez admina
 
 **Warunki wstępne:**
 - Istnieje konto `marta` z hasłem i emailem
 - Admin w panelu Django (lub przez shell): `User.objects.filter(username='marta').update(password='!')` (ustawia unusable password)
 
 **Kroki:**
-1. Wejdź na `/login/`, wpisz nick `marta` i stare hasło → wyślij
+1. Wejdź na `/login/`, wpisz nick `marta` i dowolne hasło → wyślij
 2. Forum wykrywa unusable password → przekierowanie na `/reset-hasla/?username=marta&reason=invalidated`
 3. Strona pokazuje komunikat „Twoje hasło zostało unieważnione…"
 4. Nick `marta` wstępnie wypełniony — kliknij „Wyślij kod na email"
@@ -247,7 +263,7 @@ Wymagania: serwer uruchomiony lokalnie, `TEST_MODE=true` w `.env` (chyba że zaz
 
 ---
 
-## 14. Reset hasła — grace period poprzedniego kodu
+## 15. Reset hasła — grace period poprzedniego kodu
 
 **Cel:** sprawdzić że gdy user dostanie dwa kody, oba działają przez 7 minut.
 

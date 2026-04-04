@@ -647,8 +647,37 @@ def _send_reset_code_email(user, code: str, recipient_email: str) -> None:
     )
 
 
+_LOGIN_MAX_FAILS = 20   # per username per hour
+
+
+def _login_fail_key(username: str) -> str:
+    return f"login_fails:{username.lower()}"
+
+
+def _check_login_rate(username: str) -> int:
+    """Return number of failed attempts in last hour for this username."""
+    from django.core.cache import cache
+    return cache.get(_login_fail_key(username), 0)
+
+
+def _record_login_fail(username: str) -> int:
+    """Increment failed-login counter (1h window). Returns new count."""
+    from django.core.cache import cache
+    key = _login_fail_key(username)
+    try:
+        return cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=3600)
+        return 1
+
+
 def login_view(request):
-    """Custom login: detects unusable password and redirects to reset flow."""
+    """Custom login.
+
+    - Wrong password: increment fail counter, show error (max 20/h).
+    - Unusable password (null, admin-invalidated): redirect to reset flow.
+    - 'Forgot password' link on page → user navigates to reset voluntarily.
+    """
     from django.contrib.auth import authenticate
     from .models import User as ForumUser
 
@@ -660,22 +689,29 @@ def login_view(request):
     if request.method == "POST":
         username = request.POST.get("username", "").strip()
         password = request.POST.get("password", "")
-        user = authenticate(request, username=username, password=password)
-        if user is not None:
-            login(request, user)
-            return redirect(request.POST.get("next") or request.GET.get("next") or "/")
 
-        # Auth failed — check if password is unusable (invalidated)
-        try:
-            candidate = ForumUser.objects.get(username=username)
-            if not candidate.has_usable_password():
-                return redirect(
-                    f"/reset-hasla/?username={candidate.username}&reason=invalidated"
-                )
-        except ForumUser.DoesNotExist:
-            pass
+        # Rate limit check before doing any DB work
+        fails = _check_login_rate(username)
+        if fails >= _LOGIN_MAX_FAILS:
+            error = "Zbyt wiele nieudanych prób logowania. Spróbuj ponownie za godzinę lub zresetuj hasło."
+        else:
+            user = authenticate(request, username=username, password=password)
+            if user is not None:
+                login(request, user)
+                return redirect(request.POST.get("next") or request.GET.get("next") or "/")
 
-        error = "Nieprawidłowy nick lub hasło."
+            # Auth failed — check if password is unusable (admin-invalidated)
+            try:
+                candidate = ForumUser.objects.get(username=username)
+                if not candidate.has_usable_password():
+                    return redirect(
+                        f"/reset-hasla/?username={candidate.username}&reason=invalidated"
+                    )
+            except ForumUser.DoesNotExist:
+                pass
+
+            _record_login_fail(username)
+            error = "Nieprawidłowy nick lub hasło."
 
     return render(request, "registration/login.html", {
         "error": error,
