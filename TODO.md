@@ -173,6 +173,84 @@ Poza zwykłym trybem „cały post” dodać także bardziej precyzyjne warianty
 - dla `Bible` i `fquote` taka tabela może być głównym źródłem wyszukiwania
 - dla trybu „tylko własny tekst autora” potrzebny osobny indeks treści bez cytatów
 
+#### Decyzja architektoniczna: rozszerzamy `forum_quote_refs`, nie tworzymy drugiej tabeli
+
+Aktualna ocena:
+- nie robić osobnej drugiej tabeli tylko na treść cytatu
+- rozszerzyć istniejącą `forum_quote_refs`, bo relacja jest praktycznie 1:1:
+  - każdy wpis indeksu cytatu ma już:
+    - `post_id`
+    - `quote_type`
+    - `source_post_id`
+    - `quoted_username`
+    - `depth`
+    - `quote_index`
+    - `ellipsis_count`
+  - brakuje głównie treści i pól pomocniczych do wyszukiwania / walidacji
+
+Dlaczego tak:
+- mniej JOIN-ów
+- prostszy model danych
+- prostszy import i rebuild indeksu
+- łatwiejsza migracja później do modelu „cytat jako osobny blok treści”
+- wszystkie operacje administracyjne (rename usera, usunięcie usera, naprawa cytatu) mogą pracować na jednej tabeli
+
+#### Co dodać do `forum_quote_refs`
+
+Pola do rozważenia:
+- `content_bbcode`
+  - surowa treść wnętrza cytatu
+  - bez tagów otwierających/zamykających samego cytatu
+- `content_plain`
+  - tekst użytkowy po zdjęciu BBCode
+  - do snippetów i prostego wyszukiwania
+- `content_norm`
+  - tekst znormalizowany do dopasowań
+  - bez diakrytyków, z kolapsem whitespace, z obsługą ellipsis
+- `source_author_snapshot`
+  - snapshot autora z chwili indeksowania / importu
+  - pomocne diagnostycznie, ale nie powinno zastępować relacji do `source_post`
+- `match_status`
+  - np. `unknown`, `exact`, `ellipsis`, `invalid`, `source_missing`
+  - przydatne do walidacji i narzędzi naprawczych
+- `is_truncated`
+  - czy cytat zawiera ellipsis / ręczne skrócenie
+- ewentualnie `kind_flags`
+  - np. czy zawiera tylko tekst, czy ma tagi inline, czy zawiera niedozwolone zagnieżdżenia
+
+#### Etapy wdrożenia
+
+1. **Rozszerzyć model i migracje**
+- dodać pola treści do `forum_quote_refs`
+- nie zmieniać jeszcze formatu `Post.content_bbcode`
+
+2. **Uzupełnić rebuild indeksu cytatów**
+- parser cytatów ma przy rebuildzie zapisywać:
+  - `content_bbcode`
+  - `content_plain`
+  - `content_norm`
+  - `ellipsis_count`
+  - `match_status`
+
+3. **Użyć tabeli cytatów do wyszukiwania**
+- `Bible` i `fquote` wyszukiwać bezpośrednio po `forum_quote_refs`
+- zwykłe `quote` też móc przeszukiwać jako osobne obiekty
+
+4. **Użyć tabeli cytatów do walidacji i napraw**
+- walidacja `[quote="user" post_id=N]` nie musi parsować całego posta od zera przy każdym kroku
+- `quote-correct` może pracować na wpisach `forum_quote_refs`
+
+5. **Użyć tabeli cytatów do operacji administracyjnych**
+- rename usera:
+  - aktualizacja `quoted_username` / snapshotów w indeksie
+- usuwanie usera:
+  - znaleźć cytaty po `source_post_id` lub autorze źródła
+  - zdecydować, czy usuwać cytat, anonimizować go, czy zamieniać na `fquote`
+
+6. **Dopiero później rozważyć właściwe wyjęcie cytatów z `Post.content_bbcode`**
+- np. markerami typu `[quote_ref=123]`
+- to byłby osobny etap, po ustabilizowaniu modelu danych i rendererów
+
 **B) Wyszukiwanie wątków** (po tytule)
 - Szukać wyłącznie po `Topic.title`, nie po treści postów z wątku
 - Wątek ma mieć jeden stabilny tytuł, wspólny dla wszystkich postów
