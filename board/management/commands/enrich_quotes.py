@@ -22,7 +22,8 @@ USERS_DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db"
 
 PASS_TYPES = ['known-user', 'known-user-global', 'anon-topic', 'anon-global', 'ngram',
               'propagate', 'bible', 'bible-filter', 'bible-review-apply',
-              'mark-not-found', 'to-fquote', 'fix-status', 'mark-broken', 'analyze-depth']
+              'mark-not-found', 'to-fquote', 'fix-status', 'mark-broken',
+              'fix-quote-authors', 'analyze-depth']
 # known-user:        szuka w N poprzednich postach tego samego autora w tym samym wątku
 # known-user-global: szuka w N poprzednich postach tego samego autora w całej bazie
 # anon-topic:        szuka w N poprzednich postach tego samego wątku (dowolny autor)
@@ -30,6 +31,7 @@ PASS_TYPES = ['known-user', 'known-user-global', 'anon-topic', 'anon-global', 'n
 # ngram:             5-gram voting po content_user, dowolna odległość, najbliższy remis
 # propagate:         propaguje post_id do zagnieżdżonych cytatów na podstawie tabeli quotes
 # bible:             wykrywa cytaty biblijne przez n-gram indeks, zamienia na [Bible=ref]
+# fix-quote-authors: naprawia autora w [quote ... post_id=N] na autora posta N
 
 _BIBLE_NGRAM_INDEX = None       # załadowany przez --bible-index
 _BIBLE_COVERAGE    = 0.40       # minimalny % n-gramów pasujących (--bible-coverage)
@@ -1328,6 +1330,10 @@ _NAMED_UNRESOLVED_RE = re.compile(
     re.IGNORECASE,
 )
 _ANY_POST_ID_RE = re.compile(r'post_id=', re.IGNORECASE)
+_QUOTE_WITH_POST_ID_RE = re.compile(
+    r'\[quote(?:="(?P<author>[^"]*)")?(?P<mid>\s+post_id=(?P<post_id>\d+))(?P<tail>[^\]]*)\]',
+    re.IGNORECASE,
+)
 
 
 def run_mark_not_found(conn, known_users, dry_run=False):
@@ -1418,6 +1424,88 @@ def run_mark_not_found(conn, known_users, dry_run=False):
         conn.commit()
 
     return marked_known + marked_nested
+
+
+# ---------------------------------------------------------------------------
+# Pass: fix-quote-authors – popraw autora w [quote ... post_id=N]
+# ---------------------------------------------------------------------------
+
+def run_fix_quote_authors(conn, dry_run=False):
+    """Napraw autora w tagach [quote ... post_id=N] na autora posta źródłowego.
+
+    Reguły:
+      - tylko tagi [quote], bez [fquote] i [Bible]
+      - tylko post_id=<liczba>, nie post_id=not_found
+      - jeśli autor jest błędny albo pusty, zastąp/dopisz autora posta źródłowego
+      - zachowaj pozostałe atrybuty tagu (np. time=...)
+    """
+    post_author = {
+        int(post_id): (author_name or '').strip()
+        for post_id, author_name in conn.execute(
+            "SELECT post_id, author_name FROM posts"
+        )
+    }
+
+    rows = conn.execute(
+        "SELECT post_id, content_quotes FROM posts"
+        " WHERE content_quotes IS NOT NULL"
+        "   AND content_quotes LIKE '%post_id=%'"
+    ).fetchall()
+
+    updates = []
+    changed_posts = 0
+    changed_tags = 0
+
+    for post_id, content in rows:
+        if not content:
+            continue
+
+        replacements = []
+        for m in _QUOTE_WITH_POST_ID_RE.finditer(content):
+            src_post_id = int(m.group('post_id'))
+            resolved_author = post_author.get(src_post_id, '')
+            if not resolved_author:
+                continue
+
+            current_author = (m.group('author') or '').strip()
+            if current_author == resolved_author:
+                continue
+
+            new_tag = '[quote="%s"%s%s]' % (
+                resolved_author,
+                m.group('mid'),
+                m.group('tail') or '',
+            )
+            replacements.append((m.start(), m.end(), new_tag, current_author, resolved_author, src_post_id))
+
+        if not replacements:
+            continue
+
+        changed_posts += 1
+        changed_tags += len(replacements)
+
+        if dry_run:
+            print(f"  POST={post_id}  quote-author fixes={len(replacements)}")
+            for _, _, _, old_author, new_author, src_post_id in replacements[:5]:
+                before = old_author if old_author else '<brak>'
+                print(f"    post_id={src_post_id}: {before!r} -> {new_author!r}")
+            continue
+
+        new_content = content
+        for start, end, new_tag, _, _, _ in reversed(replacements):
+            new_content = new_content[:start] + new_tag + new_content[end:]
+        updates.append((new_content, post_id))
+
+    print(f"\n  Naprawiono autorów cytatu: {changed_tags:,} tagów w {changed_posts:,} postach")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=? WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    return changed_tags
 
 
 # ---------------------------------------------------------------------------
@@ -1902,6 +1990,14 @@ def main():
     if pass_type == 'mark-broken':
         total = run_mark_broken(conn, dry_run=dry_run)
         print(f"\n=== Mark-broken zakończony: {total:,} postów oznaczonych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
+
+    if pass_type == 'fix-quote-authors':
+        total = run_fix_quote_authors(conn, dry_run=dry_run)
+        print(f"\n=== Fix-quote-authors zakończony: {total:,} tagów poprawionych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
         conn.close()
