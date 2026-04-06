@@ -72,8 +72,8 @@
       color: #555;
       margin-bottom: 2px;
     }
-    .bbquote-cite a.quote-link { color: #800000; text-decoration: none; }
-    .bbquote-cite a.quote-link:hover { text-decoration: underline; color: #DD6900; }
+    .bbquote-cite a.quote-link { color: #0000cc; text-decoration: none; }
+    .bbquote-cite a.quote-link:hover { text-decoration: underline; color: #0033ff; }
     .bbquote-cite .quote-not-found { color: #aaa; cursor: default; }
     blockquote.bbquote {
       margin: 0 0 .4rem 0;
@@ -101,6 +101,35 @@
     .page-goto { color: #800000; font-size: 11px; cursor: pointer;
                  background: none; border: none; padding: 0; font-family: inherit; }
     .page-goto:hover { text-decoration: underline; color: #DD6900; }
+
+    /* BBCode source popup */
+    .bbsrc-btn {
+      background: none; border: 1px solid #BC8F8F; color: #800000;
+      border-radius: 3px; padding: 1px 5px; cursor: pointer;
+      font-size: 10px; font-family: inherit; line-height: 1.2;
+    }
+    .bbsrc-btn:hover { background: #f0ee81; }
+    #bbsrc-modal {
+      display: none; position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%; background: rgba(0,0,0,.5);
+      z-index: 1000; align-items: center; justify-content: center;
+    }
+    #bbsrc-modal.open { display: flex; }
+    #bbsrc-box {
+      background: #fff; border: 2px solid #BC8F8F; border-radius: 4px;
+      padding: 1rem; width: 80%; max-width: 800px; max-height: 80vh;
+      display: flex; flex-direction: column; gap: .5rem;
+    }
+    #bbsrc-box textarea {
+      flex: 1; font-family: monospace; font-size: 11px;
+      resize: none; border: 1px solid #BC8F8F;
+      min-height: 300px; white-space: pre; overflow: auto;
+    }
+    #bbsrc-close {
+      align-self: flex-end; cursor: pointer;
+      background: #800000; color: #fff; border: none;
+      border-radius: 3px; padding: 3px 10px; font-size: 11px;
+    }
   </style>
 </head>
 <body>
@@ -182,6 +211,29 @@
       if (e.target === overlay()) hideGoto();
     });
   })();
+  </script>
+
+  {# BBCode source modal #}
+  <div id="bbsrc-modal">
+    <div id="bbsrc-box">
+      <textarea id="bbsrc-text" readonly></textarea>
+      <button id="bbsrc-close" onclick="closeBBSrc()">Zamknij</button>
+    </div>
+  </div>
+  <script>
+  function showBBSrc(el) {
+    var raw = el.getAttribute('data-bbcode');
+    document.getElementById('bbsrc-text').value = raw;
+    var modal = document.getElementById('bbsrc-modal');
+    modal.classList.add('open');
+    document.getElementById('bbsrc-text').focus();
+  }
+  function closeBBSrc() {
+    document.getElementById('bbsrc-modal').classList.remove('open');
+  }
+  document.getElementById('bbsrc-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeBBSrc();
+  });
   </script>
 </body>
 </html>

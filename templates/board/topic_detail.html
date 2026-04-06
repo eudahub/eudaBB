@@ -20,6 +20,8 @@
   <div class="post-header">
     <span>#{{ post.post_order }}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
+    <button class="bbsrc-btn" onclick="showBBSrc(this)"
+            data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
   </div>
   <table style="width:100%; border-collapse: collapse;">
     <tr>
@@ -35,7 +37,7 @@
         {% endif %}
       </td>
       <td class="post-content">
-        {{ post.content_bbcode|bbcode }}
+        {{ post|post_content }}
         {% if post.edit_count %}
           <hr>
           <small><em>Edytowano {{ post.edit_count }} raz.
@@ -72,6 +74,8 @@
   <div class="post-header">
     <span>#{{ post.post_order }}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
+    <button class="bbsrc-btn" onclick="showBBSrc(this)"
+            data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
   </div>
   <p style="margin:.4rem .6rem; font-style:italic; color:#888;">
     [Post ukryty (filtr spamu) — <a href="#post-{{ post.pk }}" onclick="this.closest('.post-box').style.opacity=1;this.closest('.post-box').querySelector('.spam-hidden').style.display='block';this.parentNode.style.display='none';return false;">pokaż</a>]
@@ -80,7 +84,7 @@
     <table style="width:100%; border-collapse: collapse;">
       <tr>
         <td class="post-author"><strong>{{ post.author.username|default:"[usunięty]" }}</strong></td>
-        <td class="post-content">{{ post.content_bbcode|bbcode }}</td>
+        <td class="post-content">{{ post|post_content }}</td>
       </tr>
     </table>
   </div>
