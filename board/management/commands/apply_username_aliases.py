@@ -11,8 +11,10 @@ Usage:
 """
 import sqlite3
 from django.core.management.base import BaseCommand, CommandError
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from board.models import User, Post, Topic
+from board.user_rename import rename_user_and_update_quotes
 
 DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db"
 
@@ -81,12 +83,15 @@ class Command(BaseCommand):
         except User.DoesNotExist:
             self.stdout.write(f"  POMINIĘTO — brak usera {alias_name!r}")
             return
-        if User.objects.filter(username=new_name).exists():
-            self.stdout.write(f"  BŁĄD — {new_name!r} już istnieje")
-            return
         posts = Post.objects.filter(author=alias_user).count()
         self.stdout.write(f"  {alias_name!r} (id={alias_user.id}, {posts} postów) → {new_name!r}")
         if not dry:
-            alias_user.username = new_name
-            alias_user.save(update_fields=["username"])
-            self.stdout.write(self.style.SUCCESS(f"  OK — zmieniono nazwę"))
+            try:
+                result = rename_user_and_update_quotes(alias_user, new_name)
+            except ValidationError as exc:
+                self.stdout.write(f"  BŁĄD — {'; '.join(exc.messages)}")
+                return
+            self.stdout.write(self.style.SUCCESS(
+                f"  OK — zmieniono nazwę, poprawiono {result['tags_changed']} tagów quote "
+                f"w {result['posts_changed']} postach"
+            ))

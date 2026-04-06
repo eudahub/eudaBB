@@ -75,6 +75,9 @@ class User(AbstractUser):
     def save(self, *args, **kwargs):
         from .username_utils import normalize
         self.username_normalized = normalize(self.username)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "username" in update_fields:
+            kwargs["update_fields"] = list(set(update_fields) | {"username_normalized"})
         super().save(*args, **kwargs)
 
     class Meta:

@@ -51,6 +51,37 @@
   </form>
 </article>
 
+<article style="max-width:720px;margin:1.5rem auto;">
+  <form method="post" onsubmit="return confirm('Zmienić nazwę użytkownika i przepisać quote’y?');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="rename_user">
+    <fieldset>
+      <legend>Zmiana nazwy użytkownika</legend>
+      <p style="font-size:11px;color:#555;margin:.3rem 0 .6rem 0;">
+        Zmienia nick konta oraz autora w tagach <code>[quote]</code>/<code>[fquote]</code>.
+        Blokuje kolizje po znormalizowaniu nazwy.
+      </p>
+      <label for="rename_user_id">Użytkownik</label>
+      <select name="rename_user_id" id="rename_user_id" required>
+        <option value="">Wybierz konto</option>
+        {% for user_obj in all_users %}
+          <option value="{{ user_obj.id }}">
+            {{ user_obj.username }}
+            {% if user_obj.is_root %}[root]{% elif user_obj.is_staff %}[admin]{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+
+      <label for="new_username" style="margin-top:.6rem;">Nowa nazwa</label>
+      <input type="text" name="new_username" id="new_username" maxlength="150" required>
+
+      <div style="margin-top:.7rem;">
+        <button type="submit">Zmień nazwę</button>
+      </div>
+    </fieldset>
+  </form>
+</article>
+
 <article style="max-width:720px;margin:1.5rem auto 2rem auto;">
   <form method="post" onsubmit="return confirm('Usunąć zaznaczone puste konta?');">
     {% csrf_token %}

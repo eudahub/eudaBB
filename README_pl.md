@@ -113,6 +113,22 @@ Panel admina: http://127.0.0.1:8000/admin/
 4. Wejdź na stronę główną — powinno być widoczne forum
 5. Zarejestruj zwykłego użytkownika przez `/register/`
 
+## Import użytkowników z Sfinia
+
+Aktualna ścieżka importu użytkowników z plaintext emailami:
+
+```bash
+python manage.py build_import_db /path/to/sfinia_users_admin.db /path/to/sfinia_users_real.db /path/to/sfinia_import.db
+python manage.py import_from_sfinia /path/to/sfinia_import.db
+python manage.py import_spam_classes /path/to/sfinia_users_real.db
+python manage.py apply_username_aliases --db /path/to/sfinia_users_real.db
+```
+
+Uwagi:
+- `build_import_db` buduje tabelę `users` z kolumną `email` w plaintext; stary format `email_hash/email_mask` nie jest już używany do importu.
+- decyzje aliasów (`username_aliases`) są nadal czytane bezpośrednio z `sfinia_users_real.db`; przyszłościowo można je też kopiować do `sfinia_import.db`.
+- root może potem ręcznie zmienić nick użytkownika w `/root/config/`; rename aktualizuje też autora w tagach `[quote]` i `[fquote]` zapisanych w postach.
+
 ## Produkcja (nginx + gunicorn)
 
 ```bash

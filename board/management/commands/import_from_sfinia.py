@@ -52,6 +52,28 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Cannot open {db_path}: {e}")
 
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        required_columns = {
+            "user_id", "username", "email", "signature", "website", "location", "avatar",
+        }
+        if not required_columns.issubset(columns):
+            conn.close()
+            legacy_columns = {"has_email", "email_hash", "email_mask"}
+            if legacy_columns.issubset(columns):
+                raise CommandError(
+                    "Detected legacy sfinia_import.db schema with has_email/email_hash/email_mask. "
+                    "Plaintext emails cannot be recovered from that DB. "
+                    "Rebuild it with: python manage.py build_import_db "
+                    "/path/to/sfinia_users_admin.db /path/to/sfinia_users_real.db /path/to/sfinia_import.db"
+                )
+            missing = ", ".join(sorted(required_columns - columns))
+            raise CommandError(
+                f"Invalid import DB schema in {db_path}. Missing columns: {missing}"
+            )
+
         rows = conn.execute(
             "SELECT user_id, username, email, signature, website, location, avatar "
             "FROM users ORDER BY user_id"

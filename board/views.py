@@ -22,6 +22,7 @@ from .spam_utils import get_author_spam_filter, filter_forums
 from .middleware import invalidate_blocked_ips_cache
 from .auth_utils import prehash_password
 from .username_utils import normalize
+from .user_rename import rename_user_and_update_quotes
 
 
 # ---------------------------------------------------------------------------
@@ -1285,10 +1286,12 @@ def pm_delete(request, box_id):
 def root_config(request):
     """Root-only view to toggle site-wide settings."""
     from .models import SiteConfig
+    from django.core.exceptions import ValidationError
     if not request.user.is_authenticated or not request.user.is_root:
         return HttpResponseForbidden()
 
     cfg = SiteConfig.get()
+    all_users = User.objects.order_by("username")
     empty_users = User.objects.filter(
         is_root=False,
         posts__isnull=True,
@@ -1302,6 +1305,23 @@ def root_config(request):
         action = request.POST.get("action")
         if action == "flush_reset_codes":
             PasswordResetCode.objects.all().delete()
+        elif action == "rename_user":
+            user_id = request.POST.get("rename_user_id", "")
+            new_username = request.POST.get("new_username", "")
+            try:
+                target_user = all_users.get(pk=int(user_id))
+                result = rename_user_and_update_quotes(target_user, new_username)
+            except (ValueError, User.DoesNotExist):
+                messages.error(request, "Nie wybrano poprawnego użytkownika.")
+            except ValidationError as exc:
+                messages.error(request, "; ".join(exc.messages))
+            else:
+                messages.success(
+                    request,
+                    f"Zmieniono nick '{result['old_username']}' → "
+                    f"'{result['new_username']}'. Poprawiono {result['tags_changed']} "
+                    f"tagów quote w {result['posts_changed']} postach."
+                )
         elif action == "delete_empty_users":
             selected_ids = [
                 int(user_id) for user_id in request.POST.getlist("user_ids") if user_id.isdigit()
@@ -1330,6 +1350,7 @@ def root_config(request):
         "cfg": cfg,
         "SiteConfig": SiteConfig,
         "reset_codes_count": PasswordResetCode.objects.count(),
+        "all_users": all_users,
         "empty_users": empty_users,
     })
 
