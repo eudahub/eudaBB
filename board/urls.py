@@ -11,6 +11,7 @@ urlpatterns = [
     path("forum/<int:forum_id>/new/", views.new_topic, name="new_topic"),
     path("topic/<int:topic_id>/reply/", views.reply, name="reply"),
     path("topic/<int:topic_id>/preview/", views.preview_post, name="preview_post"),
+    path("post/<int:post_id>/quote-fragment/", views.quote_fragment, name="quote_fragment"),
     path("register/", views.register, name="register"),
     path("activate-ghost/", views.activate_ghost, name="activate_ghost"),
     path("activate/<str:token>/", views.activate_confirm, name="activate_confirm"),

@@ -4,6 +4,7 @@ from django.urls import reverse
 
 from .models import Forum, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
+from .quote_selection import extract_exact_quote_fragment
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
 
@@ -166,3 +167,15 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Cytuj")
         self.assertContains(response, f'data-post-id="{post.pk}"')
         self.assertContains(response, 'data-post-content="1"')
+
+    def test_extract_exact_quote_fragment_for_plain_text(self):
+        fragment = extract_exact_quote_fragment("abc def ghi", "def")
+        self.assertEqual(fragment, "def")
+
+    def test_extract_exact_quote_fragment_keeps_inline_tags(self):
+        fragment = extract_exact_quote_fragment("[b]abc[/b] [i]def[/i]", "abc def")
+        self.assertEqual(fragment, "[b]abc[/b] [i]def[/i]")
+
+    def test_extract_exact_quote_fragment_falls_back_for_nested_quote(self):
+        fragment = extract_exact_quote_fragment('[quote="A"]abc[/quote] def', "abc")
+        self.assertIsNone(fragment)

@@ -24,6 +24,7 @@ from .auth_utils import prehash_password
 from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
 from .quote_refs import rebuild_quote_references_for_post
+from .quote_selection import extract_exact_quote_fragment, normalize_selected_text
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +259,23 @@ def preview_post(request, topic_id):
         "html": html,
         "content": repaired,
         "changes": changes,
+    })
+
+
+@login_required
+def quote_fragment(request, post_id):
+    from django.http import JsonResponse
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST only"}, status=405)
+
+    post = get_object_or_404(Post.objects.only("pk", "content_bbcode"), pk=post_id)
+    selected_text = normalize_selected_text(request.POST.get("selected_text", ""))
+    fragment = extract_exact_quote_fragment(post.content_bbcode or "", selected_text)
+
+    return JsonResponse({
+        "ok": True,
+        "body": fragment or selected_text,
+        "exact_source": bool(fragment),
     })
 
 

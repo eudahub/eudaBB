@@ -157,14 +157,8 @@ function buildQuoteTag(author, postId, body) {
   return '[quote="' + author + '" post_id=' + postId + ']\n' + body + '\n[/quote]\n\n';
 }
 
-function quotePost(btn) {
-  var postBox = btn.closest('.post-box');
-  var author = btn.getAttribute('data-author') || '';
-  var postId = btn.getAttribute('data-post-id') || '';
-  var selectedText = getSelectionWithinPost(postBox);
-  var body = selectedText || (btn.getAttribute('data-bbcode') || '').trim();
+function storeQuoteAndOpenEditor(author, postId, body) {
   if (!body) return;
-
   var keyDraft = 'reply_draft_{{ topic.pk }}';
   var keyQuote = 'reply_quote_{{ topic.pk }}';
   var existingDraft = '';
@@ -173,6 +167,30 @@ function quotePost(btn) {
   sessionStorage.setItem(keyDraft, existingDraft);
   sessionStorage.setItem(keyQuote, buildQuoteTag(author, postId, body));
   window.location.href = '{% url "reply" topic.pk %}';
+}
+
+function quotePost(btn) {
+  var postBox = btn.closest('.post-box');
+  var author = btn.getAttribute('data-author') || '';
+  var postId = btn.getAttribute('data-post-id') || '';
+  var selectedText = getSelectionWithinPost(postBox);
+  if (!selectedText) {
+    storeQuoteAndOpenEditor(author, postId, (btn.getAttribute('data-bbcode') || '').trim());
+    return;
+  }
+
+  fetch('{% url "quote_fragment" 0 %}'.replace('/0/', '/' + postId + '/'), {
+    method: 'POST',
+    headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'selected_text=' + encodeURIComponent(selectedText)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    storeQuoteAndOpenEditor(author, postId, (data && data.body) ? data.body : selectedText);
+  })
+  .catch(function() {
+    storeQuoteAndOpenEditor(author, postId, selectedText);
+  });
 }
 </script>
 {% endblock %}
