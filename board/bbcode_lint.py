@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 PAIRED_TAGS = {
     'b', 'i', 'u', 's', 'sub', 'sup', 'center',
     'color', 'size', 'font',
-    'code', 'quote', 'fquote', 'bible', 'spoiler',
+    'code', 'quote', 'fquote', 'bible', 'ai', 'spoiler',
     'url', 'img', 'youtube',
     'list',
 }
@@ -70,7 +70,12 @@ class Token:
         if self.type == 'text':
             return self.text
         slash = '/' if self.closing else ''
-        name = 'Bible' if self.name == 'bible' else self.name
+        if self.name == 'bible':
+            name = 'Bible'
+        elif self.name == 'ai':
+            name = 'AI'
+        else:
+            name = self.name
         opt = f'={self.option}' if self.option else ''
         return f'[{slash}{name}{opt}]'
 
@@ -160,6 +165,14 @@ def repair(text: str) -> tuple[str, list[str]]:
                 option=tok.option,
             )
             all_changes.append('Poprawiono znacznik [bbile] na [Bible]')
+        if tok.type == 'tag' and tok.name == 'ai':
+            tok = Token(
+                type='tag',
+                text=tok.text,
+                closing=tok.closing,
+                name='ai',
+                option=tok.option,
+            )
         if tok.type == 'tag':
             if not tok.closing:
                 context.append(tok.name)

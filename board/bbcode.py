@@ -161,7 +161,12 @@ _parser.add_formatter("fquote", _render_fquote, render_embedded=True,
 # ---------------------------------------------------------------------------
 
 def _render_bible(tag_name, value, options, parent, context):
-    ref = (options.get("bible") or "").strip()
+    ref = (
+        options.get("bible")
+        or options.get("Bible")
+        or options.get(tag_name)
+        or ""
+    ).strip()
     if len(ref) >= 2 and ref[0] == '"' and ref[-1] == '"':
         ref = ref[1:-1].strip()
     label = f'<cite class="bbquote-cite bbquote-cite--bible">{ref}</cite>' if ref else ""
@@ -172,6 +177,34 @@ def _render_bible(tag_name, value, options, parent, context):
 
 
 _parser.add_formatter("bible", _render_bible, render_embedded=True,
+                      swallow_trailing_newline=True)
+_parser.add_formatter("Bible", _render_bible, render_embedded=True,
+                      swallow_trailing_newline=True)
+
+
+# ---------------------------------------------------------------------------
+# [ai=Label]  — AI quote/note
+# ---------------------------------------------------------------------------
+
+def _render_ai(tag_name, value, options, parent, context):
+    ref = (
+        options.get("ai")
+        or options.get("AI")
+        or options.get(tag_name)
+        or ""
+    ).strip()
+    if len(ref) >= 2 and ref[0] == '"' and ref[-1] == '"':
+        ref = ref[1:-1].strip()
+    label = f'<cite class="bbquote-cite bbquote-cite--ai">{ref}</cite>' if ref else ""
+    return (
+        f'{label}'
+        f'<div class="bbquote--ai">{value}</div>'
+    )
+
+
+_parser.add_formatter("ai", _render_ai, render_embedded=True,
+                      swallow_trailing_newline=True)
+_parser.add_formatter("AI", _render_ai, render_embedded=True,
                       swallow_trailing_newline=True)
 
 
