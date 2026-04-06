@@ -179,3 +179,31 @@ class UserRenameTests(TestCase):
     def test_extract_exact_quote_fragment_falls_back_for_nested_quote(self):
         fragment = extract_exact_quote_fragment('[quote="A"]abc[/quote] def', "abc")
         self.assertIsNone(fragment)
+
+    def test_quote_fragment_endpoint_returns_exact_source_when_safe(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        reader = User.objects.create_user(username="Czytelnik", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="[b]abc[/b] [i]def[/i]",
+            post_order=1,
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.post(
+            reverse("quote_fragment", args=[post.pk]),
+            {"selected_text": "abc def"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(
+            response.content,
+            {
+                "ok": True,
+                "body": "[b]abc[/b] [i]def[/i]",
+                "exact_source": True,
+            },
+        )
