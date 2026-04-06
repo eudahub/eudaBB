@@ -70,8 +70,9 @@ class Token:
         if self.type == 'text':
             return self.text
         slash = '/' if self.closing else ''
+        name = 'Bible' if self.name == 'bible' else self.name
         opt = f'={self.option}' if self.option else ''
-        return f'[{slash}{self.name}{opt}]'
+        return f'[{slash}{name}{opt}]'
 
 
 def _tokenize(text: str) -> list[Token]:
@@ -150,6 +151,15 @@ def repair(text: str) -> tuple[str, list[str]]:
     new_tokens: list[Token] = []
 
     for tok in tokens:
+        if tok.type == 'tag' and tok.name == 'bbile':
+            tok = Token(
+                type='tag',
+                text=tok.text,
+                closing=tok.closing,
+                name='bible',
+                option=tok.option,
+            )
+            all_changes.append('Poprawiono znacznik [bbile] na [Bible]')
         if tok.type == 'tag':
             if not tok.closing:
                 context.append(tok.name)

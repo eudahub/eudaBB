@@ -161,12 +161,13 @@ _parser.add_formatter("fquote", _render_fquote, render_embedded=True,
 # ---------------------------------------------------------------------------
 
 def _render_bible(tag_name, value, options, parent, context):
-    ref = (options.get("bible") or "").strip() or "Biblia"
+    ref = (options.get("bible") or "").strip()
+    if len(ref) >= 2 and ref[0] == '"' and ref[-1] == '"':
+        ref = ref[1:-1].strip()
+    label = f'<cite class="bbquote-cite bbquote-cite--bible">{ref}</cite>' if ref else ""
     return (
-        f'<blockquote class="bbquote bbquote--bible">'
-        f'<cite>{ref}</cite>'
-        f'{value}'
-        f'</blockquote>'
+        f'{label}'
+        f'<div class="bbquote--bible">{value}</div>'
     )
 
 
