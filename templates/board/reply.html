@@ -11,14 +11,141 @@
 
 <h2>Odpowiedź w: {{ topic.title }}</h2>
 
-<form method="post">
+<form method="post" id="reply-form">
   {% csrf_token %}
-  {% for field in form %}
-    <label>{{ field.label }}{{ field }}
-      {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
-    </label>
-  {% endfor %}
-  <button type="submit">Wyślij odpowiedź</button>
-  <a href="{% url 'topic_detail' topic.pk %}" role="button" class="secondary outline" style="margin-left:.5rem;">Anuluj</a>
+
+  {# BBCode toolbar #}
+  <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
+    <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
+    <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
+    <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
+    <button type="button" class="bb-btn" data-open="[quote]" data-close="[/quote]">Cytat</button>
+    <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
+    <button type="button" class="bb-btn" data-open="[Bible=]" data-close="[/Bible]">Bible</button>
+    <button type="button" class="bb-btn" data-open="[ai]" data-close="[/ai]">AI</button>
+  </div>
+
+  <textarea id="reply-content" name="content" rows="12"
+            style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"></textarea>
+  {% if form.content.errors %}
+    <small style="color:red;">{{ form.content.errors|join:", " }}</small>
+  {% endif %}
+
+  <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;">
+    <button type="button" onclick="doPreview()">Podgląd</button>
+    <button type="button" onclick="doValidate()">Walidacja</button>
+    <button type="submit">Wyślij</button>
+    <a href="{% url 'topic_detail' topic.pk %}" style="margin-left:auto;">Anuluj</a>
+  </div>
 </form>
+
+{# Preview area #}
+<div id="preview-area" style="display:none;margin-top:.6rem;">
+  <strong style="font-size:11px;color:#555;">Podgląd:</strong>
+  <div id="preview-content"
+       style="border:1px solid #BC8F8F;padding:.4rem .6rem;margin-top:.2rem;
+              font-size:12px;line-height:18px;background:#fffcfc;"></div>
+</div>
+
+{# Validation area #}
+<div id="validate-area" style="display:none;margin-top:.4rem;font-size:11px;"></div>
+
+<hr style="margin:.8rem 0;">
+
+{# Recent posts - scrollable #}
+<strong style="font-size:11px;color:#555;">Ostatnie posty w wątku:</strong>
+<div style="max-height:320px;overflow-y:scroll;border:1px solid #BC8F8F;
+            margin-top:.3rem;font-size:11px;line-height:1.5;">
+  {% load bbcode_tags %}
+  {% for post in recent_posts %}
+  <div style="padding:.3rem .5rem;border-bottom:1px solid #e0d0d0;
+              {% if forloop.last %}border-bottom:none;{% endif %}">
+    <span style="color:#800000;font-weight:bold;">{{ post.author.username|default:"[usunięty]" }}</span>
+    <span style="color:#888;margin-left:.4rem;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
+    <div style="margin-top:.2rem;">{{ post|post_content }}</div>
+  </div>
+  {% empty %}
+    <p style="padding:.3rem .5rem;color:#888;">Brak postów.</p>
+  {% endfor %}
+</div>
+
+<script>
+// Load draft from quick reply
+(function(){
+  var key = 'reply_draft_{{ topic.pk }}';
+  var draft = sessionStorage.getItem(key);
+  if (draft) {
+    document.getElementById('reply-content').value = draft;
+    sessionStorage.removeItem(key);
+  }
+})();
+
+// BBCode toolbar
+document.querySelectorAll('.bb-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var ta = document.getElementById('reply-content');
+    var open = btn.getAttribute('data-open');
+    var close = btn.getAttribute('data-close');
+    var start = ta.selectionStart, end = ta.selectionEnd;
+    var sel = ta.value.substring(start, end);
+    var replacement = open + sel + close;
+    ta.setRangeText(replacement, start, end, 'select');
+    ta.focus();
+    // Position cursor inside tag if no selection
+    if (start === end) {
+      ta.selectionStart = start + open.length;
+      ta.selectionEnd = start + open.length;
+    }
+  });
+});
+
+// Preview (AJAX)
+function doPreview() {
+  var text = document.getElementById('reply-content').value;
+  var area = document.getElementById('preview-area');
+  var content = document.getElementById('preview-content');
+  fetch('{% url "preview_post" topic.pk %}', {
+    method: 'POST',
+    headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'content=' + encodeURIComponent(text)
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    content.innerHTML = d.html || '';
+    area.style.display = 'block';
+  });
+}
+
+// Validation (client-side: check balanced tags)
+function doValidate() {
+  var text = document.getElementById('reply-content').value;
+  var area = document.getElementById('validate-area');
+  var re = /\[(\/?[a-z]+)[^\]]*\]/gi;
+  var stack = [];
+  var errors = [];
+  var m;
+  var selfClose = {'*': true, 'hr': true};
+  while ((m = re.exec(text)) !== null) {
+    var tag = m[1].toLowerCase();
+    if (tag.startsWith('/')) {
+      var closing = tag.slice(1);
+      if (selfClose[closing]) continue;
+      if (stack.length && stack[stack.length-1] === closing) {
+        stack.pop();
+      } else {
+        errors.push('Nieoczekiwany tag zamykający: [' + m[1] + ']');
+      }
+    } else {
+      if (!selfClose[tag]) stack.push(tag);
+    }
+  }
+  stack.forEach(function(t){ errors.push('Niezamknięty tag: [' + t + ']'); });
+  if (errors.length === 0) {
+    area.innerHTML = '<span style="color:green;">✓ Tagi poprawne</span>';
+  } else {
+    area.innerHTML = '<span style="color:red;">' + errors.join('<br>') + '</span>';
+  }
+  area.style.display = 'block';
+}
+</script>
 {% endblock %}

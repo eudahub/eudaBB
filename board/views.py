@@ -216,7 +216,27 @@ def reply(request, topic_id):
     else:
         form = ReplyForm()
 
-    return render(request, "board/reply.html", {"topic": topic, "form": form})
+    posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+    recent_posts = (
+        topic.posts.select_related("author")
+        .order_by("-post_order")[:posts_per_page]
+    )
+    return render(request, "board/reply.html", {
+        "topic": topic,
+        "form": form,
+        "recent_posts": recent_posts,
+    })
+
+
+def preview_post(request, topic_id):
+    """AJAX: render BBCode text to HTML for preview."""
+    from django.http import JsonResponse
+    from .bbcode import render as bbcode_render
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+    text = request.POST.get("content", "")
+    html = bbcode_render(text)
+    return JsonResponse({"html": html})
 
 
 def contact(request):

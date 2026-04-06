@@ -105,7 +105,7 @@ class NewTopicForm(forms.Form):
 
 
 class ReplyForm(forms.Form):
-    content = forms.CharField(widget=forms.Textarea(attrs={"rows": 8}), label="Odpowiedź (BBCode)")
+    content = forms.CharField(widget=forms.Textarea(attrs={"rows": 8}), label="Treść")
 
     def __init__(self, *args, original_size: int = 0, **kwargs):
         super().__init__(*args, **kwargs)

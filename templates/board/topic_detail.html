@@ -98,16 +98,27 @@
 
 {% if reply_form %}
   <hr>
-  <h3>Odpowiedz</h3>
-  <form method="post" action="{% url 'reply' topic.pk %}">
+  <h3>Szybka odpowiedź</h3>
+  <form id="quick-reply-form" method="post" action="{% url 'reply' topic.pk %}">
     {% csrf_token %}
-    {% for field in reply_form %}
-      <label>{{ field.label }}{{ field }}
-        {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
-      </label>
-    {% endfor %}
-    <button type="submit">Wyślij odpowiedź</button>
+    <textarea id="quick-reply-text" name="content" rows="4"
+              style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"
+              placeholder="Wpisz odpowiedź w BBCode…"></textarea>
+    {% if reply_form.content.errors %}
+      <small style="color:red;">{{ reply_form.content.errors|join:", " }}</small>
+    {% endif %}
+    <div style="margin-top:.3rem;display:flex;gap:.4rem;">
+      <button type="button" onclick="goFullEditor()">Pełny edytor i podgląd</button>
+      <button type="submit">Wyślij</button>
+    </div>
   </form>
+  <script>
+  function goFullEditor() {
+    var text = document.getElementById('quick-reply-text').value;
+    sessionStorage.setItem('reply_draft_{{ topic.pk }}', text);
+    window.location.href = '{% url "reply" topic.pk %}';
+  }
+  </script>
 {% elif not user.is_authenticated %}
   <p><a href="{% url 'login' %}">Zaloguj się</a>, aby odpowiedzieć.</p>
 {% endif %}
