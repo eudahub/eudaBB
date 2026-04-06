@@ -94,6 +94,12 @@ def _render_quote(tag_name, value, options, parent, context):
             post_id = m.group("post_id") or ""
             ts      = m.group("time")    or ""
 
+    # bbcode library splits [quote="Author" post_id=N time=T] into separate options
+    if not post_id:
+        post_id = str(options.get("post_id", "") or "").strip()
+    if not ts:
+        ts = str(options.get("time", "") or "").strip()
+
     not_found = (post_id.lower() == "not_found") if post_id else False
 
     if author and post_id and not not_found and ts:
