@@ -377,6 +377,93 @@ Niski — zrobić po ustabilizowaniu wersji webowej. Read-only API jako pierwszy
   - jeśli usuwany jest tylko podcytat, zostawić nadcytat bez rozwalania reszty posta
 - Najpewniej wymaga to parsera/transformacji BBCode na drzewo, nie prostego regex replace.
 
+### Cytaty — ergonomia i naprawa po ręcznej edycji
+
+#### `quote-correct` — naprawa cytatu po przypadkowej zmianie tekstu
+
+Problem:
+- user cytuje fragment, potem ręcznie coś dopisuje/usuwa
+- albo cytuje cały post i ręcznie tnie go na kilka cytatów
+- obecna walidacja może wtedy odrzucić cytat mimo dobrych intencji
+
+Kierunek:
+- dodać przycisk `quote-correct` w pełnym edytorze, działający na aktualnym polu tekstowym
+- skanować wszystkie tagi `[quote="X" post_id=N]...[/quote]`
+- dla każdego cytatu spróbować ponownie dopasować treść do posta `N`
+
+Strategia naprawy:
+- jeśli cytat już przechodzi walidację: nic nie rób
+- jeśli nie przechodzi:
+  - spróbuj znaleźć w poście źródłowym najbardziej podobny fragment
+  - pozwól na ellipsis (`...`, `…`, `/.../`, `(...)`)
+  - jeśli dopasowanie jest jednoznaczne i mocne: podmień treść cytatu na wersję kanoniczną
+  - jeśli niejednoznaczne: pokaż komunikat, bez automatycznej podmiany
+
+Wersja techniczna:
+- nie robić tego regexem po surowym stringu
+- użyć parsera quote/fquote/Bible na drzewo lub listę bloków
+- porównywać tekst po normalizacji:
+  - usunięcie diakrytyków
+  - kolaps whitespace
+  - usunięcie tagów BBCode z wyjątkiem zachowywanych inline
+- jako miarę podobieństwa rozważyć:
+  - najpierw dokładne dopasowanie z ellipsis
+  - potem longest common subsequence / fragment overlap
+- `quote-correct` powinien działać wyłącznie dla cytatów z `post_id`
+
+#### Cytowanie z listy postów w pełnym edytorze
+
+Problem:
+- na dole pełnego edytora jest lista ostatnich postów
+- user powinien móc zaznaczać różne fragmenty z różnych postów i dokładać je na koniec pola edycji
+- nie powinno to wywalać go z edytora ani nadpisywać własnej treści
+
+Plan:
+- dodać przycisk `Cytuj` przy każdym poście na dole ekranu pełnego edytora
+- zachowanie:
+  - zaznaczenie w obrębie danego posta → dopisz cytat na koniec textarea
+  - brak zaznaczenia → dopisz cały post
+  - wiele kliknięć z różnych postów → kolejne cytaty dopinane jeden po drugim
+- nie przechodzimy wtedy do nowego widoku; wszystko dzieje się lokalnie w edytorze
+
+Szczegóły:
+- użyć tego samego endpointu/serwerowej logiki co w normalnym widoku (`quote_fragment`)
+- selekcja ma działać tylko w obrębie klikniętego posta
+- po dopięciu cytatu:
+  - focus wraca do textarea
+  - scroll do końca pola
+  - zachowujemy dotychczasową treść usera bez ingerencji
+
+#### `fquote` — celowe ograniczenie funkcjonalności
+
+Założenie:
+- `fquote` ma służyć tylko do cytowania źródeł zewnętrznych
+- nie może być wygodnym obejściem walidowanych cytatów forumowych
+
+Ograniczenia do wdrożenia:
+- wewnątrz `fquote` zakazać:
+  - `[quote]`
+  - `[fquote]`
+  - `[Bible]`
+  - `[AI]`
+  - `[youtube]`
+  - `[img]`
+  - `[code]`
+  - `[spoiler]`
+  - list i innych bloków zagnieżdżonych
+- zostawić tylko prosty tekst i podstawowe inline:
+  - `[b]`, `[i]`, `[u]`, ewentualnie `[url]`
+
+Walidacja:
+- dodać osobny check w `bbcode_lint` / parserze cytatów:
+  - jeśli w środku `fquote` są niedozwolone tagi → błąd walidacji
+- przy renderze nie próbować "naprawiać" złożonego `fquote`; ma być twardy błąd
+
+UI:
+- w toolbarze zostawić `fquote`, ale opisać go jako:
+  - „cytat zewnętrzny”
+  - bez cytatów zagnieżdżonych i bez treści forumowych
+
 ### Priorytet
 
 - Później, po ustabilizowaniu podstawowego flow rejestracji i administracji użytkownikami.
