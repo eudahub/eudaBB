@@ -50,15 +50,49 @@ class RegisterForm(UserCreationForm):
         return proposed
 
 
-def _validate_post_content(content: str, original_size: int = 0) -> str:
-    """Repair BBCode, validate markup, then check size limits.
+def validate_post_content(content: str, original_size: int = 0) -> tuple[str, list[str], list[str]]:
+    """Repair and validate post content.
 
-    Returns repaired content if valid; raises ValidationError otherwise.
+    Returns (repaired_content, auto_changes, errors).
     original_size — byte length of the existing post being edited (0 for new posts).
     """
     from .bbcode_lint import repair_and_validate
 
     repaired, changes, errors = repair_and_validate(content)
+
+    if errors:
+        return repaired, changes, [str(e) for e in errors]
+
+    content = repaired
+
+    hard = getattr(settings, "POST_CONTENT_HARD_MAX_BYTES", 64 * 1024)
+    soft = getattr(settings, "POST_CONTENT_SOFT_MAX_BYTES", 20_000)
+
+    new_size = len(content.encode("utf-8"))
+
+    if new_size > hard:
+        return content, changes, [
+            f"Treść za długa: {new_size} B (twardy limit: {hard // 1024} kB)."
+        ]
+
+    allowed = max(original_size, soft)
+    if new_size > allowed:
+        if original_size > soft:
+            return content, changes, [
+                f"Treść za długa: {new_size} B. Post miał {original_size} B — "
+                f"przy edycji można tylko zmniejszyć (max {original_size} B)."
+            ]
+        else:
+            return content, changes, [
+                f"Treść za długa: {new_size} B (limit: {soft} B = {soft // 1000} kB)."
+            ]
+
+    return content, changes, []
+
+
+def _validate_post_content(content: str, original_size: int = 0) -> str:
+    """Return cleaned content or raise ValidationError for form usage."""
+    repaired, changes, errors = validate_post_content(content, original_size)
 
     if errors:
         error_lines = "\n".join(f"• {e}" for e in errors)
@@ -69,31 +103,7 @@ def _validate_post_content(content: str, original_size: int = 0) -> str:
             f"Błędy w kodzie BBCode:\n{error_lines}{hint}"
         )
 
-    content = repaired
-
-    hard = getattr(settings, "POST_CONTENT_HARD_MAX_BYTES", 64 * 1024)
-    soft = getattr(settings, "POST_CONTENT_SOFT_MAX_BYTES", 20_000)
-
-    new_size = len(content.encode("utf-8"))
-
-    if new_size > hard:
-        raise forms.ValidationError(
-            f"Treść za długa: {new_size} B (twardy limit: {hard // 1024} kB)."
-        )
-
-    allowed = max(original_size, soft)
-    if new_size > allowed:
-        if original_size > soft:
-            raise forms.ValidationError(
-                f"Treść za długa: {new_size} B. Post miał {original_size} B — "
-                f"przy edycji można tylko zmniejszyć (max {original_size} B)."
-            )
-        else:
-            raise forms.ValidationError(
-                f"Treść za długa: {new_size} B (limit: {soft} B = {soft // 1000} kB)."
-            )
-
-    return content
+    return repaired
 
 
 class NewTopicForm(forms.Form):

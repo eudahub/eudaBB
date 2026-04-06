@@ -157,6 +157,24 @@ _parser.add_formatter("fquote", _render_fquote, render_embedded=True,
 
 
 # ---------------------------------------------------------------------------
+# [bible=Ref]  — scripture quote with reference
+# ---------------------------------------------------------------------------
+
+def _render_bible(tag_name, value, options, parent, context):
+    ref = (options.get("bible") or "").strip() or "Biblia"
+    return (
+        f'<blockquote class="bbquote bbquote--bible">'
+        f'<cite>{ref}</cite>'
+        f'{value}'
+        f'</blockquote>'
+    )
+
+
+_parser.add_formatter("bible", _render_bible, render_embedded=True,
+                      swallow_trailing_newline=True)
+
+
+# ---------------------------------------------------------------------------
 # [spoiler] / [spoiler=Label]
 # ---------------------------------------------------------------------------
 

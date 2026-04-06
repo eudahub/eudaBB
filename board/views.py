@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.conf import settings
 
 from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox
-from .forms import RegisterForm, NewTopicForm, ReplyForm
+from .forms import RegisterForm, NewTopicForm, ReplyForm, validate_post_content
 from .email_utils import mask_email, mask_email_variants
 from .spam_utils import get_author_spam_filter, filter_forums
 from .middleware import invalidate_blocked_ips_cache
@@ -229,14 +229,26 @@ def reply(request, topic_id):
 
 
 def preview_post(request, topic_id):
-    """AJAX: render BBCode text to HTML for preview."""
+    """AJAX: validate and render BBCode text with the same rules as form submit."""
     from django.http import JsonResponse
     from .bbcode import render as bbcode_render
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
     text = request.POST.get("content", "")
-    html = bbcode_render(text)
-    return JsonResponse({"html": html})
+    repaired, changes, errors = validate_post_content(text)
+    if errors:
+        return JsonResponse({
+            "ok": False,
+            "errors": errors,
+            "changes": changes,
+        })
+    html = bbcode_render(repaired)
+    return JsonResponse({
+        "ok": True,
+        "html": html,
+        "content": repaired,
+        "changes": changes,
+    })
 
 
 def contact(request):

@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 PAIRED_TAGS = {
     'b', 'i', 'u', 's', 'sub', 'sup', 'center',
     'color', 'size', 'font',
-    'code', 'quote', 'fquote', 'spoiler',
+    'code', 'quote', 'fquote', 'bible', 'spoiler',
     'url', 'img', 'youtube',
     'list',
 }
