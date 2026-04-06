@@ -56,6 +56,7 @@
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       btn.disabled = true;
+      btn.textContent = 'Hashowanie… (Argon2)';
       var username = document.getElementById('reset-username').value;
       var p1 = document.getElementById('reset-pw1');
       var p2 = document.getElementById('reset-pw2');
