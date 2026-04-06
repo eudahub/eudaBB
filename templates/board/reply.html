@@ -39,10 +39,12 @@
     <small style="color:red;">{{ form.content.errors|join:", " }}</small>
   {% endif %}
 
-  <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;">
-    <button type="button" onclick="doPreview()">Podgląd</button>
-    <button type="button" onclick="doValidate()">Walidacja</button>
-    <button type="submit">Wyślij</button>
+  <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+    <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:nowrap;">
+      <button type="button" onclick="doPreview()" style="width:auto;flex:0 0 auto;">Podgląd</button>
+      <button type="button" onclick="doValidate()" style="width:auto;flex:0 0 auto;">Walidacja</button>
+      <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Wyślij</button>
+    </div>
     <a href="{% url 'topic_detail' topic.pk %}" style="margin-left:auto;">Anuluj</a>
   </div>
 </form>
