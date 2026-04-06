@@ -120,6 +120,59 @@ if not settings.TEST_MODE:
 - Dostęp: tylko zalogowani (ochrona przed DDoS/scraping)
 - Paginacja wyników
 
+#### Podtryby wyszukiwania postów
+
+Poza zwykłym trybem „cały post” dodać także bardziej precyzyjne warianty:
+
+1. **Tylko własny tekst autora**
+- przeszukujemy wyłącznie tekst napisany przez autora posta
+- pomijamy bloki:
+  - `[quote]`
+  - `[fquote]`
+  - `[Bible]`
+  - ewentualnie także `[AI]`, jeśli uznamy to za cytat zewnętrzny/notę
+- wynik nadal wskazuje cały post, ale match liczony jest tylko na „tekst własny”
+- technicznie:
+  - potrzebna osobna znormalizowana treść `content_author_only`
+  - najlepiej generowana parserem BBCode, nie regexem ad hoc
+
+2. **Tylko posty z cytatami biblijnymi**
+- wyszukujemy wyłącznie w treści bloków `[Bible=...]...[/Bible]`
+- wynikami są tylko posty, które zawierają cytat biblijny pasujący do zapytania
+- nie przeszukujemy wtedy reszty posta
+- technicznie:
+  - wyciągać i indeksować same treści Bible do osobnej tabeli / indeksu
+  - wynik nadal prowadzi do posta źródłowego
+
+3. **Tylko posty z foreign quote (`fquote`)**
+- wyszukujemy wyłącznie w treści bloków `[fquote]...[/fquote]`
+- wynikami są tylko posty, które zawierają pasujący `fquote`
+- nie przeszukujemy wtedy tekstu własnego autora ani zwykłych `[quote]`
+
+4. **Tylko cytaty jako obiekty**
+- zamiast szukać po całych postach, szukamy po tabeli cytatów / indeksie cytowań
+- wynik może być:
+  - post + podgląd konkretnego cytatu
+  - albo osobna lista „trafionych cytatów” z linkiem do posta
+- warianty:
+  - tylko `Bible`
+  - tylko `fquote`
+  - docelowo także zwykłe `quote`
+
+#### Osobna tabela / indeks dla treści cytowanych
+
+- obecna tabela `forum_quote_refs` przechowuje metadane cytatu, ale nie samą treść
+- dla wyszukiwania po cytatach trzeba rozważyć osobną tabelę indeksową, np.:
+  - `post_id`
+  - `quote_type` (`quote` / `fquote` / `Bible`)
+  - `depth`
+  - `quote_index`
+  - `content_plain` / `content_norm`
+  - opcjonalnie `author_label`
+  - opcjonalnie `source_post_id`
+- dla `Bible` i `fquote` taka tabela może być głównym źródłem wyszukiwania
+- dla trybu „tylko własny tekst autora” potrzebny osobny indeks treści bez cytatów
+
 **B) Wyszukiwanie wątków** (po tytule)
 - Szukać wyłącznie po `Topic.title`, nie po treści postów z wątku
 - Wątek ma mieć jeden stabilny tytuł, wspólny dla wszystkich postów
