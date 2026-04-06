@@ -662,6 +662,74 @@ Zakres na dziś:
 - tylko warning / sugestia
 - bez automatycznej zamiany bez zgody usera
 
+#### Akcje przy poście — małe ikonki w prawym górnym rogu
+
+Oprócz obecnego „Pokaż BBCode” docelowo ma być zestaw małych ikonek akcji
+w prawym górnym rogu posta.
+
+Założenia UI:
+- małe ikonki zamiast dużych przycisków tekstowych
+- każda ikonka ma mieć `title` / hint
+- przy dużej liczbie akcji pełny zestaw może być widoczny głównie dla moderatora/admina
+- dla zwykłego usera pokazywać tylko te akcje, które mają sens bez uprawnień moderatorskich
+
+Kolejność od lewej:
+
+1. **Ikonka pisaka** — edytuj treść posta
+- hint: „Zmień treść posta”
+- zwykły user:
+  - może edytować tylko swój post
+  - ma limit czasu, np. 7 minut od publikacji
+  - limit ustawia administrator
+- moderator:
+  - może edytować także cudze posty
+
+2. **Ikonka `X`** — usuń post
+- tylko moderatorzy
+- później do spięcia z renumeracją `post_order`, licznikami i obsługą cytatów
+
+3. **Ikonka wykrzyknika** — zgłoś post
+- dostępna dla każdego
+- można dopuścić zgłaszanie także własnego posta
+- później potrzebny model zgłoszeń / kolejka moderacyjna
+
+4. **Ikonka znaku ostrzegawczego** — udziel ostrzeżenia
+- tylko moderatorzy
+- ostrzeżenie dla autora posta
+- później potrzebny model warningów, historia i progi sankcji
+
+5. **Ikonka `i`** — informacje moderatorskie
+- tylko moderatorzy
+- głównie:
+  - lista IP, z których pisał ten user
+  - inni userzy piszący z tych samych IP
+- później można rozszerzyć o:
+  - historię warningów
+  - powiązane konta
+  - aktywność spamową
+
+6. **Ikonka cytatu** — odpowiedz z cytatem
+- szybkie przejście do reply z cytatem tego posta
+- jedna z podstawowych akcji użytkownika przy poście
+
+7. **Ikonka kciuka w górę** — plus / polubienie
+- tylko dla cudzych postów, nie dla własnych
+- później potrzebny model reakcji i licznik
+
+8. **Ikonka kodu źródłowego** — pokaż BBCode
+- obecna funkcja „Pokaż BBCode”
+- docelowo jako mała ikonka spójna z resztą zestawu
+
+Decyzje do dopracowania:
+- czy układ ma być dynamiczny zależnie od uprawnień
+- czy zwykły user ma widzieć tylko:
+  - odpowiedz z cytatem
+  - zgłoś post
+  - plus
+  - pokaż BBCode
+- czy moderator ma widzieć pełny pasek akcji
+- czy na mobile część akcji ma chować się do menu „więcej”
+
 ### Priorytet
 
 - Później, po ustabilizowaniu podstawowego flow rejestracji i administracji użytkownikami.
