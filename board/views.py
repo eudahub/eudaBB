@@ -5,6 +5,7 @@ from django.db import models as django_models
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.contrib import messages
 from django.http import HttpResponseForbidden
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
@@ -12,10 +13,15 @@ from django.utils import timezone
 from django.conf import settings
 
 from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox
-from .forms import RegisterForm, NewTopicForm, ReplyForm, validate_post_content
+from .forms import (
+    RegisterForm, RegisterStartForm, RegisterFinishForm,
+    NewTopicForm, ReplyForm, validate_post_content,
+)
 from .email_utils import mask_email, mask_email_variants
 from .spam_utils import get_author_spam_filter, filter_forums
 from .middleware import invalidate_blocked_ips_cache
+from .auth_utils import prehash_password
+from .username_utils import normalize
 
 
 # ---------------------------------------------------------------------------
@@ -338,32 +344,144 @@ def contact(request):
 
 def register(request):
     """User registration view."""
+    from .models import SiteConfig
     if request.user.is_authenticated:
         return redirect("/")
 
-    if request.method == "POST":
-        form = RegisterForm(request.POST)
-        if form.is_valid():
-            ghost_username = getattr(form, "_ghost_username", None)
-            if ghost_username:
-                # Ghost account: save password but don't activate yet.
-                # User must verify email ownership via activate_ghost view.
-                user = User.objects.get(username=ghost_username)
-                user.set_password(form.cleaned_data["password1"])
-                user.is_active = False
-                user.save(update_fields=["password", "is_active"])
-                return render(request, "registration/register.html", {
-                    "form": form,
-                    "ghost_username": ghost_username,
-                    "email_mask": mask_email(user.email) if user.email else None,
-                })
-            user = form.save()
-            login(request, user)
-            return redirect("/")
-    else:
-        form = RegisterForm()
+    pending = request.session.get("register_pending")
+    start_form = RegisterStartForm(initial=pending or None)
+    finish_form = RegisterFinishForm()
+    sent = False
+    test_code = None
+    error = None
 
-    return render(request, "registration/register.html", {"form": form})
+    def clear_pending_registration():
+        for key in (
+            "register_pending",
+            "register_code",
+            "register_code_sent_at",
+            "register_code_expires_at",
+            "register_code_attempts",
+        ):
+            request.session.pop(key, None)
+
+    def send_registration_code(username: str, email: str):
+        nonlocal sent, test_code
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        now = timezone.now()
+        request.session["register_code"] = code
+        request.session["register_code_sent_at"] = now.isoformat()
+        request.session["register_code_expires_at"] = (
+            now + timedelta(minutes=30)
+        ).isoformat()
+        request.session["register_code_attempts"] = 0
+        request.session.modified = True
+
+        cfg = SiteConfig.get()
+        if getattr(settings, "TEST_MODE", False) or cfg.reset_mode == SiteConfig.RESET_POPUP:
+            sent = True
+            test_code = code
+            return
+
+        send_mail(
+            subject="Kod rejestracyjny",
+            message=(
+                f"Twój kod rejestracyjny dla konta {username}: {code}\n\n"
+                f"Kod jest ważny przez 30 minut."
+            ),
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        sent = True
+
+    if request.method == "GET" and request.GET.get("reset") == "1":
+        clear_pending_registration()
+        pending = None
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action == "start":
+            start_form = RegisterStartForm(request.POST)
+            if start_form.is_valid():
+                clear_pending_registration()
+                request.session["register_pending"] = {
+                    "username": start_form.cleaned_data["username"],
+                    "email": start_form.cleaned_data["email"],
+                }
+                request.session.modified = True
+                return redirect("register")
+        elif action == "send_code":
+            if not pending:
+                return redirect("register")
+            start_form = RegisterStartForm(initial=pending)
+            finish_form = RegisterFinishForm()
+            send_registration_code(pending["username"], pending["email"])
+        elif action == "finish":
+            if not pending:
+                return redirect("register")
+            start_form = RegisterStartForm(initial=pending)
+            finish_form = RegisterFinishForm(request.POST)
+            code = request.session.get("register_code")
+            expires_at_raw = request.session.get("register_code_expires_at")
+            attempts = int(request.session.get("register_code_attempts", 0))
+            expires_at = None
+            if expires_at_raw:
+                try:
+                    expires_at = timezone.datetime.fromisoformat(expires_at_raw)
+                except ValueError:
+                    expires_at = None
+
+            if finish_form.is_valid():
+                username = pending["username"]
+                email = pending["email"]
+                # Re-check uniqueness at final submit to avoid races.
+                conflict_name = User.objects.filter(
+                    username_normalized=normalize(username)
+                ).exists()
+                conflict_email = User.objects.filter(email=email).exists()
+                if conflict_name:
+                    clear_pending_registration()
+                    error = "Taki nick został już zajęty w międzyczasie. Zacznij rejestrację od nowa."
+                elif conflict_email:
+                    clear_pending_registration()
+                    error = "Ten email został już użyty w międzyczasie. Zacznij rejestrację od nowa."
+                elif not code or not expires_at or timezone.now() >= expires_at:
+                    error = "Kod wygasł. Wyślij nowy kod."
+                elif attempts >= 10:
+                    error = "Zbyt wiele błędnych prób kodu. Wyślij nowy kod."
+                elif finish_form.cleaned_data["code"] != code:
+                    request.session["register_code_attempts"] = attempts + 1
+                    request.session.modified = True
+                    error = "Nieprawidłowy kod."
+                else:
+                    user = User(
+                        username=username,
+                        email=email,
+                        is_active=True,
+                    )
+                    password = finish_form.cleaned_data["password1"]
+                    if finish_form.cleaned_data.get("password_is_prehashed") == "1":
+                        user.set_password(password)
+                    else:
+                        user.set_password(prehash_password(password, username))
+                    user.save()
+                    clear_pending_registration()
+                    login(request, user)
+                    return redirect("/")
+
+    if pending:
+        start_form = RegisterStartForm(initial=pending)
+
+    return render(request, "registration/register.html", {
+        "start_form": start_form,
+        "finish_form": finish_form,
+        "pending": pending,
+        "sent": sent,
+        "test_code": test_code,
+        "error": error,
+    })
 
 
 def activate_ghost(request):
@@ -1171,11 +1289,37 @@ def root_config(request):
         return HttpResponseForbidden()
 
     cfg = SiteConfig.get()
+    empty_users = User.objects.filter(
+        is_root=False,
+        posts__isnull=True,
+        topics__isnull=True,
+        pm_boxes__isnull=True,
+        sent_pms__isnull=True,
+        received_pms__isnull=True,
+    ).distinct().order_by("username")
 
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "flush_reset_codes":
             PasswordResetCode.objects.all().delete()
+        elif action == "delete_empty_users":
+            selected_ids = [
+                int(user_id) for user_id in request.POST.getlist("user_ids") if user_id.isdigit()
+            ]
+            if selected_ids:
+                deletable = empty_users.filter(id__in=selected_ids)
+                deleted_count = deletable.count()
+                deletable.delete()
+                skipped = len(selected_ids) - deleted_count
+                if deleted_count:
+                    messages.success(
+                        request,
+                        f"Usunięto {deleted_count} pustych kont. Pominięto {skipped}."
+                    )
+                else:
+                    messages.warning(request, "Nie usunięto żadnego konta.")
+            else:
+                messages.warning(request, "Nie zaznaczono żadnego konta.")
         else:
             cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
             cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
@@ -1186,6 +1330,7 @@ def root_config(request):
         "cfg": cfg,
         "SiteConfig": SiteConfig,
         "reset_codes_count": PasswordResetCode.objects.count(),
+        "empty_users": empty_users,
     })
 
 

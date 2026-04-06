@@ -50,6 +50,59 @@ class RegisterForm(UserCreationForm):
         return proposed
 
 
+class RegisterStartForm(forms.Form):
+    username = forms.CharField(max_length=150, label="Nick")
+    email = forms.EmailField(label="Email")
+
+    def clean_username(self):
+        proposed = self.cleaned_data["username"]
+        norm_proposed = normalize(proposed)
+        conflict = User.objects.filter(username_normalized=norm_proposed).first()
+        if not conflict:
+            return proposed
+        if conflict.is_ghost:
+            raise forms.ValidationError(
+                f"To konto już istnieje w archiwum jako '{conflict.username}'. "
+                "Użyj odzyskiwania konta zamiast nowej rejestracji."
+            )
+        raise forms.ValidationError("Ta nazwa użytkownika jest już zajęta.")
+
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip().lower()
+        conflict = User.objects.filter(email=email).first()
+        if not conflict:
+            return email
+        if conflict.is_ghost:
+            raise forms.ValidationError(
+                "Ten email jest już przypisany do konta archiwalnego. "
+                "Użyj odzyskiwania konta zamiast nowej rejestracji."
+            )
+        raise forms.ValidationError("Ten email jest już przypisany do istniejącego konta.")
+
+
+class RegisterFinishForm(forms.Form):
+    code = forms.CharField(max_length=6, min_length=6, label="Kod", strip=True)
+    password1 = forms.CharField(widget=forms.PasswordInput, label="Hasło")
+    password2 = forms.CharField(widget=forms.PasswordInput, label="Powtórz hasło")
+    password_is_prehashed = forms.CharField(
+        required=False, widget=forms.HiddenInput, initial="0"
+    )
+
+    def clean_code(self):
+        code = self.cleaned_data["code"].strip()
+        if not code.isdigit():
+            raise forms.ValidationError("Kod musi składać się z 6 cyfr.")
+        return code
+
+    def clean(self):
+        cleaned = super().clean()
+        p1 = cleaned.get("password1")
+        p2 = cleaned.get("password2")
+        if p1 and p2 and p1 != p2:
+            self.add_error("password2", "Hasła nie są identyczne.")
+        return cleaned
+
+
 def validate_post_content(content: str, original_size: int = 0) -> tuple[str, list[str], list[str]]:
     """Repair and validate post content.
 

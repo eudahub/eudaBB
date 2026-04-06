@@ -2,41 +2,62 @@
 {% block title %}Rejestracja{% endblock %}
 
 {% block content %}
-<article style="max-width: 400px; margin: 4rem auto;">
+<article style="max-width: 420px; margin: 4rem auto;">
   <h2>Rejestracja</h2>
-  {% if ghost_username %}
-    <p>Hasło ustawione. Konto <strong>{{ ghost_username }}</strong> pochodzi z archiwum.</p>
-    <p>Adres email na pliku: <strong>{{ email_mask }}</strong></p>
-    <p><a href="{% url 'activate_ghost' %}?username={{ ghost_username }}" role="button">
-      Potwierdź email i aktywuj konto →
-    </a></p>
-  {% else %}
-  <form method="post" id="register-form">
-    {% csrf_token %}
-    {% for field in form %}
-      <label>{{ field.label }}{{ field }}
-        {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
-        {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
-      </label>
-    {% endfor %}
-    {% if mask_variants %}
-    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:0.8rem 1rem;margin:0.5rem 0;">
-      <strong>Uwaga:</strong> Twój adres email ma bardzo krótką część lokalną
-      — maska będzie łatwa do odgadnięcia brute-force.<br>
-      Wybierz wariant maski wyświetlanej na forum:
-      <div style="margin-top:0.4rem;">
-        {% for variant in mask_variants %}
-        <label style="display:block;">
-          <input type="radio" name="mask_variant" value="{{ variant }}"{% if forloop.first %} checked{% endif %}>
-          {{ variant }}{% if forloop.first %} (domyślna){% endif %}
-        </label>
-        {% endfor %}
-      </div>
-      <small>Im więcej gwiazdek, tym trudniej odgadnąć. Rozważ użycie dłuższego adresu email.</small>
-    </div>
+
+  {% if pending %}
+    <p>Rejestracja dla nicka <strong>{{ pending.username }}</strong> i emaila <strong>{{ pending.email }}</strong>.</p>
+    <p>Najpierw wyślij kod, potem wpisz go poniżej i ustaw hasło.</p>
+
+    {% if error %}
+      <p style="color:red;">{{ error }}</p>
     {% endif %}
-    <button type="submit" id="register-btn">Utwórz konto</button>
-  </form>
+    {% if sent and test_code %}
+      <p style="color:green;"><strong>Tryb testowy:</strong> kod to <strong>{{ test_code }}</strong>.</p>
+    {% elif sent %}
+      <p style="color:green;">Kod został wysłany. Sprawdź skrzynkę i spam.</p>
+    {% endif %}
+
+    <form method="post" style="margin-bottom:1rem;">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="send_code">
+      <button type="submit">Wyślij kod</button>
+    </form>
+
+    <form method="post" id="register-finish-form">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="finish">
+      <input type="hidden" id="register-username" value="{{ pending.username }}">
+      {% for field in finish_form %}
+        <label>{{ field.label }}{{ field }}
+          {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+          {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+        </label>
+      {% endfor %}
+      <button type="submit" id="register-finish-btn">Utwórz konto</button>
+    </form>
+
+    <p><a href="{% url 'register' %}?reset=1">Zmień nick lub email</a></p>
+  {% else %}
+    <p>Podaj nick i email. W następnym kroku wyślemy kod potwierdzający.</p>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="start">
+      {% for field in start_form %}
+        <label>{{ field.label }}{{ field }}
+          {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+          {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+        </label>
+      {% endfor %}
+      <button type="submit">Dalej</button>
+    </form>
+  {% endif %}
+
+  <p><a href="{% url 'login' %}">Masz już konto? Zaloguj się.</a></p>
+  <p><a href="{% url 'find_account' %}">Masz konto archiwalne? Odzyskaj je po emailu.</a></p>
+</article>
+
+{% if pending %}
 <script>
 (function() {
   var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
@@ -44,8 +65,9 @@
 
   function saltFor(username) { return username.toLowerCase() + ':sfiniabb'; }
 
-  var form = document.getElementById('register-form');
-  var btn  = document.getElementById('register-btn');
+  var form = document.getElementById('register-finish-form');
+  var btn  = document.getElementById('register-finish-btn');
+  if (!form || !btn) return;
 
   var script = document.createElement('script');
   script.src = WASM_CDN;
@@ -53,11 +75,11 @@
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       btn.disabled = true;
-      var username  = form.querySelector('[name=username]').value;
+      var usernameValue = document.getElementById('register-username').value;
       var p1field   = form.querySelector('[name=password1]');
       var p2field   = form.querySelector('[name=password2]');
       var flagField = form.querySelector('[name=password_is_prehashed]');
-      var salt = saltFor(username);
+      var salt = saltFor(usernameValue);
       Promise.all([
         hashwasm.argon2id(Object.assign({}, PARAMS, { password: p1field.value, salt: salt })),
         hashwasm.argon2id(Object.assign({}, PARAMS, { password: p2field.value, salt: salt })),
@@ -72,10 +94,9 @@
       });
     });
   };
+  script.onerror = function() { /* brak CDN — backend prehashuje */ };
   document.head.appendChild(script);
 })();
 </script>
-  {% endif %}
-  <p><a href="{% url 'login' %}">Masz już konto? Zaloguj się.</a></p>
-</article>
+{% endif %}
 {% endblock %}

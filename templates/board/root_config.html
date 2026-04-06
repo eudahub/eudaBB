@@ -50,4 +50,45 @@
     </fieldset>
   </form>
 </article>
+
+<article style="max-width:720px;margin:1.5rem auto 2rem auto;">
+  <form method="post" onsubmit="return confirm('Usunąć zaznaczone puste konta?');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="delete_empty_users">
+    <fieldset>
+      <legend>Puste konta użytkowników</legend>
+      <p style="font-size:11px;color:#555;margin:.3rem 0 .6rem 0;">
+        Tu są tylko konta bez postów, tematów i prywatnych wiadomości.
+      </p>
+      {% if empty_users %}
+        <div style="margin-bottom:.6rem;">
+          <button type="button" onclick="toggleEmptyUsers(true)">Zaznacz wszystkie</button>
+          <button type="button" onclick="toggleEmptyUsers(false)">Odznacz wszystkie</button>
+        </div>
+        <div style="border:1px solid #BC8F8F;max-height:320px;overflow:auto;padding:.4rem .6rem;background:#fff;">
+          {% for user_obj in empty_users %}
+            <label style="display:block;margin:.15rem 0;">
+              <input type="checkbox" name="user_ids" value="{{ user_obj.id }}" class="empty-user-checkbox">
+              {{ user_obj.username }}
+              {% if user_obj.email %}<span style="color:#666;">({{ user_obj.email }})</span>{% endif %}
+            </label>
+          {% endfor %}
+        </div>
+        <div style="margin-top:.7rem;">
+          <button type="submit">Usuń zaznaczone konta</button>
+        </div>
+      {% else %}
+        <p style="margin:.3rem 0;">Brak pustych kont do usunięcia.</p>
+      {% endif %}
+    </fieldset>
+  </form>
+</article>
+
+<script>
+function toggleEmptyUsers(checked) {
+  document.querySelectorAll('.empty-user-checkbox').forEach(function(box) {
+    box.checked = checked;
+  });
+}
+</script>
 {% endblock %}
