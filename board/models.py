@@ -422,6 +422,7 @@ class QuoteReference(models.Model):
     quote_type = models.CharField(max_length=6, choices=QuoteType.choices)
     quoted_username = models.TextField(blank=True, default="")
     depth = models.PositiveSmallIntegerField(default=1)
+    ellipsis_count = models.PositiveSmallIntegerField(default=0)
     quote_index = models.PositiveIntegerField(default=0)
 
     class Meta:

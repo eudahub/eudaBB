@@ -1,57 +1,19 @@
-import re
-
 from .models import Post, QuoteReference
-
-
-_OPEN_TAG_RE = re.compile(
-    r'\[(?P<qtype>quote|fquote|Bible)(?:=(?:"(?P<author_q>[^"]*)"|(?P<author_u>[^\]\s]+)))?(?P<attrs>[^\]]*)\]',
-    re.IGNORECASE,
-)
-_CLOSE_TAG_RE = re.compile(r'\[/(?P<qtype>quote|fquote|Bible)\]', re.IGNORECASE)
-_POST_ID_RE = re.compile(r'\bpost_id=(\d+)\b', re.IGNORECASE)
+from .quote_validation import count_ellipsis, parse_quotes
 
 
 def parse_quote_references(content: str):
     """Parse quote/fquote tags with nesting depth from BBCode content."""
-    if not content:
-        return []
-
-    events = []
-    for m in _OPEN_TAG_RE.finditer(content):
-        events.append((m.start(), 0, "open", m))
-    for m in _CLOSE_TAG_RE.finditer(content):
-        events.append((m.start(), 1, "close", m))
-    events.sort(key=lambda item: (item[0], item[1]))
-
     refs = []
-    stack = []
-    quote_index = 0
-
-    for _, _, kind, match in events:
-        if kind == "open":
-            qtype = match.group("qtype").lower()
-            depth = len(stack) + 1
-            stack.append(qtype)
-
-            if qtype not in {"quote", "fquote"}:
-                continue
-
-            attrs = match.group("attrs") or ""
-            author = (match.group("author_q") or match.group("author_u") or "").strip()
-            post_id_match = _POST_ID_RE.search(attrs)
-            refs.append({
-                "quote_type": qtype,
-                "quoted_username": author,
-                "source_post_id": int(post_id_match.group(1)) if post_id_match else None,
-                "depth": depth,
-                "quote_index": quote_index,
-            })
-            quote_index += 1
-            continue
-
-        if stack:
-            stack.pop()
-
+    for quote in parse_quotes(content or ""):
+        refs.append({
+            "quote_type": quote.qtype,
+            "quoted_username": quote.author,
+            "source_post_id": quote.post_id,
+            "depth": quote.depth,
+            "ellipsis_count": count_ellipsis(quote.inner_text),
+            "quote_index": quote.quote_index,
+        })
     return refs
 
 
@@ -88,6 +50,7 @@ def rebuild_quote_references_for_posts(posts, chunk_size: int = 500) -> int:
                     quote_type=spec["quote_type"],
                     quoted_username=spec["quoted_username"],
                     depth=spec["depth"],
+                    ellipsis_count=spec["ellipsis_count"],
                     quote_index=spec["quote_index"],
                 ))
             QuoteReference.objects.bulk_create(inserts, batch_size=1000)
@@ -104,6 +67,7 @@ def rebuild_quote_references_for_posts(posts, chunk_size: int = 500) -> int:
                 "quote_type": ref["quote_type"],
                 "quoted_username": ref["quoted_username"],
                 "depth": ref["depth"],
+                "ellipsis_count": ref["ellipsis_count"],
                 "quote_index": ref["quote_index"],
             })
         processed += 1

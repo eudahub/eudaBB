@@ -5,6 +5,7 @@ from django.urls import reverse
 from .models import Forum, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
+from .quote_validation import validate_enriched_quotes
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
 
@@ -207,3 +208,62 @@ class UserRenameTests(TestCase):
                 "exact_source": True,
             },
         )
+
+    def test_validate_enriched_quotes_requires_post_id(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        Post.objects.create(topic=topic, author=author, content_bbcode="abc def", post_order=1)
+
+        errors = validate_enriched_quotes('[quote="Autor"]abc[/quote]')
+
+        self.assertEqual(errors, ["Cytat [quote] musi zawierać post_id."])
+
+    def test_validate_enriched_quotes_requires_matching_author(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="abc def", post_order=1)
+
+        errors = validate_enriched_quotes(f'[quote="Ktoś" post_id={post.pk}]abc def[/quote]')
+
+        self.assertEqual(
+            errors,
+            [f'Cytat z post_id={post.pk} musi mieć autora "Autor", a ma "Ktoś".'],
+        )
+
+    def test_validate_enriched_quotes_rejects_fake_fragment(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="abc def ghi", post_order=1)
+
+        errors = validate_enriched_quotes(f'[quote="Autor" post_id={post.pk}]xyz[/quote]')
+
+        self.assertEqual(
+            errors,
+            [f"Cytowany fragment dla post_id={post.pk} nie pasuje do treści źródłowej."],
+        )
+
+    def test_validate_enriched_quotes_allows_ellipsis(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="abc def ghi jkl mno", post_order=1)
+
+        errors = validate_enriched_quotes(
+            f'[quote="Autor" post_id={post.pk}]abc (...) jkl /.../ mno[/quote]'
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_quote_refs_store_ellipsis_count(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode='[quote="Autor" post_id=123]abc (...) def /.../ ghi[/quote]',
+            post_order=1,
+        )
+
+        rebuild_quote_references_for_post(post)
+        ref = post.quote_references.get()
+
+        self.assertEqual(ref.ellipsis_count, 2)

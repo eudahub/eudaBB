@@ -110,6 +110,7 @@ def validate_post_content(content: str, original_size: int = 0) -> tuple[str, li
     original_size — byte length of the existing post being edited (0 for new posts).
     """
     from .bbcode_lint import repair_and_validate
+    from .quote_validation import validate_enriched_quotes
 
     repaired, changes, errors = repair_and_validate(content)
 
@@ -139,6 +140,10 @@ def validate_post_content(content: str, original_size: int = 0) -> tuple[str, li
             return content, changes, [
                 f"Treść za długa: {new_size} B (limit: {soft} B = {soft // 1000} kB)."
             ]
+
+    quote_errors = validate_enriched_quotes(content)
+    if quote_errors:
+        return content, changes, quote_errors
 
     return content, changes, []
 
