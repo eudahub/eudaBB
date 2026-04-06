@@ -23,7 +23,7 @@ USERS_DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db"
 PASS_TYPES = ['known-user', 'known-user-global', 'anon-topic', 'anon-global', 'ngram',
               'propagate', 'bible', 'bible-filter', 'bible-review-apply',
               'mark-not-found', 'to-fquote', 'fix-status', 'mark-broken',
-              'fix-quote-authors', 'analyze-depth']
+              'fix-quote-authors', 'fix-quote-post-ids', 'analyze-depth']
 # known-user:        szuka w N poprzednich postach tego samego autora w tym samym wątku
 # known-user-global: szuka w N poprzednich postach tego samego autora w całej bazie
 # anon-topic:        szuka w N poprzednich postach tego samego wątku (dowolny autor)
@@ -32,6 +32,7 @@ PASS_TYPES = ['known-user', 'known-user-global', 'anon-topic', 'anon-global', 'n
 # propagate:         propaguje post_id do zagnieżdżonych cytatów na podstawie tabeli quotes
 # bible:             wykrywa cytaty biblijne przez n-gram indeks, zamienia na [Bible=ref]
 # fix-quote-authors: naprawia autora w [quote ... post_id=N] na autora posta N
+# fix-quote-post-ids: cofa post_id po łańcuchu cytatów, gdy tekst jest tylko w cytacie
 
 _BIBLE_NGRAM_INDEX = None       # załadowany przez --bible-index
 _BIBLE_COVERAGE    = 0.40       # minimalny % n-gramów pasujących (--bible-coverage)
@@ -1334,6 +1335,93 @@ _QUOTE_WITH_POST_ID_RE = re.compile(
     r'\[quote(?:="(?P<author>[^"]*)")?(?P<mid>\s+post_id=(?P<post_id>\d+))(?P<tail>[^\]]*)\]',
     re.IGNORECASE,
 )
+_ANY_ENRICHED_QUOTE_RE = re.compile(
+    r'\[(?P<qtype>f?quote)(?:="(?P<author>[^"]*)")?(?P<mid>\s+post_id=(?P<post_id>\d+))(?P<tail>[^\]]*)\]',
+    re.IGNORECASE,
+)
+
+
+def extract_nonquote_text(content):
+    """Return content with all quote/fquote/Bible blocks removed."""
+    events = []
+    for m in _QUOTE_OPEN_RE.finditer(content):
+        events.append((m.start(), 'open', m.end()))
+    for m in _QUOTE_CLOSE_RE.finditer(content):
+        events.append((m.start(), 'close', m.end()))
+    events.sort(key=lambda x: x[0])
+
+    if not events:
+        return content
+
+    exclude_ranges = []
+    stack = []
+    for pos, kind, end in events:
+        if kind == 'open':
+            stack.append(pos)
+        elif kind == 'close' and stack:
+            start = stack.pop()
+            if not stack:
+                exclude_ranges.append((start, end))
+
+    if not exclude_ranges:
+        return content
+
+    parts = []
+    prev = 0
+    for start, end in exclude_ranges:
+        parts.append(content[prev:start])
+        prev = end
+    parts.append(content[prev:])
+    return ''.join(parts)
+
+
+def find_deeper_quote_source(content, quote_norm, current_source_post_id):
+    """If quote text matches an enriched quote inside content, return its source post_id.
+
+    Chooses the nearest earlier source (largest post_id < current_source_post_id).
+    """
+    candidates = []
+    for block in parse_quotes(content):
+        raw_open = content[block.start:block.tag_end]
+        m = _ANY_ENRICHED_QUOTE_RE.match(raw_open)
+        if not m:
+            continue
+        inner_source_post_id = int(m.group('post_id'))
+        if inner_source_post_id >= current_source_post_id:
+            continue
+        inner_norm = normalize_text(extract_quote_text(content, block))
+        if match_quote_in_post(quote_norm, inner_norm):
+            candidates.append(inner_source_post_id)
+
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def resolve_quoted_source_post_id(post_content_map, source_post_id, quote_norm, max_hops=20):
+    """Follow existing post_id links backwards until text exists outside quotes."""
+    visited = set()
+    current = source_post_id
+    hops = 0
+
+    while current and current not in visited and hops < max_hops:
+        visited.add(current)
+        source_content = post_content_map.get(current)
+        if not source_content:
+            break
+
+        outside_norm = normalize_text(extract_nonquote_text(source_content))
+        if match_quote_in_post(quote_norm, outside_norm):
+            break
+
+        deeper = find_deeper_quote_source(source_content, quote_norm, current)
+        if deeper is None:
+            break
+
+        current = deeper
+        hops += 1
+
+    return current
 
 
 def run_mark_not_found(conn, known_users, dry_run=False):
@@ -1503,6 +1591,103 @@ def run_fix_quote_authors(conn, dry_run=False):
             "UPDATE posts SET content_quotes=? WHERE post_id=?",
             updates,
         )
+        conn.commit()
+
+    return changed_tags
+
+
+def run_fix_quote_post_ids(conn, dry_run=False):
+    """Cofnij post_id, jeśli wskazany post zawiera dany tekst wyłącznie w cytacie.
+
+    Działa wyłącznie po istniejących post_id:
+      - bierze quote/fquote z liczbowym post_id z content_quotes
+      - sprawdza wskazany post źródłowy
+      - jeśli tekst cytatu nie występuje tam poza cytatami, szuka w tym poście
+        pasującego zagnieżdżonego cytatu z własnym post_id i cofa się dalej
+      - kończy, gdy tekst przestaje być "samym cytatem" albo łańcuch się urywa
+    """
+    post_content_map = {
+        int(post_id): (content or '')
+        for post_id, content in conn.execute(
+            "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        )
+    }
+
+    rows = conn.execute(
+        "SELECT post_id, content_quotes FROM posts"
+        " WHERE content_quotes IS NOT NULL"
+        "   AND content_quotes LIKE '%post_id=%'"
+    ).fetchall()
+
+    updates = []
+    quote_updates = []
+    changed_posts = 0
+    changed_tags = 0
+
+    for post_id, content in rows:
+        if not content:
+            continue
+
+        replacements = []
+        blocks = parse_quotes(content)
+        for quote_index, block in enumerate(blocks):
+            raw_open = content[block.start:block.tag_end]
+            m = _ANY_ENRICHED_QUOTE_RE.match(raw_open)
+            if not m:
+                continue
+
+            old_source_post_id = int(m.group('post_id'))
+            quote_norm = normalize_text(extract_quote_text(content, block))
+            if not quote_norm:
+                continue
+
+            new_source_post_id = resolve_quoted_source_post_id(
+                post_content_map, old_source_post_id, quote_norm
+            )
+            if new_source_post_id == old_source_post_id:
+                continue
+
+            new_tag = '[%s%s post_id=%d%s]' % (
+                m.group('qtype'),
+                '="%s"' % m.group('author') if m.group('author') is not None else '',
+                new_source_post_id,
+                m.group('tail') or '',
+            )
+            replacements.append((
+                block.start, block.tag_end, new_tag,
+                quote_index, old_source_post_id, new_source_post_id, quote_norm[:100],
+            ))
+
+        if not replacements:
+            continue
+
+        changed_posts += 1
+        changed_tags += len(replacements)
+
+        if dry_run:
+            print(f"  POST={post_id}  post_id fixes={len(replacements)}")
+            for _, _, _, _, old_src, new_src, preview in replacements[:5]:
+                print(f"    {old_src} -> {new_src}  |  {preview!r}")
+            continue
+
+        new_content = content
+        for start, end, new_tag, quote_index, old_src, new_src, _ in reversed(replacements):
+            new_content = new_content[:start] + new_tag + new_content[end:]
+            quote_updates.append((new_src, post_id, quote_index, old_src))
+        updates.append((new_content, post_id))
+
+    print(f"\n  Skorygowano post_id cytatu: {changed_tags:,} tagów w {changed_posts:,} postach")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=? WHERE post_id=?",
+            updates,
+        )
+        if quote_updates:
+            conn.executemany(
+                "UPDATE quotes SET source_post_id=? WHERE post_id=? AND quote_index=? AND source_post_id=?",
+                quote_updates,
+            )
         conn.commit()
 
     return changed_tags
@@ -1998,6 +2183,14 @@ def main():
     if pass_type == 'fix-quote-authors':
         total = run_fix_quote_authors(conn, dry_run=dry_run)
         print(f"\n=== Fix-quote-authors zakończony: {total:,} tagów poprawionych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
+
+    if pass_type == 'fix-quote-post-ids':
+        total = run_fix_quote_post_ids(conn, dry_run=dry_run)
+        print(f"\n=== Fix-quote-post-ids zakończony: {total:,} tagów poprawionych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
         conn.close()
