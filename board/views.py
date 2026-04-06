@@ -12,7 +12,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content,
