@@ -7,27 +7,46 @@
 
   {% if reason == "invalidated" %}
     <p style="color:#800000; font-weight:bold;">
-      Twoje hasło zostało unieważnione (np. wskutek przebudowy systemu lub decyzji admina).
-      Podaj swój nick, a wyślemy Ci kod do ustawienia nowego hasła.
+      Twoje hasło zostało unieważnione. Podaj nick, wyślij kod, a następnie ustaw nowe hasło.
     </p>
   {% endif %}
 
-  {% if sent %}
+  {% if success %}
     <p style="background:#dfd; padding:.6rem; border-radius:4px;">
-      Kod wysłany na adres {{ email_mask }}. Sprawdź skrzynkę, a następnie
-      <a href="{% url 'do_reset' %}">wpisz kod i ustaw nowe hasło</a>.
+      Hasło zostało zmienione. Jesteś teraz zalogowany.
     </p>
+    <p><a href="/">Przejdź na forum →</a></p>
   {% else %}
-    <div id="reset-error" style="color:red;{% if not error %}display:none;{% endif %}">
-      {{ error }}
-    </div>
-    <form id="reset-form">
+    <div id="reset-error" style="color:red;display:none;"></div>
+
+    <form id="reset-form" method="post" action="{% url 'do_reset' %}">
       {% csrf_token %}
+      <input type="hidden" name="password_is_prehashed" value="0" id="prehashed-flag">
+
       <label>Nick:
         <input type="text" id="reset-username" name="username"
                value="{{ prefill_username }}" required autocomplete="username" autofocus>
       </label>
-      <button type="submit">Wyślij kod</button>
+
+      <button type="button" id="send-code-btn">Wyślij kod</button>
+      <span id="send-code-status" style="font-size:11px;margin-left:.5rem;"></span>
+
+      <label style="margin-top:.8rem;">Kod (6 cyfr):
+        <input type="text" name="code" required pattern="[0-9]{6}"
+               inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+               id="reset-code" style="letter-spacing:.15em;font-size:1.1em;">
+      </label>
+
+      <label>Nowe hasło:
+        <input type="password" name="password1" required
+               autocomplete="new-password" id="reset-pw1">
+      </label>
+      <label>Powtórz hasło:
+        <input type="password" name="password2" required
+               autocomplete="new-password" id="reset-pw2">
+      </label>
+
+      <button type="submit" id="reset-btn" style="margin-top:.5rem;">Ustaw hasło</button>
     </form>
   {% endif %}
 
@@ -55,11 +74,6 @@
       Jeśli nie ty wysłałeś — zignoruj.
     </p>
     <div style="display:flex;gap:.5rem;justify-content:center;">
-      <a id="popup-go-btn" href="#"
-         style="background:#800000;color:#fff;padding:.3rem .8rem;
-                border-radius:3px;text-decoration:none;font-size:12px;">
-        Ustaw hasło →
-      </a>
       <button onclick="document.getElementById('reset-popup-modal').style.display='none';"
               style="font-size:12px;">Zamknij</button>
     </div>
@@ -70,19 +84,12 @@
   </div>
 </div>
 
-{% if popup_code %}
-<script>showResetPopup('{{ popup_code }}','{{ popup_username }}','{{ popup_sent_at }}','{{ do_reset_url }}');</script>
-{% endif %}
-
 <script>
-function showResetPopup(code, username, sentAt, doResetUrl) {
+function showResetPopup(code, username, sentAt) {
   document.getElementById('popup-code').textContent = code;
   document.getElementById('popup-username').textContent = username;
   document.getElementById('popup-sent-at').textContent = sentAt;
-  document.getElementById('popup-go-btn').href = doResetUrl + '&code=' + code;
-  var modal = document.getElementById('reset-popup-modal');
-  modal.style.display = 'flex';
-
+  document.getElementById('reset-popup-modal').style.display = 'flex';
   document.getElementById('popup-code').onclick = function() {
     navigator.clipboard.writeText(code).then(function() {
       var msg = document.getElementById('popup-copy-msg');
@@ -92,11 +99,12 @@ function showResetPopup(code, username, sentAt, doResetUrl) {
   };
 }
 
-document.getElementById('reset-form') && document.getElementById('reset-form').addEventListener('submit', function(e) {
-  e.preventDefault();
+document.getElementById('send-code-btn').addEventListener('click', function() {
   var username = document.getElementById('reset-username').value.trim();
   var errEl = document.getElementById('reset-error');
+  var status = document.getElementById('send-code-status');
   errEl.style.display = 'none';
+  status.textContent = 'Wysyłanie…';
 
   fetch(window.location.href, {
     method: 'POST',
@@ -113,18 +121,49 @@ document.getElementById('reset-form') && document.getElementById('reset-form').a
     if (!d.ok) {
       errEl.textContent = d.error;
       errEl.style.display = 'block';
-      return;
-    }
-    if (d.popup) {
-      showResetPopup(d.code, d.username, d.sent_at, d.do_reset_url);
+      status.textContent = '';
+    } else if (d.popup) {
+      status.textContent = 'Kod wygenerowany.';
+      showResetPopup(d.code, d.username, d.sent_at);
     } else {
-      document.querySelector('article').innerHTML =
-        '<p style="background:#dfd;padding:.6rem;border-radius:4px;">'
-        + 'Kod wysłany na adres ' + d.email_mask + '. Sprawdź skrzynkę, a następnie '
-        + '<a href="{% url "do_reset" %}">wpisz kod i ustaw nowe hasło</a>.</p>'
-        + '<p><a href="{% url "login" %}">Powrót do logowania</a></p>';
+      status.textContent = 'Kod wysłany na ' + d.email_mask + '.';
     }
   });
 });
+
+// Argon2 pre-hashing before submit
+(function() {
+  var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
+  var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
+  function saltFor(u) { return u.toLowerCase() + ':sfiniabb'; }
+  var form = document.getElementById('reset-form');
+  var flag = document.getElementById('prehashed-flag');
+  var btn  = document.getElementById('reset-btn');
+  if (!form) return;
+  var script = document.createElement('script');
+  script.src = WASM_CDN;
+  script.onload = function() {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      btn.disabled = true;
+      var username = document.getElementById('reset-username').value;
+      var p1 = document.getElementById('reset-pw1');
+      var p2 = document.getElementById('reset-pw2');
+      Promise.all([
+        hashwasm.argon2id(Object.assign({}, PARAMS, { password: p1.value, salt: saltFor(username) })),
+        hashwasm.argon2id(Object.assign({}, PARAMS, { password: p2.value, salt: saltFor(username) })),
+      ]).then(function(hashes) {
+        p1.value = hashes[0];
+        p2.value = hashes[1];
+        flag.value = '1';
+        form.submit();
+      }).catch(function() {
+        btn.disabled = false;
+        form.submit();
+      });
+    });
+  };
+  document.head.appendChild(script);
+})();
 </script>
 {% endblock %}
