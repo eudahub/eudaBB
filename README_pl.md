@@ -152,6 +152,16 @@ Uruchom `python manage.py makemigrations board` przed `migrate`.
 ## Do rozbudowania (kolejne kroki)
 
 - [ ] Cytowania (`[quote]`)
+- [ ] Cytowania i integralność `post_id`
+  - Post powinien wskazywać autora przez `User.id` / FK, nie przez tekstowy nick.
+  - Dzięki temu zmiana nazwy usera na niekolidującą po normalizacji może być szybka i lokalna.
+  - Przy zmianie nazwy usera trzeba jednak poprawiać nazwę autora w cytatach i podcytatach opartych o nazwę usera.
+  - Założenie robocze: jeśli cytat ma `post_id=...`, to nazwa usera w cytacie powinna być poprawna i możliwa do zaktualizowania.
+  - To samo dotyczy usuwania usera: trzeba obsłużyć cytaty i podcytaty odwołujące się do jego postów.
+- [ ] Walidacja cytatów z `post_id`
+  - User nie może wpisać dowolnego błędnego `post_id` do cytatu.
+  - `post_id` musi wskazywać istniejący post.
+  - Treść cytatu musi zgadzać się z treścią posta wskazanego przez `post_id`.
 - [ ] Edycja postów
 - [ ] Profil użytkownika
 - [ ] Moderacja (usuwanie/przenoszenie wątków)

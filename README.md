@@ -152,6 +152,16 @@ Run `python manage.py makemigrations board` before `migrate`.
 ## To be extended (next steps)
 
 - [ ] Quotes (`[quote]`)
+- [ ] Quotes and `post_id` integrity
+  - A post should reference its author via `User.id` / FK, not a textual username.
+  - That keeps username changes fast as long as the new name does not collide after normalization.
+  - Renaming a user must still update author names embedded in quotes and nested quotes.
+  - Working assumption: if a quote contains `post_id=...`, the quoted username is expected to be correct and can be updated.
+  - The same applies to user deletion: quotes and nested quotes pointing at that user's posts must be handled.
+- [ ] Quote validation with `post_id`
+  - A user must not be able to submit an arbitrary invalid `post_id` in a quote.
+  - `post_id` must point to an existing post.
+  - The quoted text must match the content of the post referenced by `post_id`.
 - [ ] Post editing
 - [ ] User profile
 - [ ] Moderation (deleting/moving threads)
