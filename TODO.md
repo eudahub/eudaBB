@@ -344,6 +344,45 @@ Niski — zrobić po ustabilizowaniu wersji webowej. Read-only API jako pierwszy
 
 ---
 
+## Użytkownicy — liczniki i usuwanie kont
+
+### `post_count` po imporcie
+
+- Obecnie `forum_users.post_count` dla użytkowników importowanych zostaje na `0`, bo import userów nie przenosi historycznej liczby postów.
+- Docelowy model importu:
+  - najpierw import userów
+  - potem import postów
+  - `Post.author` ma wskazywać na `User` przez FK / `author_id`, nie tekstowy nick
+  - `User.post_count` ma być liczone wyłącznie z liczby zaimportowanych postów przypisanych do tego usera
+- Nie brać `post_count` z `sfinia_users_real.db`, nawet jeśli liczba wygląda sensownie.
+- Po imporcie trzeba wykonać rekalkulację:
+  - `User.post_count = Post.objects.filter(author=user).count()`
+  - dzięki temu licznik zawsze odpowiada realnie zaimportowanym postom, a nie danym pomocniczym z tabel userów
+
+### Usuwanie kont — wersja docelowa
+
+- Dodać pełną ścieżkę usuwania konta przez roota/moderację, nie tylko dla pustych kont.
+- Etapy:
+  - usuwanie prywatnych wiadomości użytkownika
+  - usuwanie postów użytkownika
+  - jeśli po usunięciu postów wątek jest pusty, usunąć cały wątek
+  - po usunięciu postów przeliczyć liczniki tematów, forów i userów
+
+### Cytaty usuwanego użytkownika
+
+- Sprawdzić, czy potrzebna jest osobna tabela/słownik cytowań analogiczna do `quotes` w `sfiniabb.db`.
+- Przy usuwaniu użytkownika:
+  - usuwać u innych osób cytaty pochodzące z postów usuwanego użytkownika
+  - obsłużyć cytaty zagnieżdżone
+  - jeśli usuwany jest tylko podcytat, zostawić nadcytat bez rozwalania reszty posta
+- Najpewniej wymaga to parsera/transformacji BBCode na drzewo, nie prostego regex replace.
+
+### Priorytet
+
+- Później, po ustabilizowaniu podstawowego flow rejestracji i administracji użytkownikami.
+
+---
+
 ## Paginacja i numeracja postów
 
 ### Dwa rodzaje "rzadkości" stron
