@@ -1089,3 +1089,19 @@ def pm_delete(request, box_id):
     if not pm.boxes.exists():
         pm.delete()
     return redirect(redirect_url)
+
+
+# ---------------------------------------------------------------------------
+# Quote link: redirect to the source post
+# ---------------------------------------------------------------------------
+
+def goto_post(request, post_id):
+    """Redirect to the topic page anchored at the given post."""
+    from django.http import Http404
+    try:
+        post = Post.objects.select_related("topic").get(pk=post_id)
+    except Post.DoesNotExist:
+        raise Http404
+    url = redirect("topic_detail", topic_id=post.topic_id).url + f"#post-{post_id}"
+    from django.http import HttpResponseRedirect
+    return HttpResponseRedirect(url)

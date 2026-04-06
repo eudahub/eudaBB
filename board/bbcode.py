@@ -75,7 +75,7 @@ import re as _re2
 
 _QUOTE_OPT_RE = _re2.compile(
     r'^(?P<author>[^ ]+)?'
-    r'(?:\s+post_id=(?P<post_id>\d+))?'
+    r'(?:\s+post_id=(?P<post_id>\d+|not_found))?'
     r'(?:\s+time=(?P<time>\d+))?',
     _re2.IGNORECASE,
 )
@@ -94,7 +94,9 @@ def _render_quote(tag_name, value, options, parent, context):
             post_id = m.group("post_id") or ""
             ts      = m.group("time")    or ""
 
-    if author and post_id and ts:
+    not_found = (post_id.lower() == "not_found") if post_id else False
+
+    if author and post_id and not not_found and ts:
         # Format timestamp as "YYYY-MM-DD HH:MM"
         try:
             from datetime import datetime, timezone
@@ -102,11 +104,17 @@ def _render_quote(tag_name, value, options, parent, context):
             date_str = dt.strftime("%Y-%m-%d %H:%M")
         except Exception:
             date_str = ts
-        # Link points to the anchor #post-<id>; import_posts fills the id
         cite = (
-            f'<a href="#post-{post_id}" class="quote-link">'
+            f'<a href="/post/{post_id}/" class="quote-link">'
             f'{author} pisze: ↑{date_str}</a>'
         )
+    elif author and post_id and not not_found:
+        cite = (
+            f'<a href="/post/{post_id}/" class="quote-link">'
+            f'{author} pisze:</a>'
+        )
+    elif author and not_found:
+        cite = f'<span class="quote-not-found">{author} pisze:</span>'
     elif author:
         cite = f'{author} pisze:'
     else:
