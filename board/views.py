@@ -832,6 +832,7 @@ def do_reset(request):
     error = None
     success = False
     prefill_username = request.GET.get("username", "")
+    prefill_code = request.GET.get("code", "")
 
     if request.method == "POST":
         username  = request.POST.get("username", "").strip()
@@ -858,7 +859,13 @@ def do_reset(request):
                     if not is_prehashed:
                         password1 = prehash_password(password1, username)
                     user.set_password(password1)
-                    user.save(update_fields=["password"])
+                    # Activate ghost accounts on password reset (user proved email access)
+                    update_fields = ["password"]
+                    if not user.is_active:
+                        user.is_active = True
+                        user.is_ghost = False
+                        update_fields += ["is_active", "is_ghost"]
+                    user.save(update_fields=update_fields)
                     # Mark this and all older codes as used
                     PasswordResetCode.objects.filter(user=user, is_used=False).update(is_used=True)
                     login(request, user)
@@ -868,6 +875,7 @@ def do_reset(request):
         "error": error,
         "success": success,
         "prefill_username": prefill_username,
+        "prefill_code": prefill_code,
     })
 
 
