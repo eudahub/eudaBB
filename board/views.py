@@ -832,8 +832,6 @@ def do_reset(request):
     error = None
     success = False
     prefill_username = request.GET.get("username", "")
-    prefill_code = request.GET.get("code", "")
-
     if request.method == "POST":
         username  = request.POST.get("username", "").strip()
         password1 = request.POST.get("password1", "")
@@ -875,7 +873,6 @@ def do_reset(request):
         "error": error,
         "success": success,
         "prefill_username": prefill_username,
-        "prefill_code": prefill_code,
     })
 
 
