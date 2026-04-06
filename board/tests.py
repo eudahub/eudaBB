@@ -146,3 +146,23 @@ class UserRenameTests(TestCase):
         refs = list(post.quote_references.order_by("quote_index").values_list("quoted_username", "depth"))
 
         self.assertEqual(refs, [("A", 1), ("B", 2)])
+
+    def test_topic_detail_renders_quote_button(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        reader = User.objects.create_user(username="Czytelnik", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Treść posta",
+            post_order=1,
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("topic_detail", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Cytuj")
+        self.assertContains(response, f'data-post-id="{post.pk}"')
+        self.assertContains(response, 'data-post-content="1"')

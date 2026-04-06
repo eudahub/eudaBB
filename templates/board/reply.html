@@ -98,10 +98,19 @@
   };
 
   var key = 'reply_draft_{{ topic.pk }}';
+  var quoteKey = 'reply_quote_{{ topic.pk }}';
   var draft = sessionStorage.getItem(key);
+  var pendingQuote = sessionStorage.getItem(quoteKey);
   if (draft && !textarea.value) {
     textarea.value = draft;
     sessionStorage.removeItem(key);
+  }
+  if (pendingQuote) {
+    if (textarea.value && !textarea.value.endsWith('\n')) {
+      textarea.value += '\n';
+    }
+    textarea.value += pendingQuote;
+    sessionStorage.removeItem(quoteKey);
   }
 
   textarea.addEventListener('input', updateLineNumbers);

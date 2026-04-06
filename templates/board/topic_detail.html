@@ -20,8 +20,14 @@
   <div class="post-header">
     <span>#{{ post.post_order }}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
-    <button class="bbsrc-btn" onclick="showBBSrc(this)"
-            data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
+    <span style="display:flex;gap:.35rem;align-items:center;">
+      <button class="bbsrc-btn" onclick="quotePost(this)"
+              data-post-id="{{ post.pk }}"
+              data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
+              data-bbcode="{{ post.content_bbcode|escape }}">Cytuj</button>
+      <button class="bbsrc-btn" onclick="showBBSrc(this)"
+              data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
+    </span>
   </div>
   <table style="width:100%; border-collapse: collapse;">
     <tr>
@@ -36,7 +42,7 @@
           {% if post.author.location %}<br><small>{{ post.author.location }}</small>{% endif %}
         {% endif %}
       </td>
-      <td class="post-content">
+      <td class="post-content" data-post-content="1">
         {{ post|post_content }}
         {% if post.edit_count %}
           <hr>
@@ -74,8 +80,14 @@
   <div class="post-header">
     <span>#{{ post.post_order }}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
-    <button class="bbsrc-btn" onclick="showBBSrc(this)"
-            data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
+    <span style="display:flex;gap:.35rem;align-items:center;">
+      <button class="bbsrc-btn" onclick="quotePost(this)"
+              data-post-id="{{ post.pk }}"
+              data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
+              data-bbcode="{{ post.content_bbcode|escape }}">Cytuj</button>
+      <button class="bbsrc-btn" onclick="showBBSrc(this)"
+              data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
+    </span>
   </div>
   <p style="margin:.4rem .6rem; font-style:italic; color:#888;">
     [Post ukryty (filtr spamu) — <a href="#post-{{ post.pk }}" onclick="this.closest('.post-box').style.opacity=1;this.closest('.post-box').querySelector('.spam-hidden').style.display='block';this.parentNode.style.display='none';return false;">pokaż</a>]
@@ -122,4 +134,45 @@
 {% elif not user.is_authenticated %}
   <p><a href="{% url 'login' %}">Zaloguj się</a>, aby odpowiedzieć.</p>
 {% endif %}
+<script>
+function normalizeQuotedSelection(text) {
+  return (text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function getSelectionWithinPost(postBox) {
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return '';
+  var range = sel.getRangeAt(0);
+  var anchor = range.commonAncestorContainer;
+  if (!postBox.contains(anchor)) return '';
+  return normalizeQuotedSelection(sel.toString());
+}
+
+function buildQuoteTag(author, postId, body) {
+  return '[quote="' + author + '" post_id=' + postId + ']\n' + body + '\n[/quote]\n\n';
+}
+
+function quotePost(btn) {
+  var postBox = btn.closest('.post-box');
+  var author = btn.getAttribute('data-author') || '';
+  var postId = btn.getAttribute('data-post-id') || '';
+  var selectedText = getSelectionWithinPost(postBox);
+  var body = selectedText || (btn.getAttribute('data-bbcode') || '').trim();
+  if (!body) return;
+
+  var keyDraft = 'reply_draft_{{ topic.pk }}';
+  var keyQuote = 'reply_quote_{{ topic.pk }}';
+  var existingDraft = '';
+  var quickReply = document.getElementById('quick-reply-text');
+  if (quickReply) existingDraft = quickReply.value || '';
+  sessionStorage.setItem(keyDraft, existingDraft);
+  sessionStorage.setItem(keyQuote, buildQuoteTag(author, postId, body));
+  window.location.href = '{% url "reply" topic.pk %}';
+}
+</script>
 {% endblock %}
