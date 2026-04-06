@@ -110,19 +110,59 @@ if not settings.TEST_MODE:
 - Język: `polish` (PostgreSQL ma słownik polski — obsługuje odmianę)
 - Logika słów: **zawsze AND**, nigdy OR — wpisanie „pies kot" = oba słowa muszą wystąpić
 - Fraza w cudzysłowie: `"pies kot"` = dokładna sekwencja słów (phrase search, `<->` w tsquery)
-- Lista stop-words: **minimalna** — tylko jednoiterowe `w`, `z`, `i`, `a`, `o`, `do`, `na`, `po`, `za`, `ze`, `ku` itp.
-  Uzasadnienie: user może szukać „i" jako nick lub skrót, długa lista blokuje sensowne zapytania.
-  PostgreSQL domyślnie ma obszerną listę — skonfigurować własną `TEXT SEARCH CONFIGURATION` z okrojonym słownikiem.
+- Krótkie słowa też mają działać, nie tylko długie tokeny:
+  - nie odrzucać automatycznie 2- i 3-literowych słów
+  - minimalna lista pomijanych słów ma być naprawdę krótka, np. tylko `w`, `z`, `do`
+  - unikać agresywnego "stop-wordowania", bo na forum krótkie słowa/nicki bywają sensowne
+- PostgreSQL domyślnie ma obszerną listę stop-words — skonfigurować własną `TEXT SEARCH CONFIGURATION` z okrojonym słownikiem.
 - Brak stemming jeśli zbyt agresywny — rozważyć `simple` config zamiast `polish` jeśli wyniki dziwne
 - Wyniki: posty z podświetleniem (`ts_headline`), posortowane po rankingu (`ts_rank`)
 - Dostęp: tylko zalogowani (ochrona przed DDoS/scraping)
 - Paginacja wyników
 
 **B) Wyszukiwanie wątków** (po tytule)
-- Prosty `ILIKE '%...%'` lub FTS tylko na `Topic.title`
+- Szukać wyłącznie po `Topic.title`, nie po treści postów z wątku
+- Wątek ma mieć jeden stabilny tytuł, wspólny dla wszystkich postów
+- Nie traktować odpowiedzi jako osobnych "Re: ..." tytułów — odpowiedź należy do jednego wątku i jednego tytułu
+- Technicznie:
+  - prosty `ILIKE '%...%'` jako wersja minimalna
+  - docelowo FTS także dla `Topic.title`, ale osobno od postów
 - Dodatkowy checkbox: **„tylko ankiety"** (filtr `topic_type = POLL` gdy zaimplementujemy ankiety)
   oraz **„zawiera ankietę"** — do rozważenia czy to samo
 - Wyniki: lista wątków z forum, autorem, datą, ilością postów
+
+### Parser zapytania
+
+- Jeden parser wejścia dla obu trybów (`posts` / `topics`)
+- Reguły:
+  - słowa bez cudzysłowu → AND
+  - frazy w cudzysłowie → exact phrase
+  - mieszane zapytanie typu `pies "kot domowy" ogród` → `pies` AND `"kot domowy"` AND `ogród`
+- Nie wprowadzać OR w UI podstawowym
+- Jeśli kiedyś dodać OR/NOT, to dopiero jako tryb zaawansowany, nie domyślny
+
+### Wydajność i indeksy
+
+- Posty:
+  - osobny `SearchVectorField` lub kolumna generowana / trigger PostgreSQL
+  - indeks GIN obowiązkowy
+- Wątki:
+  - osobny indeks po `Topic.title`
+  - jeśli FTS na tytułach okaże się zbyt ciężki dla krótkich słów, rozważyć `pg_trgm` + GIN/GIST dla `ILIKE`
+- Krótkie słowa i frazy trzeba przetestować na realnych danych forum, nie tylko syntetycznie
+
+### UX
+
+- Domyślny tryb: `Posty`
+- Drugi tab/przełącznik: `Wątki`
+- W wynikach postów:
+  - pokaż forum, wątek, autora, datę
+  - snippet z podświetleniem
+  - klik prowadzi do konkretnego posta
+- W wynikach wątków:
+  - pokaż tytuł, forum, autora wątku, datę startu, liczbę odpowiedzi
+  - klik prowadzi do wątku
+- Zapytanie ma być w URL (`GET`), żeby dało się linkować wyniki
 
 ### Implementacja techniczna
 
@@ -463,6 +503,33 @@ UI:
 - w toolbarze zostawić `fquote`, ale opisać go jako:
   - „cytat zewnętrzny”
   - bez cytatów zagnieżdżonych i bez treści forumowych
+
+#### Ostrzeganie: `fquote` wygląda jak cytat z forum
+
+Problem:
+- user może wkleić do `fquote` tekst, który w rzeczywistości pochodzi z tego forum
+- przez to omijałby walidowany `[quote="user" post_id=N]`
+
+Pomysł:
+- przy podglądzie / walidacji / ewentualnie po stronie klienta po debounce:
+  - dla treści `fquote` uruchomić heurystykę "czy ten tekst wygląda jak cytat z forum"
+  - jeśli tak, pokazać warning zamiast twardego błędu
+
+Heurystyka:
+- działa tylko dla `fquote` o sensownej długości (np. >= 40 znaków po normalizacji)
+- próbować dopasować tekst do postów forum tym samym mechanizmem co dla walidacji cytatów:
+  - normalizacja tekstu
+  - obsługa ellipsis
+  - wyszukiwanie najlepszego dopasowania
+- jeśli dopasowanie jest bardzo mocne i jednoznaczne:
+  - komunikat: „Ten tekst wygląda na cytat z forum. Rozważ użycie [quote=\"user\" post_id=N].”
+  - opcjonalny przycisk: „Zamień na quote”
+- jeśli dopasowanie jest słabe lub niejednoznaczne:
+  - brak ostrzeżenia
+
+Zakres na dziś:
+- tylko warning / sugestia
+- bez automatycznej zamiany bez zgody usera
 
 ### Priorytet
 
