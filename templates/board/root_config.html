@@ -35,5 +35,19 @@
       <a href="/">Anuluj</a>
     </div>
   </form>
+
+  <hr style="margin:1.5rem 0;">
+
+  <form method="post" onsubmit="return confirm('Usunąć wszystkie kody resetowania hasła?');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="flush_reset_codes">
+    <fieldset>
+      <legend>Narzędzia</legend>
+      <p style="font-size:11px;color:#555;margin:.3rem 0;">
+        Aktualnie: <strong>{{ reset_codes_count }}</strong> kodów w tabeli.
+      </p>
+      <button type="submit">Wyczyść kody resetowania hasła</button>
+    </fieldset>
+  </form>
 </article>
 {% endblock %}

@@ -1156,12 +1156,20 @@ def root_config(request):
     cfg = SiteConfig.get()
 
     if request.method == "POST":
-        cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
-        cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
-        cfg.save()
+        action = request.POST.get("action")
+        if action == "flush_reset_codes":
+            PasswordResetCode.objects.all().delete()
+        else:
+            cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
+            cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
+            cfg.save()
         return redirect("root_config")
 
-    return render(request, "board/root_config.html", {"cfg": cfg, "SiteConfig": SiteConfig})
+    return render(request, "board/root_config.html", {
+        "cfg": cfg,
+        "SiteConfig": SiteConfig,
+        "reset_codes_count": PasswordResetCode.objects.count(),
+    })
 
 
 def goto_post(request, post_id):
