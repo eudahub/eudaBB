@@ -26,6 +26,7 @@ _parser = bbcode.Parser(
     newline="<br>",
     install_defaults=True,
     escape_html=True,
+    max_tag_depth=31,
 )
 
 
@@ -112,8 +113,8 @@ def _render_quote(tag_name, value, options, parent, context):
         cite = "Cytat:"
 
     return (
+        f'<cite class="bbquote-cite">{cite}</cite>'
         f'<blockquote class="bbquote">'
-        f'<cite>{cite}</cite>'
         f'{value}'
         f'</blockquote>'
     )
