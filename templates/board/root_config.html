@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Konfiguracja serwisu{% endblock %}
+{% block content %}
+<article style="max-width:480px;margin:2rem auto;">
+  <h2>Konfiguracja serwisu</h2>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <fieldset>
+      <legend>Kody resetowania hasła</legend>
+      <label>
+        <input type="radio" name="reset_mode" value="{{ SiteConfig.RESET_EMAIL }}"
+               {% if cfg.reset_mode == SiteConfig.RESET_EMAIL %}checked{% endif %}>
+        Wyślij emailem
+      </label><br>
+      <label>
+        <input type="radio" name="reset_mode" value="{{ SiteConfig.RESET_POPUP }}"
+               {% if cfg.reset_mode == SiteConfig.RESET_POPUP %}checked{% endif %}>
+        Pokaż w oknie popup (tryb testowy — nie wysyła emaili)
+      </label>
+    </fieldset>
+
+    <fieldset style="margin-top:.8rem;">
+      <legend>Nawigacja</legend>
+      <label>
+        <input type="checkbox" name="show_switch_link" value="1"
+               {% if cfg.show_switch_link %}checked{% endif %}>
+        Pokaż link „Przełącz" w nawigacji (szybkie przełączanie kont)
+      </label>
+    </fieldset>
+
+    <div style="margin-top:1rem;display:flex;gap:.5rem;">
+      <button type="submit">Zapisz</button>
+      <a href="/">Anuluj</a>
+    </div>
+  </form>
+</article>
+{% endblock %}

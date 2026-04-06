@@ -20,3 +20,14 @@ media/
 # Database snapshots (pg_dump files — can be large)
 snapshots/
 *.dump
+
+# Work/scratch files
+bible_dry.log
+bible_review.txt
+bible_index.pkl
+build_bible_index.py
+fix_nested_quotes.py
+fix_quotes_dedup.py
+rozdzielanie.txt
+sfiniabb_ngrams.7z
+a

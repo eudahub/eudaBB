@@ -1,4 +1,5 @@
 from django import template
+from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from board.bbcode import render
 
@@ -50,6 +51,18 @@ def pagination_range(page_obj):
 @register.filter
 def bbcode(value):
     return mark_safe(render(value or ""))
+
+
+@register.filter
+def post_content(post):
+    """Render post content: verbatim (escaped) when broken_tags, BBCode otherwise."""
+    if post.broken_tags:
+        return mark_safe(
+            '<pre class="broken-bbcode">'
+            + escape(post.content_bbcode)
+            + '</pre>'
+        )
+    return mark_safe(render(post.content_bbcode or ""))
 
 
 @register.filter

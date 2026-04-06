@@ -14,30 +14,117 @@
 
   {% if sent %}
     <p style="background:#dfd; padding:.6rem; border-radius:4px;">
-      Jeśli konto o podanym nicku istnieje i ma przypisany email — wysłaliśmy kod.
-      Sprawdź skrzynkę, a następnie
+      Kod wysłany na adres {{ email_mask }}. Sprawdź skrzynkę, a następnie
       <a href="{% url 'do_reset' %}">wpisz kod i ustaw nowe hasło</a>.
     </p>
-    {% if test_code %}
-      <p style="background:#fff3cd; padding:.6rem; border-radius:4px;">
-        <strong>TEST_MODE — kod:</strong> <code style="font-size:1.4em;">{{ test_code }}</code><br>
-        Nick: <strong>{{ username }}</strong> | Email: {{ email_mask }}
-      </p>
-    {% endif %}
   {% else %}
-    {% if error %}
-      <p style="color:red;">{{ error }}</p>
-    {% endif %}
-    <form method="post">
+    <div id="reset-error" style="color:red;{% if not error %}display:none;{% endif %}">
+      {{ error }}
+    </div>
+    <form id="reset-form">
       {% csrf_token %}
       <label>Nick:
-        <input type="text" name="username" value="{{ prefill_username }}" required
-               autocomplete="username" autofocus>
+        <input type="text" id="reset-username" name="username"
+               value="{{ prefill_username }}" required autocomplete="username" autofocus>
       </label>
-      <button type="submit">Wyślij kod na email</button>
+      <button type="submit">Wyślij kod</button>
     </form>
   {% endif %}
 
   <p><a href="{% url 'login' %}">Powrót do logowania</a></p>
 </article>
+
+{# Popup modal — shown when popup mode is active #}
+<div id="reset-popup-modal" style="display:none;position:fixed;top:0;left:0;
+     width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;
+     align-items:center;justify-content:center;">
+  <div style="background:#fff;border:2px solid #BC8F8F;border-radius:4px;
+              padding:1.5rem 2rem;min-width:320px;max-width:420px;">
+    <h3 style="margin-top:0;">Kod resetowania hasła</h3>
+    <p style="font-size:11px;color:#555;">
+      Nick: <strong id="popup-username"></strong> &nbsp;|&nbsp;
+      Wysłano: <span id="popup-sent-at"></span>
+    </p>
+    <div style="text-align:center;margin:.8rem 0;">
+      <code id="popup-code"
+            style="font-size:2em;letter-spacing:.15em;background:#f8f8e8;
+                   padding:.3rem .8rem;border:1px solid #BC8F8F;border-radius:3px;
+                   cursor:pointer;" title="Kliknij, aby skopiować"></code>
+    </div>
+    <p style="font-size:10px;color:#888;text-align:center;">
+      Jeśli nie ty wysłałeś — zignoruj.
+    </p>
+    <div style="display:flex;gap:.5rem;justify-content:center;">
+      <a id="popup-go-btn" href="#"
+         style="background:#800000;color:#fff;padding:.3rem .8rem;
+                border-radius:3px;text-decoration:none;font-size:12px;">
+        Ustaw hasło →
+      </a>
+      <button onclick="document.getElementById('reset-popup-modal').style.display='none';"
+              style="font-size:12px;">Zamknij</button>
+    </div>
+    <div id="popup-copy-msg"
+         style="text-align:center;font-size:10px;color:green;margin-top:.4rem;display:none;">
+      Skopiowano!
+    </div>
+  </div>
+</div>
+
+{% if popup_code %}
+<script>showResetPopup('{{ popup_code }}','{{ popup_username }}','{{ popup_sent_at }}','{{ do_reset_url }}');</script>
+{% endif %}
+
+<script>
+function showResetPopup(code, username, sentAt, doResetUrl) {
+  document.getElementById('popup-code').textContent = code;
+  document.getElementById('popup-username').textContent = username;
+  document.getElementById('popup-sent-at').textContent = sentAt;
+  document.getElementById('popup-go-btn').href = doResetUrl + '&code=' + code;
+  var modal = document.getElementById('reset-popup-modal');
+  modal.style.display = 'flex';
+
+  document.getElementById('popup-code').onclick = function() {
+    navigator.clipboard.writeText(code).then(function() {
+      var msg = document.getElementById('popup-copy-msg');
+      msg.style.display = 'block';
+      setTimeout(function(){ msg.style.display = 'none'; }, 1500);
+    });
+  };
+}
+
+document.getElementById('reset-form') && document.getElementById('reset-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var username = document.getElementById('reset-username').value.trim();
+  var errEl = document.getElementById('reset-error');
+  errEl.style.display = 'none';
+
+  fetch(window.location.href, {
+    method: 'POST',
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'username=' + encodeURIComponent(username)
+        + '&csrfmiddlewaretoken=' + encodeURIComponent(
+            document.querySelector('[name=csrfmiddlewaretoken]').value)
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d) {
+    if (!d.ok) {
+      errEl.textContent = d.error;
+      errEl.style.display = 'block';
+      return;
+    }
+    if (d.popup) {
+      showResetPopup(d.code, d.username, d.sent_at, d.do_reset_url);
+    } else {
+      document.querySelector('article').innerHTML =
+        '<p style="background:#dfd;padding:.6rem;border-radius:4px;">'
+        + 'Kod wysłany na adres ' + d.email_mask + '. Sprawdź skrzynkę, a następnie '
+        + '<a href="{% url "do_reset" %}">wpisz kod i ustaw nowe hasło</a>.</p>'
+        + '<p><a href="{% url "login" %}">Powrót do logowania</a></p>';
+    }
+  });
+});
+</script>
 {% endblock %}

@@ -1,1453 +1,2105 @@
-"""
-Enrich [quote] tags in sfiniabb.db with post_id and Unix timestamps.
+#!/usr/bin/env python3
+"""Enrich [quote="User"] tags with post_id by matching quote text
+against previous posts in the same thread by the same author.
 
-Matching pipeline per quote block:
-  1. Strip ellipsis markers: (...)  /.../  [...]  before fingerprinting
-  2. Extract "own text" segments (between nested [quote] blocks)
-  3. Try multiple fingerprint lengths: 120 → 80 → 60 → 40 chars
-  4. Search preceding posts in same topic (full topic window by default)
-  5. Author-filtered search first, then all posts
-
-After the main pass, --propagate fixes nested [quote] blocks inside already-
-resolved citations by chaining through the quotes table:
-  post P cites Q (found) → nested [quote=A] in P's copy of Q can be resolved
-  if Q also cited A (from quotes table).
+Pass types:
+  --pass known-user   (default) Only quotes where author is in sfinia_users_real.db
+                      Future passes will handle unknown/misspelled authors, anonymous quotes, etc.
 
 Usage:
-    python manage.py enrich_quotes /path/to/sfiniabb.db
-    python manage.py enrich_quotes /path/to/sfiniabb.db --users-db sfinia_users_real.db
-    python manage.py enrich_quotes /path/to/sfiniabb.db --reset
-    python manage.py enrich_quotes /path/to/sfiniabb.db --only-unfound   # reprocess status 2+3
-    python manage.py enrich_quotes /path/to/sfiniabb.db --propagate      # chain-fix nested quotes
+    python enrich_quotes.py --pass known-user [--lookback 20] [--dry-run] [--limit N] [--reset]
 """
-
+import argparse
 import bisect
 import pickle
 import re
 import sqlite3
+import sys
 import unicodedata
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-from django.core.management.base import BaseCommand, CommandError
+DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfiniabb.db"
+USERS_DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db"
 
-_WARSAW = ZoneInfo("Europe/Warsaw")
+PASS_TYPES = ['known-user', 'known-user-global', 'anon-topic', 'anon-global', 'ngram',
+              'propagate', 'bible', 'bible-filter', 'bible-review-apply',
+              'mark-not-found', 'to-fquote', 'fix-status', 'mark-broken', 'analyze-depth']
+# known-user:        szuka w N poprzednich postach tego samego autora w tym samym wątku
+# known-user-global: szuka w N poprzednich postach tego samego autora w całej bazie
+# anon-topic:        szuka w N poprzednich postach tego samego wątku (dowolny autor)
+# anon-global:       szuka w N poprzednich postach całej bazy (dowolny autor)
+# ngram:             5-gram voting po content_user, dowolna odległość, najbliższy remis
+# propagate:         propaguje post_id do zagnieżdżonych cytatów na podstawie tabeli quotes
+# bible:             wykrywa cytaty biblijne przez n-gram indeks, zamienia na [Bible=ref]
 
-_PL_MONTHS = {
-    "Sty": 1, "Lut": 2, "Mar": 3, "Kwi": 4, "Maj": 5, "Cze": 6,
-    "Lip": 7, "Sie": 8, "Wrz": 9, "Paź": 10, "Lis": 11, "Gru": 12,
-}
-
-# Patterns for quote tag parsing
-_QUOTE_OPEN_RE  = re.compile(r'\[quote(?:="([^"]*)")?\]', re.IGNORECASE)
-_QUOTE_CLOSE_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
-_BBCODE_RE      = re.compile(r'\[[^\]]*\]')
-
-# Matches [quote=Author post_id=not_found] tags specifically
-_NOT_FOUND_TAG_RE = re.compile(
-    r'\[quote=(?P<author>[^ \]]+)\s+post_id=not_found\]',
-    re.IGNORECASE
-)
-
-# Manual quote prefixes: "Username napisał:\n" or "Cytat:\n"
-# These appear when users hand-format a quote instead of using BBCode
-_NAPISAL_PREFIX_RE = re.compile(r'^\s*\S[^\n]*napisał:\s*\n+', re.IGNORECASE)
-_CYTAT_PREFIX_RE   = re.compile(r'^\s*Cytat:\s*\n+', re.IGNORECASE)
-
-# Ellipsis markers inserted by users when omitting part of a quote
-# e.g. (...)  /.../  [...]  (…)
-_ELLIPSIS_RE = re.compile(
-    r'[\(\[/]\s*\.{2,}\s*[\)\]/]'  # (...) /.../ [...]
-    r'|[\(\[]\s*…\s*[\)\]]'         # (…) […]
-    r'|\s+\.{2,}\s+'                # spaces ... spaces  (inline ellipsis)
-    r'|\s+…\s+'                     # spaces … spaces
-)
-
-# BBCode-wrapped URLs: [https://...] → unwrap to https://... before stripping tags
-_URL_BRACKET_RE = re.compile(r'\[(https?://[^\]]+)\]', re.IGNORECASE)
-
-# Minimum fingerprint length to attempt matching
-_MIN_FINGERPRINT = 5
-# Fingerprint lengths tried in order (longest first to avoid false positives)
-_FINGERPRINT_LENS = [120, 80, 60, 40, 20, 10]
-# Short fingerprints (below this) are only tried in a small nearby window,
-# never in the full topic or global fallback (too many false positives)
-_SHORT_FP_LIMIT = 20
-# How many preceding posts to search when using short fingerprints
-_SHORT_FP_WINDOW = 10
-
+_BIBLE_NGRAM_INDEX = None       # załadowany przez --bible-index
+_BIBLE_COVERAGE    = 0.40       # minimalny % n-gramów pasujących (--bible-coverage)
+_BIBLE_DRY_MIN     = 0.09       # minimalny % do pokazania w dry-run (--bible-dry-min)
 
 # ---------------------------------------------------------------------------
-# Date helpers
+# Bible index helpers
 # ---------------------------------------------------------------------------
 
-def _parse_pl_date(s: str):
-    """Parse 'Nie 21:08, 22 Sty 2006' → aware datetime (UTC). Returns None on failure."""
-    if not s:
-        return None
-    try:
-        parts = s.split()
-        time_part = parts[1].rstrip(",")
-        hour, minute = map(int, time_part.split(":"))
-        day   = int(parts[2])
-        month = _PL_MONTHS.get(parts[3])
-        year  = int(parts[4])
-        if month is None:
-            return None
-        naive = datetime(year, month, day, hour, minute)
-        return naive.replace(tzinfo=_WARSAW)
-    except Exception:
-        return None
-
-
-def _to_unix(created_at: str) -> int:
-    dt = _parse_pl_date(created_at)
-    return int(dt.timestamp()) if dt else 0
-
-
-# ---------------------------------------------------------------------------
-# BBCode helpers
-# ---------------------------------------------------------------------------
-
-def _strip_bbcode(text: str) -> str:
-    """Remove BBCode tags and normalize whitespace.
-    [https://url] is first unwrapped to https://url so bare and bracketed
-    URLs match each other.
-    """
-    text = _URL_BRACKET_RE.sub(r'\1', text)
-    stripped = _BBCODE_RE.sub("", text)
-    return " ".join(stripped.split()).lower()
-
-
-def _to_ascii(text: str) -> str:
-    """Strip diacritics: 'żółw' → 'zolw'. Used for diacritics-insensitive matching."""
-    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode()
-
-
-def _strip_bbcode_ascii(text: str) -> str:
-    """Like _strip_bbcode but also strips diacritics."""
-    return _to_ascii(_strip_bbcode(text))
-
-
-def _own_text_segments(inner: str) -> list[str]:
-    """Return the non-nested-quote text segments from a quote's inner content.
-
-    For [quote=A][quote=B]nested[/quote] R1 [quote=C]nested2[/quote] R2[/quote]
-    returns ["R1", "R2"] — the poster's own words, not the re-quoted material.
-
-    Returns segments in order; each is a stripped text string.
-    """
-    events = []
-    for m in _QUOTE_OPEN_RE.finditer(inner):
-        events.append((m.start(), "open", m.end()))
-    for m in _QUOTE_CLOSE_RE.finditer(inner):
-        events.append((m.start(), "close", m.end()))
-    events.sort(key=lambda x: x[0])
-
-    segments = []
-    depth = 0
-    last = 0
-    for pos, kind, end in events:
-        if kind == "open":
-            if depth == 0:
-                seg = inner[last:pos].strip()
-                if seg:
-                    segments.append(seg)
-            depth += 1
-        else:
-            if depth > 0:
-                depth -= 1
-                if depth == 0:
-                    last = end
-    tail = inner[last:].strip()
-    if tail:
-        segments.append(tail)
-    return segments
-
-
-def _split_on_ellipsis(text: str) -> list[str]:
-    """Split text on ellipsis markers (...) /.../ [...] returning non-empty parts."""
-    parts = _ELLIPSIS_RE.split(text)
-    return [p.strip() for p in parts if p.strip()]
-
-
-# ---------------------------------------------------------------------------
-# Bible detection
-# ---------------------------------------------------------------------------
-
-_BIBLE_NGRAM_INDEX: dict | None = None   # loaded lazily from --bible-index pickle
 _BIBLE_NGRAM_SIZE = 5
 
-def _load_bible_index(path: str) -> None:
+
+def load_bible_index(path):
     global _BIBLE_NGRAM_INDEX
     with open(path, 'rb') as f:
         data = pickle.load(f)
     _BIBLE_NGRAM_INDEX = data['ngrams']
 
 
-def _norm_for_bible(text: str) -> str:
-    """Normalize text: lowercase, strip diacritics, keep only alnum+space."""
+def norm_for_bible(text):
+    """Lowercase, strip diacritics, keep only alnum+space."""
     text = unicodedata.normalize('NFKD', text.lower())
-    return ''.join(c for c in text if unicodedata.category(c) != 'Mn' and (c.isalnum() or c == ' '))
+    return ''.join(c for c in text
+                   if unicodedata.category(c) != 'Mn' and (c.isalnum() or c == ' '))
 
 
-def _lookup_bible(inner: str) -> str | None:
-    """Return Bible reference string if inner text matches a Bible verse, else None.
+def _bible_votes(inner):
+    """Zwraca (best_ref, best_count, total_grams) dla tekstu wewnętrznego cytatu.
 
-    Uses the n-gram index loaded via --bible-index.  Returns the best matching
-    reference (e.g. "J 3,16") or book-only string for OT (e.g. "Ps").
-
-    Confidence rules:
-      - NT refs (contain comma, e.g. "J 3,16"): 1 matching n-gram is enough.
-        The NT mapping is exact so a single match is reliable.
-      - OT refs (book name only, e.g. "Ps"): require at least 2 matching n-grams
-        with the same ref, because the OT mapping is approximate and single common
-        phrases can produce false positives.
+    Nie stosuje żadnego progu — zwraca surowe dane do dalszej oceny.
+    Zwraca (None, 0, 0) jeśli brak jakiegokolwiek dopasowania.
     """
     if _BIBLE_NGRAM_INDEX is None:
-        return None
-    # Strip BBCode and prefixes, then normalize
-    text = _NAPISAL_PREFIX_RE.sub('', inner, count=1).strip()
-    text = _CYTAT_PREFIX_RE.sub('', text, count=1).strip()
-    text = _strip_bbcode(text)
-    ws = _norm_for_bible(text).split()
+        return None, 0, 0
+    text = _strip_bbcode_tags(inner)
+    ws = norm_for_bible(text).split()
     if not ws:
-        return None
+        return None, 0, 0
     n = _BIBLE_NGRAM_SIZE
     if len(ws) < n:
         key = ' '.join(ws)
         ref = _BIBLE_NGRAM_INDEX.get(key)
-        if ref and (',' in ref or len(ws) >= 4):
-            return ref
-        return None
-    # Count n-gram votes per reference
-    ref_votes: dict[str, int] = {}
-    for i in range(len(ws) - n + 1):
+        if ref:
+            return ref, 1, 1
+        return None, 0, 0
+    total_grams = len(ws) - n + 1
+    ref_votes = {}
+    for i in range(total_grams):
         key = ' '.join(ws[i:i + n])
         ref = _BIBLE_NGRAM_INDEX.get(key)
         if ref:
             ref_votes[ref] = ref_votes.get(ref, 0) + 1
     if not ref_votes:
-        return None
+        return None, 0, total_grams
     best_ref = max(ref_votes, key=ref_votes.get)
-    best_count = ref_votes[best_ref]
-    is_nt = ',' in best_ref   # NT refs have chapter,verse like "J 3,16"
-    min_votes = 1 if is_nt else 2
-    return best_ref if best_count >= min_votes else None
+    return best_ref, ref_votes[best_ref], total_grams
 
 
-def _fingerprints(inner: str) -> list[str]:
-    """Return ordered list of candidate search needles for a [quote] block.
+def lookup_bible(inner):
+    """Zwraca referencję biblijną jeśli tekst pasuje do wersetu, inaczej None.
 
-    Pipeline:
-    0. Strip manual "Username napisał:" / "Cytat:" prefix (hand-formatted quotes)
-    1. _own_text_segments — removes nested [quote] blocks, keeps poster's own text
-    2. _split_on_ellipsis — splits each segment at (...) and /.../ markers;
-       each part is searched independently so "A /.../ B" finds posts containing
-       either "A" or "B" rather than the impossible joined string "A B"
-    3. Each sub-segment tried at lengths 120→80→60→40 chars (long first to
-       avoid false positives; shorter catches emoticon/word-level edits)
-    4. Fallback: full inner text stripped (when all segments are too short)
+    Wymaga minimum 2 głosów i pokrycia >= _BIBLE_COVERAGE.
     """
-    # Strip manual quote prefixes before any processing
-    inner = _NAPISAL_PREFIX_RE.sub('', inner, count=1).strip()
-    inner = _CYTAT_PREFIX_RE.sub('', inner, count=1).strip()
-
-    fps_seen: set[str] = set()
-    fps: list[str] = []
-
-    def _add(text: str) -> None:
-        cleaned = _strip_bbcode(text)
-        for length in _FINGERPRINT_LENS:
-            fp = cleaned[:length].strip()
-            if len(fp) >= _MIN_FINGERPRINT and fp not in fps_seen:
-                fps_seen.add(fp)
-                fps.append(fp)
-
-    for seg in _own_text_segments(inner):
-        for sub in _split_on_ellipsis(seg):
-            _add(sub)
-        # Also add the whole segment (ellipsis replaced by space) for cases
-        # where /.../ appears at start/end and the rest is long enough
-        cleaned_whole = _strip_bbcode(_ELLIPSIS_RE.sub(" ", seg))
-        for length in _FINGERPRINT_LENS:
-            fp = cleaned_whole[:length].strip()
-            if len(fp) >= _MIN_FINGERPRINT and fp not in fps_seen:
-                fps_seen.add(fp)
-                fps.append(fp)
-
-    if not fps:
-        # Fallback: full inner text including nested-quote content
-        for sub in _split_on_ellipsis(inner):
-            _add(sub)
-        if not fps:
-            _add(_ELLIPSIS_RE.sub(" ", inner))
-
-    return fps
+    ref, best_count, total_grams = _bible_votes(inner)
+    if ref is None or best_count == 0:
+        return None
+    total_grams = max(1, total_grams)
+    min_coverage = max(2, int(total_grams * _BIBLE_COVERAGE + 0.9999))  # ceil, min 2
+    return ref if best_count >= min_coverage else None
 
 
 # ---------------------------------------------------------------------------
-# Quote extraction (stack-based, handles nesting)
+# BBCode parser – handles nested quotes correctly
 # ---------------------------------------------------------------------------
 
-def _extract_top_quotes(content: str) -> list:
-    """Find all top-level [quote] blocks.
+# Tags we preserve during normalization (case-insensitive names)
+PRESERVE_TAGS = {"quote", "fquote", "bible"}
 
-    Returns list of:
-        (block_start, block_end, tag_end, raw_username)
-    where:
-        block_start — index of '[quote...' opening tag
-        block_end   — index after '[/quote]' closing tag
-        tag_end     — index right after the opening tag (= start of inner content)
-        raw_username — string from [quote="..."] or None for [quote]
+# Regex to find any BBCode tag (opening, closing, or self-closing-ish)
+_BBCODE_TAG_RE = re.compile(
+    r'\[(/?)(\w+)(?:[^\]]*?)\]',
+    re.IGNORECASE,
+)
+
+# Opening quote-like tag (quote or fquote)
+_QUOTE_OPEN_RE = re.compile(
+    r'\[(quote|fquote|Bible)(?:[^\]]*?)\]',
+    re.IGNORECASE,
+)
+
+# Closing quote-like tag
+_QUOTE_CLOSE_RE = re.compile(
+    r'\[/(quote|fquote|Bible)\]',
+    re.IGNORECASE,
+)
+
+# Already-enriched tag: [quote="Author" post_id=123] or [quote post_id=123]
+_ENRICHED_TAG_RE = re.compile(r'\[quote[^\]]*post_id=\d+', re.IGNORECASE)
+
+# Named quote opening tag: [quote="Author Name"]
+_NAMED_QUOTE_RE = re.compile(
+    r'\[quote="([^"]+)"\]',
+    re.IGNORECASE,
+)
+
+# Ellipsis patterns that indicate skipped text in quotes
+_ELLIPSIS_RE = re.compile(
+    r'(?:/\.\.\./|\(\.\.\.\)|\.\.\.|…)',
+)
+
+
+def _strip_diacritics(text):
+    """Remove diacritical marks (ą→a, ś→s, etc.)."""
+    nfkd = unicodedata.normalize('NFKD', text)
+    return ''.join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def _strip_bbcode_tags(text):
+    """Remove BBCode tags except quote/fquote/Bible."""
+    def _replace(m):
+        tag_name = m.group(2).lower()
+        if tag_name in PRESERVE_TAGS:
+            return m.group(0)
+        return ''
+    return _BBCODE_TAG_RE.sub(_replace, text)
+
+
+def normalize_text(text):
+    """Normalize text for comparison: strip non-preserved BBCode tags,
+    remove diacritics, collapse whitespace."""
+    text = _strip_bbcode_tags(text)
+    text = _strip_diacritics(text)
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Proper BBCode quote parser (handles nesting)
+# ---------------------------------------------------------------------------
+
+class QuoteBlock:
+    """Represents a [quote="Author"]...[/quote] block in the content."""
+    __slots__ = ('start', 'end', 'tag_end', 'author', 'inner_start',
+                 'inner_end', 'inner_text', 'depth')
+
+    def __init__(self, start, end, tag_end, author, close_tag_len, depth=0):
+        self.start = start           # position of [ in [quote=
+        self.end = end               # position after ] in [/quote]
+        self.tag_end = tag_end       # position after ] in opening [quote="..."]
+        self.author = author         # author name or None
+        self.inner_start = tag_end   # content starts after opening tag
+        self.inner_end = end - close_tag_len  # content ends before closing tag
+        self.depth = depth
+
+
+def parse_quotes(content):
+    """Parse all quote blocks at all nesting levels.
+    Returns list of QuoteBlock sorted by start position.
+    Only returns [quote="Author"] blocks (named quotes).
     """
+    # Gather all opening and closing events
     events = []
     for m in _QUOTE_OPEN_RE.finditer(content):
-        events.append((m.start(), "open", m.group(1), m.end()))
+        # Extract author if present
+        nm = _NAMED_QUOTE_RE.match(content, m.start())
+        author = nm.group(1) if nm else None
+        events.append((m.start(), 'open', m.end(), author, m.group(0)))
     for m in _QUOTE_CLOSE_RE.finditer(content):
-        events.append((m.start(), "close", None, m.end()))
+        events.append((m.start(), 'close', m.end(), None, m.group(0)))
+
     events.sort(key=lambda x: x[0])
 
+    # Stack-based parsing
+    stack = []  # (start, tag_end, author, tag_text)
     result = []
-    depth = 0
-    block_start = -1
-    tag_end = -1
-    raw_username = None
 
-    for pos, kind, username, end in events:
-        if kind == "open":
-            if depth == 0:
-                block_start   = pos
-                tag_end       = end
-                raw_username  = username
-            depth += 1
-        else:  # close
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and block_start >= 0:
-                    result.append((block_start, end, tag_end, raw_username))
-                    block_start = -1
+    for pos, kind, end, author, tag_text in events:
+        if kind == 'open':
+            stack.append((pos, end, author, tag_text))
+        elif kind == 'close' and stack:
+            open_pos, open_tag_end, open_author, open_tag_text = stack.pop()
+            close_tag_len = end - pos
+            depth = len(stack)
+            block = QuoteBlock(
+                start=open_pos,
+                end=end,
+                tag_end=open_tag_end,
+                author=open_author,
+                close_tag_len=close_tag_len,
+                depth=depth,
+            )
+            result.append(block)
 
+    result.sort(key=lambda b: b.start)
     return result
 
 
+def extract_quote_text(content, block):
+    """Extract the text inside a quote block, excluding nested sub-quotes."""
+    inner = content[block.inner_start:block.inner_end]
+
+    # Remove nested quote blocks from inner text
+    # We need to re-parse within the inner text to find nested blocks
+    nested_events = []
+    for m in _QUOTE_OPEN_RE.finditer(inner):
+        nested_events.append((m.start(), 'open', m.end()))
+    for m in _QUOTE_CLOSE_RE.finditer(inner):
+        nested_events.append((m.start(), 'close', m.end()))
+    nested_events.sort(key=lambda x: x[0])
+
+    if not nested_events:
+        return inner
+
+    # Build ranges to exclude (nested quote blocks)
+    exclude_ranges = []
+    nstack = []
+    for npos, nkind, nend in nested_events:
+        if nkind == 'open':
+            nstack.append(npos)
+        elif nkind == 'close' and nstack:
+            nstart = nstack.pop()
+            if len(nstack) == 0:
+                exclude_ranges.append((nstart, nend))
+
+    # Build text excluding nested quotes
+    parts = []
+    prev = 0
+    for ex_start, ex_end in exclude_ranges:
+        parts.append(inner[prev:ex_start])
+        prev = ex_end
+    parts.append(inner[prev:])
+
+    return ''.join(parts)
+
+
 # ---------------------------------------------------------------------------
-# Username canonicalization
+# Text matching: does the quote text appear in the candidate post?
 # ---------------------------------------------------------------------------
 
-def _canonicalize(username: str | None, known_users: dict) -> str | None:
-    """Return canonical username or None if unknown/garbled."""
-    if not username:
-        return None
-    if username in known_users:
-        return username
-    # Case-insensitive fallback
-    lower = username.lower()
-    return known_users.get(lower)
+def _split_on_ellipsis(text):
+    """Split quote text on ellipsis markers, returning non-empty fragments."""
+    parts = _ELLIPSIS_RE.split(text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def match_quote_in_post(quote_text_norm, post_content_norm, min_fragment_len=15):
+    """Check if the normalized quote text can be found in the normalized post content.
+    Handles ellipsis-skipped fragments: each fragment must appear in order."""
+    if not quote_text_norm or not post_content_norm:
+        return False
+
+    fragments = _split_on_ellipsis(quote_text_norm)
+
+    if not fragments:
+        return False
+
+    # Filter out very short fragments (likely noise)
+    # But if there's only one fragment, allow shorter
+    if len(fragments) == 1:
+        frag = fragments[0]
+        if len(frag) < 8:
+            return False
+        return frag in post_content_norm
+
+    # Multiple fragments: each must appear in order
+    search_from = 0
+    matched_count = 0
+    for frag in fragments:
+        if len(frag) < 5:
+            # Skip very short fragments between ellipses
+            continue
+        idx = post_content_norm.find(frag, search_from)
+        if idx == -1:
+            return False
+        search_from = idx + len(frag)
+        matched_count += 1
+
+    return matched_count > 0
 
 
 # ---------------------------------------------------------------------------
-# Post matching
+# Main enrichment logic
 # ---------------------------------------------------------------------------
 
-def _match_post(fps: list[str], window: list, canonical: str | None,
-                global_fallback: list | None = None,
-                short_window: list | None = None) -> dict | None:
-    """Search window then optional global_fallback using fps needles.
+def load_known_users(users_db_path):
+    """Load usernames from sfinia_users_real.db, return as lowercase set."""
+    conn = sqlite3.connect(users_db_path)
+    rows = conn.execute("SELECT username FROM users").fetchall()
+    conn.close()
+    return {row[0].lower() for row in rows}
 
-    window          — posts from the same topic, ordered by post_order
-    global_fallback — N preceding posts globally by post_id (cross-topic)
-    short_window    — last _SHORT_FP_WINDOW posts in topic; used ONLY for
-                      short fingerprints (< _SHORT_FP_LIMIT) to avoid false
-                      positives — never searched globally
 
-    For each fingerprint, tries author-filtered first, then all posts.
-    Regular fps: topic window → global fallback.
-    Short fps:   short_window only (nearby context, no global).
+def build_author_cache(conn, known_users):
+    """Load all posts by known users into memory.
+
+    Returns dict: (topic_id, author_lower) -> list of (post_order, post_id, content_norm)
+    sorted ascending by post_order (for bisect lookups).
     """
-    if not fps:
-        return None
+    print("Ładuję cache postów do pamięci...", flush=True)
+    cache = {}
+    total = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+    loaded = 0
 
-    regular_fps = [fp for fp in fps if len(fp) >= _SHORT_FP_LIMIT]
-    tiny_fps    = [fp for fp in fps if len(fp) <  _SHORT_FP_LIMIT]
+    cursor = conn.execute(
+        "SELECT post_id, topic_id, lower(author_name), post_order, content FROM posts"
+        " ORDER BY topic_id, lower(author_name), post_order"
+    )
+    for post_id, topic_id, author_lower, post_order, content in cursor:
+        if author_lower not in known_users:
+            continue
+        key = (topic_id, author_lower)
+        entry = (post_order, post_id, normalize_text(content))
+        if key not in cache:
+            cache[key] = []
+        cache[key].append(entry)
+        loaded += 1
+        if loaded % 50000 == 0:
+            print(f"  {loaded:,} postów załadowanych...", flush=True)
 
-    def _try_one(fp: str, fp_ascii: str, posts) -> dict | None:
-        for p in reversed(posts):
-            if fp in p["stripped"]:
-                return p
-            # Diacritics fallback: both sides normalized to ASCII
-            if fp_ascii and fp_ascii != fp and fp_ascii in p["stripped_ascii"]:
-                return p
-        return None
-
-    def _try_fps_list(fp_list, posts):
-        for fp in fp_list:
-            fp_ascii = _to_ascii(fp)
-            hit = _try_one(fp, fp_ascii, posts)
-            if hit:
-                return hit
-        return None
-
-    def _search(fp_list, posts):
-        if canonical:
-            by_author = [p for p in posts if p["author_name"] == canonical]
-            found = _try_fps_list(fp_list, by_author)
-            if found:
-                return found
-        return _try_fps_list(fp_list, posts)
-
-    # Phase 1: regular-length fps in full topic window
-    result = _search(regular_fps, window) if regular_fps else None
-
-    # Phase 1b: global fallback — only by canonical author (no fall-through to all)
-    # Wider window (250 posts) is safe only when author-filtered
-    if result is None and regular_fps and global_fallback and canonical:
-        by_author = [p for p in global_fallback if p["author_name"] == canonical]
-        result = _try_fps_list(regular_fps, by_author) if by_author else None
-
-    # Phase 2: short fps — only in the small nearby window (no global)
-    if result is None and tiny_fps and short_window:
-        result = _search(tiny_fps, short_window)
-
-    return result
+    print(f"  Cache gotowy: {loaded:,} postów znanych userów w {len(cache):,} grupach (topic, autor)")
+    return cache
 
 
-# ---------------------------------------------------------------------------
-# Core enrichment
-# ---------------------------------------------------------------------------
+def cache_lookup(cache, topic_id, author_lower, current_post_order, lookback):
+    """Return up to `lookback` posts by author in topic before current_post_order.
 
-def _enrich_content(post_id: int, content: str,
-                    window: list, known_users: dict,
-                    quotes_out: list,
-                    global_fallback: list | None = None,
-                    short_window: list | None = None) -> str:
-    """Replace top-level [quote] tags with enriched versions.
-
-    Appends dicts to quotes_out for each quote found.
-    Returns the enriched content string.
+    Returns list of (post_id, content_norm) in descending post_order (newest first).
     """
-    quotes = _extract_top_quotes(content)
-    if not quotes:
-        return content
-
-    pieces = []
-    last_end = 0
-
-    for (block_start, block_end, tag_end, raw_username) in quotes:
-        canonical = _canonicalize(raw_username, known_users)
-        inner     = content[tag_end:block_end - len("[/quote]")]
-        fps       = _fingerprints(inner)
-        match     = _match_post(fps, window, canonical, global_fallback, short_window)
-
-        if match:
-            cited_id  = match["post_id"]
-            unix_time = _to_unix(match["created_at"])
-            author    = canonical or match["author_name"] or ""
-            if author:
-                new_tag = f"[quote={author} post_id={cited_id} time={unix_time}]"
-            else:
-                new_tag = f"[quote post_id={cited_id} time={unix_time}]"
-            quotes_out.append({
-                "citing_post_id":  post_id,
-                "cited_post_id":   cited_id,
-                "quote_author":    raw_username,
-                "canonical_author": canonical or (match["author_name"] if not canonical else None),
-                "found":           1,
-                "is_foreign":      0,
-            })
-        else:
-            # Not found — keep best available form
-            if canonical:
-                new_tag = f"[quote={canonical}]"
-            elif raw_username:
-                # garbled username → treat as anonymous
-                new_tag = "[quote]"
-            else:
-                new_tag = "[quote]"
-            quotes_out.append({
-                "citing_post_id":  post_id,
-                "cited_post_id":   None,
-                "quote_author":    raw_username,
-                "canonical_author": canonical,
-                "found":           0,
-                "is_foreign":      0,
-            })
-
-        pieces.append(content[last_end:block_start])
-        pieces.append(new_tag)
-        pieces.append(content[tag_end:block_end])   # inner + [/quote]
-        last_end = block_end
-
-    pieces.append(content[last_end:])
-    return "".join(pieces)
+    entries = cache.get((topic_id, author_lower))
+    if not entries:
+        return []
+    # entries is sorted ascending by post_order
+    idx = bisect.bisect_left(entries, (current_post_order,))
+    start = max(0, idx - lookback)
+    return [(pid, cnorm) for (_, pid, cnorm) in reversed(entries[start:idx])]
 
 
-# ---------------------------------------------------------------------------
-# Chain propagation
-# ---------------------------------------------------------------------------
+def build_global_cache(conn, known_users):
+    """Load all posts by known users into memory, indexed globally by author.
 
-# Matches enriched quote tags: [quote=Author post_id=N time=T] or [quote post_id=N time=T]
-_ENRICHED_TAG_RE = re.compile(
-    r'\[quote(?:=(?P<author>[^ \]]+))?\s+post_id=(?P<post_id>\d+)\s+time=(?P<time>\d+)\]',
-    re.IGNORECASE,
-)
-# Matches unenriched opening tags (no post_id): [quote=Author] or [quote]
-_PLAIN_TAG_RE = re.compile(
-    r'\[quote(?:="?(?P<author>[^"\]\s]+)"?)?\](?!\s*[^\[]*post_id=)',
-    re.IGNORECASE,
-)
-# Matches ANY [quote...] opening tag (both sfinia and enriched formats)
-# Used in propagation where content_quotes may contain enriched top-level tags
-_QUOTE_ANY_OPEN_RE = re.compile(r'\[quote(?:[^\]]*?)?\]', re.IGNORECASE)
-_QUOTE_CLOSE_PLAIN_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
-
-
-def _extract_top_quotes_enriched(content: str) -> list:
-    """Like _extract_top_quotes but also recognises enriched [quote=X post_id=N] tags."""
-    events = []
-    for m in _QUOTE_ANY_OPEN_RE.finditer(content):
-        events.append((m.start(), "open", m.group(0), m.end()))
-    for m in _QUOTE_CLOSE_PLAIN_RE.finditer(content):
-        events.append((m.start(), "close", None, m.end()))
-    events.sort(key=lambda x: x[0])
-
-    result = []
-    depth = 0
-    block_start = tag_end = -1
-    opening_tag = ""
-
-    for pos, kind, tag_text, end in events:
-        if kind == "open":
-            if depth == 0:
-                block_start = pos
-                tag_end     = end
-                opening_tag = tag_text or ""
-            depth += 1
-        else:
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and block_start >= 0:
-                    result.append((block_start, end, tag_end, opening_tag))
-                    block_start = -1
-    return result
-
-
-def _propagate_chain_quotes(conn, stdout) -> int:
-    """Enrich nested [quote] blocks inside already-resolved top-level citations.
-
-    For each post P that cites post Q (found in quotes table):
-      - Extract top-level [quote=Q_author post_id=Q_id] blocks from P's content_quotes
-      - Within each such block, find unenriched nested [quote=A] tags
-      - Look up quotes table: does Q cite A with a found citation?
-      - If yes (unambiguously), replace [quote=A] with [quote=A post_id=R time=T]
-
-    Returns count of nested tags enriched.
+    Returns dict: author_lower -> list of (post_id, content_norm)
+    sorted ascending by post_id (chronological order across all topics).
     """
-    # Build map: cited_post_id → list of {canonical_author, cited_post_id, created_at}
-    # i.e. "what did each post cite?"
-    post_citations: dict[int, list[dict]] = {}
+    print("Ładuję globalny cache postów do pamięci...", flush=True)
+    cache = {}
+    loaded = 0
+
+    cursor = conn.execute(
+        "SELECT post_id, lower(author_name), content FROM posts"
+        " ORDER BY lower(author_name), post_id"
+    )
+    for post_id, author_lower, content in cursor:
+        if author_lower not in known_users:
+            continue
+        entry = (post_id, normalize_text(content))
+        if author_lower not in cache:
+            cache[author_lower] = []
+        cache[author_lower].append(entry)
+        loaded += 1
+        if loaded % 50000 == 0:
+            print(f"  {loaded:,} postów załadowanych...", flush=True)
+
+    print(f"  Cache globalny gotowy: {loaded:,} postów w {len(cache):,} autorach")
+    return cache
+
+
+def global_cache_lookup(gcache, author_lower, current_post_id, lookback):
+    """Return up to `lookback` posts by author before current_post_id (globally).
+
+    Returns list of (post_id, content_norm) newest first.
+    """
+    entries = gcache.get(author_lower)
+    if not entries:
+        return []
+    # entries sorted ascending by post_id
+    idx = bisect.bisect_left(entries, (current_post_id,))
+    start = max(0, idx - lookback)
+    return list(reversed(entries[start:idx]))
+
+
+def build_topic_cache_all(conn):
+    """Load all posts indexed by topic_id (any author).
+
+    Returns dict: topic_id -> list of (post_order, post_id, author, content_norm)
+    sorted ascending by post_order.
+    """
+    print("Ładuję cache per-temat (wszyscy autorzy)...", flush=True)
+    cache = {}
+    loaded = 0
+    cursor = conn.execute(
+        "SELECT post_id, topic_id, author_name, post_order, content"
+        " FROM posts ORDER BY topic_id, post_order"
+    )
+    for post_id, topic_id, author, post_order, content in cursor:
+        entry = (post_order, post_id, author or '', normalize_text(content))
+        if topic_id not in cache:
+            cache[topic_id] = []
+        cache[topic_id].append(entry)
+        loaded += 1
+        if loaded % 50000 == 0:
+            print(f"  {loaded:,} postów załadowanych...", flush=True)
+    print(f"  Cache per-temat gotowy: {loaded:,} postów w {len(cache):,} wątkach")
+    return cache
+
+
+def topic_cache_all_lookup(cache, topic_id, current_post_order, lookback):
+    """Return up to `lookback` posts in topic before current_post_order (any author).
+
+    Returns list of (post_id, author, content_norm) newest first.
+    """
+    entries = cache.get(topic_id)
+    if not entries:
+        return []
+    idx = bisect.bisect_left(entries, (current_post_order,))
+    start = max(0, idx - lookback)
+    return [(pid, auth, cnorm) for (_, pid, auth, cnorm) in reversed(entries[start:idx])]
+
+
+def build_global_cache_all(conn):
+    """Load all posts globally (any author) sorted by post_id.
+
+    Returns list of (post_id, author, content_norm) sorted ascending.
+    """
+    print("Ładuję globalny cache (wszyscy autorzy)...", flush=True)
+    entries = []
+    loaded = 0
+    cursor = conn.execute(
+        "SELECT post_id, author_name, content FROM posts ORDER BY post_id"
+    )
+    for post_id, author, content in cursor:
+        entries.append((post_id, author or '', normalize_text(content)))
+        loaded += 1
+        if loaded % 50000 == 0:
+            print(f"  {loaded:,} postów załadowanych...", flush=True)
+    print(f"  Cache globalny (wszyscy) gotowy: {loaded:,} postów")
+    return entries
+
+
+def global_cache_all_lookup(entries, current_post_id, lookback):
+    """Return up to `lookback` posts before current_post_id (any author).
+
+    Returns list of (post_id, author, content_norm) newest first.
+    """
+    idx = bisect.bisect_left(entries, (current_post_id,))
+    start = max(0, idx - lookback)
+    return list(reversed(entries[start:idx]))
+
+
+_MAX_POSTS_PER_GRAM = 5   # 5-gramy pojawiające się w >5 postach → zbyt pospolite, pomijane
+_NGRAM_SIZE = 5
+_NGRAM_MIN_VOTES = 2      # wymagane min. głosów (≥1 dla bardzo krótkich cytatów)
+_NGRAM_MAX_GRAMS_TRIED = 80  # ile 5-gramów sprawdzamy na cytat (stride 2)
+
+
+def _words(text):
+    """Tokenizuj znormalizowany tekst na słowa (alnum)."""
+    return re.findall(r'[a-z0-9]+', text.lower())
+
+
+def build_ngram_index(conn):
+    """Buduj 5-gram index z content_user wszystkich postów.
+
+    Zwraca (ngram_index, post_author):
+      ngram_index: dict str -> list[int post_id]  (max MAX_POSTS_PER_GRAM wpisów)
+      post_author: dict int -> str  (post_id -> author_name)
+    """
+    print("Budowanie 5-gram indeksu z content_user...", flush=True)
+    import time as _time
+    t0 = _time.time()
+
+    ngram_index = {}
+    post_author = {}
+    loaded = 0
+
     for row in conn.execute(
-        "SELECT q.citing_post_id, q.canonical_author, q.cited_post_id, p.created_at "
-        "FROM quotes q JOIN posts p ON q.cited_post_id = p.post_id "
-        "WHERE q.found = 1 ORDER BY q.citing_post_id"
+        "SELECT post_id, author_name, content_user FROM posts"
+        " WHERE content_user IS NOT NULL AND content_user != ''"
     ):
-        cit_id = row[0]
-        if cit_id not in post_citations:
-            post_citations[cit_id] = []
-        post_citations[cit_id].append({
-            "author":     row[1] or "",
-            "post_id":    row[2],
-            "created_at": row[3] or "",
-        })
+        pid, author, cu = row[0], row[1] or '', row[2] or ''
+        post_author[pid] = author
+        ws = _words(normalize_text(cu))
+        for i in range(len(ws) - _NGRAM_SIZE + 1):
+            key = ' '.join(ws[i:i + _NGRAM_SIZE])
+            lst = ngram_index.get(key)
+            if lst is None:
+                ngram_index[key] = [pid]
+            elif len(lst) < _MAX_POSTS_PER_GRAM:
+                lst.append(pid)
+        loaded += 1
+        if loaded % 50000 == 0:
+            print(f"  {loaded:,} postów zaindeksowanych...", flush=True)
 
-    # Only process posts that:
-    #   a) have at least one found outer citation (q_outer.found=1)
-    #   b) whose cited post itself has found citations (q_inner.found=1)
-    # This avoids scanning all 200k+ posts — SQL join identifies exact candidates.
-    candidate_ids = {
-        row[0] for row in conn.execute(
-            "SELECT DISTINCT q_outer.citing_post_id "
-            "FROM quotes q_outer "
-            "JOIN quotes q_inner ON q_outer.cited_post_id = q_inner.citing_post_id "
-            "WHERE q_outer.found = 1 AND q_inner.found = 1"
+    t1 = _time.time()
+    print(f"  {len(ngram_index):,} unikalnych 5-gramów, {loaded:,} postów, {t1-t0:.1f}s")
+    return ngram_index, post_author
+
+
+def ngram_lookup(ngram_index, post_author, quote_norm, current_post_id):
+    """Znajdź post źródłowy cytatu przez 5-gram voting.
+
+    Zwraca (post_id, author) lub (None, None).
+    Wśród kandydatów z tą samą liczbą głosów wybiera najbliższy (największy post_id < current).
+    """
+    ws = _words(quote_norm)
+    if len(ws) < _NGRAM_SIZE:
+        return None, None
+
+    votes = {}
+    grams_tried = 0
+    for i in range(0, len(ws) - _NGRAM_SIZE + 1, 2):  # stride 2 dla szybkości
+        key = ' '.join(ws[i:i + _NGRAM_SIZE])
+        pids = ngram_index.get(key)
+        if pids:
+            for p in pids:
+                if p < current_post_id:  # tylko wcześniejsze posty
+                    votes[p] = votes.get(p, 0) + 1
+        grams_tried += 1
+        if grams_tried >= _NGRAM_MAX_GRAMS_TRIED:
+            break
+
+    if not votes:
+        return None, None
+
+    min_votes = 1 if grams_tried <= 3 else _NGRAM_MIN_VOTES
+    best_cnt = max(votes.values())
+    if best_cnt < min_votes:
+        return None, None
+
+    # Wśród remisujących → najbliższy (największy post_id < current_post_id)
+    candidates = [p for p, c in votes.items() if c == best_cnt]
+    best_pid = max(candidates)  # największy post_id = najbliższy chronologicznie
+
+    return best_pid, post_author.get(best_pid, '')
+
+
+def create_quotes_table(conn):
+    """Create the quotes table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL,
+            quoted_user TEXT,
+            quoted_user_resolved TEXT,
+            source_post_id INTEGER,
+            quote_text_preview TEXT,
+            quote_index INTEGER NOT NULL,
+            found INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (post_id) REFERENCES posts(post_id),
+            FOREIGN KEY (source_post_id) REFERENCES posts(post_id),
+            UNIQUE (post_id, quote_index)
         )
-    }
-    stdout.write(f"  Kandydatów do propagacji: {len(candidate_ids)}")
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_quotes_post_id ON quotes(post_id)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_quotes_source ON quotes(source_post_id)
+    """)
+    # nested_status: 0=niezbadane, 1=wszystkie zagnieżdżone OK, 2=część nierozwiązana
+    try:
+        conn.execute("ALTER TABLE posts ADD COLUMN nested_status INTEGER NOT NULL DEFAULT 0")
+        print("Dodano kolumnę nested_status do posts")
+    except Exception:
+        pass  # już istnieje
+    conn.commit()
 
-    if not candidate_ids:
+
+# ---------------------------------------------------------------------------
+# Pass: propagate – propagacja post_id do zagnieżdżonych cytatów
+# ---------------------------------------------------------------------------
+
+# Regex: enriched opening tag z post_id
+_ENRICHED_OPEN_RE = re.compile(
+    r'\[(?P<qtype>f?quote)(?:="(?P<author>[^"]*)")?\s+post_id=(?P<post_id>\d+)[^\]]*\]',
+    re.IGNORECASE,
+)
+# Unresolved opening tag (bez post_id)
+_UNRESOLVED_OPEN_RE = re.compile(
+    r'\[(?:f?quote)(?:="(?P<author>[^"]*)")?\]',
+    re.IGNORECASE,
+)
+
+
+def run_propagate(conn, dry_run=False):
+    """Propaguj post_id do zagnieżdżonych cytatów.
+
+    Dla każdego postu z content_quotes:
+      - znajdź enriched outer [quote post_id=N]
+      - wewnątrz niego znajdź unresolved [quote]
+      - sprawdź w tabeli quotes co cytował post N
+      - przypisz post_id z tego wpisu
+
+    Iteruje do stabilizacji (dla zagłębień >2).
+    Zwraca liczbę wzbogaconych tagów.
+    """
+    # Zbuduj mapę: post_id → lista (source_post_id, quoted_user_resolved)
+    # dla wpisów found=1
+    print("Wczytuję mapę cytatów z tabeli quotes...", flush=True)
+    citations = {}  # post_id -> [(source_post_id, author), ...]
+    for row in conn.execute(
+        "SELECT post_id, source_post_id, quoted_user_resolved FROM quotes WHERE found=1"
+    ):
+        pid, src, auth = row[0], row[1], row[2] or ''
+        if pid not in citations:
+            citations[pid] = []
+        citations[pid].append((src, auth))
+    print(f"  {len(citations):,} postów z known citations")
+
+    # Pobierz post_author dla znalezionych source postów
+    all_source_ids = set()
+    for lst in citations.values():
+        for src, _ in lst:
+            all_source_ids.add(src)
+
+    total_enriched = 0
+    iteration = 0
+
+    while True:
+        iteration += 1
+        enriched_this_iter = 0
+
+        # Posty gdzie nested_status != 1 i content_quotes zawiera zagnieżdżone
+        rows = conn.execute(
+            "SELECT post_id, content_quotes FROM posts"
+            " WHERE content_quotes IS NOT NULL AND nested_status != 1"
+        ).fetchall()
+
+        updates = []  # (new_content_quotes, nested_status, post_id)
+        quote_inserts = []
+
+        for post_id, cq in rows:
+            # Szukaj enriched outer tagów
+            outer_matches = list(_ENRICHED_OPEN_RE.finditer(cq))
+            if not outer_matches:
+                updates.append((cq, 1, post_id))
+                continue
+
+            # Parsuj strukturę zagnieżdżeń
+            events = []
+            for m in _QUOTE_OPEN_RE.finditer(cq):
+                events.append((m.start(), 'open', m.end(), m.group(0)))
+            for m in _QUOTE_CLOSE_RE.finditer(cq):
+                events.append((m.start(), 'close', m.end(), m.group(0)))
+            events.sort(key=lambda x: x[0])
+
+            # Znajdź bloki (start, end, tag_end, opening_tag, depth_when_opened)
+            stack = []
+            blocks = []
+            for pos, kind, end, tag_text in events:
+                if kind == 'open':
+                    stack.append((pos, end, tag_text))
+                elif kind == 'close' and stack:
+                    open_pos, open_tag_end, open_tag_text = stack.pop()
+                    depth = len(stack)
+                    blocks.append((open_pos, end, open_tag_end, open_tag_text, depth, len(tag_text)))
+
+            # Dla każdego enriched outer bloku (depth=0): szukaj unresolved wewnątrz
+            new_cq = cq
+            offset = 0
+            changed = False
+            has_unresolved = False
+
+            for b_start, b_end, b_tag_end, b_tag, b_depth, b_close_len in blocks:
+                if b_depth != 0:
+                    continue
+                m = _ENRICHED_OPEN_RE.match(b_tag)
+                if not m:
+                    # Outer unresolved - nie obsługujemy tu
+                    if _UNRESOLVED_OPEN_RE.match(b_tag):
+                        has_unresolved = True
+                    continue
+
+                outer_cited_pid = int(m.group('post_id'))
+                outer_cits = citations.get(outer_cited_pid, [])
+                if not outer_cits:
+                    continue
+
+                # Buduj mapę author_lower → (source_pid, author)
+                # Jeśli jeden cytat → można przypisać bez dopasowania autora
+                author_map = {}  # author_lower -> (src_pid, auth) lub None jeśli ambig
+                for src_pid, auth in outer_cits:
+                    key = auth.lower() if auth else '__anon__'
+                    if key in author_map:
+                        author_map[key] = None  # ambiguous
+                    else:
+                        author_map[key] = (src_pid, auth)
+
+                # Znajdź unresolved tagi wewnątrz tego outer bloku
+                inner_start = b_tag_end
+                inner_end = b_end - b_close_len
+
+                # Szukaj unresolved bloków wewnętrznych
+                for ib_start, ib_end, ib_tag_end, ib_tag, ib_depth, ib_close_len in blocks:
+                    if ib_depth != 1:
+                        continue
+                    if ib_start < inner_start or ib_end > b_end:
+                        continue
+                    if not _UNRESOLVED_OPEN_RE.match(ib_tag):
+                        continue
+
+                    im = _UNRESOLVED_OPEN_RE.match(ib_tag)
+                    inner_author = (im.group('author') or '').strip()
+                    key = inner_author.lower() if inner_author else '__anon__'
+
+                    hit = author_map.get(key)
+                    # Jeśli nie ma dokładnego dopasowania a jest tylko jeden cytat
+                    if hit is None and len(outer_cits) == 1:
+                        hit = outer_cits[0]
+
+                    if hit is None:
+                        has_unresolved = True
+                        continue
+
+                    src_pid, src_auth = hit
+                    # Zachowaj typ tagu (quote/fquote)
+                    tag_type = 'fquote' if ib_tag.lower().startswith('[fquote') else 'quote'
+                    if inner_author:
+                        new_tag = '[%s="%s" post_id=%d]' % (tag_type, inner_author, src_pid)
+                    elif src_auth:
+                        new_tag = '[%s="%s" post_id=%d]' % (tag_type, src_auth, src_pid)
+                    else:
+                        new_tag = '[%s post_id=%d]' % (tag_type, src_pid)
+
+                    adj_start = ib_start + offset
+                    adj_tag_end = ib_tag_end + offset
+                    new_cq = new_cq[:adj_start] + new_tag + new_cq[adj_tag_end:]
+                    offset += len(new_tag) - len(ib_tag)
+                    changed = True
+                    enriched_this_iter += 1
+
+                    quote_inserts.append((post_id, inner_author or None,
+                                         src_auth or None, src_pid,
+                                         None, -1, 1))
+
+            nested_status = 2 if (has_unresolved or bool(_UNRESOLVED_OPEN_RE.search(new_cq))) else 1
+            updates.append((new_cq, nested_status, post_id))
+
+        print(f"  Iteracja {iteration}: wzbogacono {enriched_this_iter} tagów", flush=True)
+        total_enriched += enriched_this_iter
+
+        if dry_run:
+            break  # w dry-run nie zapisujemy → kolejne iteracje dałyby ten sam wynik
+
+        if updates:
+            conn.executemany(
+                "UPDATE posts SET content_quotes=?, nested_status=? WHERE post_id=?",
+                updates,
+            )
+            if quote_inserts:
+                conn.executemany(
+                    """INSERT OR IGNORE INTO quotes
+                       (post_id, quoted_user, quoted_user_resolved,
+                        source_post_id, quote_text_preview, quote_index, found)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    quote_inserts,
+                )
+            conn.commit()
+            # Zaktualizuj mapę citations o nowe wpisy
+            for pid, qu, qur, src, _, _, _ in quote_inserts:
+                if pid not in citations:
+                    citations[pid] = []
+                citations[pid].append((src, qur or ''))
+
+        if enriched_this_iter == 0:
+            break  # stabilizacja
+
+    return total_enriched
+
+
+# ---------------------------------------------------------------------------
+# Pass: bible – zamień unresolved [quote] pasujące do Biblii na [Bible=ref]
+# ---------------------------------------------------------------------------
+
+_BIBLE_OPEN_RE = re.compile(r'\[Bible=[^\]]*\]', re.IGNORECASE)
+# Dowolny otwierający tag cytatowy (quote/fquote/Bible) — do odrzucania bloków z zagnieżdżonymi cytatami
+_ANY_QUOTE_OPEN_RE = re.compile(r'\[(?:quote|fquote|Bible)(?:[^\]]*)\]', re.IGNORECASE)
+_BIBLE_FOUND_RE = re.compile(
+    r'\[(?:quote[^\]]*post_id=\d|Bible=)[^\]]*\]', re.IGNORECASE
+)
+
+
+def run_bible(conn, dry_run=False, review_path=None):
+    """Wykryj cytaty biblijne i zamień [quote...]...[/quote] na [Bible=ref]...[/Bible].
+
+    Przetwarza:
+      - posty z quote_status IN (2,3): nierozwiązane cytaty top-level
+      - posty z nested_status=2: nierozwiązane cytaty zagnieżdżone
+
+    Używa leaf-blocks (bez zagnieżdżonych nierozwiązanych cytatów w środku)
+    i zastępuje je od prawej do lewej, by nie psuć pozycji.
+
+    Bloki zawierające wewnątrz inne [quote]/[fquote]/[Bible] są odrzucane.
+
+    Kryteria:
+      - auto-tag:  votes >= max(2, ceil(total_grams * _BIBLE_COVERAGE))
+      - review:    votes == 1 AND pct >= 25%  (nie dłuższe niż 4 n-gramy)
+      - dry-run pokazuje wszystko z votes >= 1 AND pct >= 10%
+
+    Zwraca liczbę wstawionych tagów [Bible=].
+    """
+    if _BIBLE_NGRAM_INDEX is None:
+        print("BŁĄD: Bible index nie załadowany. Użyj --bible-index.")
         return 0
 
-    placeholders = ','.join('?' * len(candidate_ids))
-    candidate_rows = conn.execute(
-        f"SELECT post_id, content_quotes FROM posts "
-        f"WHERE post_id IN ({placeholders}) AND content_quotes IS NOT NULL",
-        list(candidate_ids)
+    rows = conn.execute(
+        "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        " WHERE (quote_status IN (2, 3) OR nested_status = 2)"
+        "   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%')"
     ).fetchall()
 
-    # Process posts that have found outer citations
     updates = []
-    enriched_total = 0
+    bible_total = 0
+    dry_log = []     # (pct, post_id, ref, votes, total_grams, inner_text, kind)
+    review_items = []  # (post_id, ref, votes, total_grams, pct, inner_text)
 
-    for row in candidate_rows:
-        post_id  = row[0]
-        content  = row[1]
-        if not _PLAIN_TAG_RE.search(content):
-            continue  # no unenriched nested tags at all
+    for post_id, content in rows:
+        if not content:
+            continue
 
-        # Find top-level blocks (enriched AND unenriched) in this post
-        top_quotes = _extract_top_quotes_enriched(content)
-        if not top_quotes:
+        all_blocks = parse_quotes(content)
+        if not all_blocks:
+            continue
+
+        # Bloki nierozwiązane: brak post_id= i nie [Bible=]
+        unresolved = []
+        for b in all_blocks:
+            raw_open = content[b.start:b.tag_end]
+            if not _ENRICHED_TAG_RE.search(raw_open) and not _BIBLE_OPEN_RE.match(raw_open):
+                unresolved.append(b)
+
+        if not unresolved:
+            continue
+
+        # Bloki liściowe: żaden inny nierozwiązany blok nie jest w ich wnętrzu
+        def is_leaf(b):
+            for other in unresolved:
+                if id(other) == id(b):
+                    continue
+                if other.start >= b.inner_start and other.end <= b.inner_end:
+                    return False
+            return True
+
+        leaf_blocks = [b for b in unresolved if is_leaf(b)]
+
+        # Sprawdź każdy liść przez indeks biblijny
+        replacements = []
+        for b in leaf_blocks:
+            inner = content[b.inner_start:b.inner_end]
+
+            # Odrzuć bloki zawierające zagnieżdżone quote/fquote/Bible
+            if _ANY_QUOTE_OPEN_RE.search(inner):
+                continue
+
+            ref, votes, total_g = _bible_votes(inner)
+            if ref is None or votes == 0:
+                continue
+
+            pct = votes / max(1, total_g)
+            min_votes = max(2, int(total_g * _BIBLE_COVERAGE + 0.9999))  # ceil
+
+            if votes >= min_votes:
+                # Automatyczne tagowanie
+                replacements.append((b.start, b.tag_end, b.inner_end, b.end, ref))
+                if dry_run:
+                    dry_log.append((pct, post_id, ref, votes, total_g, inner, 'auto'))
+            elif votes == 1 and pct >= 1/12:
+                # Do przeglądu ręcznego (1 trafienie, >=25%)
+                if dry_run:
+                    dry_log.append((pct, post_id, ref, votes, total_g, inner, 'review'))
+                else:
+                    review_items.append((post_id, ref, votes, total_g, pct, inner))
+            elif dry_run and votes > 1 and pct >= _BIBLE_DRY_MIN:
+                # Widoczne w dry-run (>=2 trafień, >=9%), poniżej progu auto
+                dry_log.append((pct, post_id, ref, votes, total_g, inner, 'skip'))
+
+        if not replacements:
+            continue
+
+        if dry_run:
+            bible_total += len(replacements)
+            continue   # w dry-run nie modyfikujemy bazy
+
+        # Zastąp od prawej do lewej (pozycje z oryginalnego content są wtedy poprawne)
+        replacements.sort(key=lambda x: x[0], reverse=True)
+        new_content = content
+        for start, tag_end, inner_end, end, ref in replacements:
+            new_tag   = '[Bible=%s]' % ref
+            new_close = '[/Bible]'
+            new_content = (
+                new_content[:start]
+                + new_tag
+                + new_content[tag_end:inner_end]
+                + new_close
+                + new_content[end:]
+            )
+            bible_total += 1
+
+        # Przelicz quote_status
+        n_unresolved = len(_UNRESOLVED_OPEN_RE.findall(new_content))
+        n_found      = len(_BIBLE_FOUND_RE.findall(new_content))
+        if n_unresolved == 0 and n_found > 0:
+            new_quote_status = 1
+        elif n_found == 0:
+            new_quote_status = 2
+        else:
+            new_quote_status = 3
+
+        # Przelicz nested_status
+        new_nested_status = 2 if _UNRESOLVED_OPEN_RE.search(new_content) else 1
+
+        updates.append((new_content, new_quote_status, new_nested_status, post_id))
+
+    if dry_run and dry_log:
+        # Sortuj od największego % do najmniejszego
+        dry_log.sort(key=lambda x: x[0], reverse=True)
+
+        # Główny log: n>1, od 100% do 9% (auto + poniżej progu)
+        main_items   = [(p, pid, ref, v, g, inn) for p, pid, ref, v, g, inn, k in dry_log
+                        if k in ('auto', 'skip')]
+        review_shown = [(p, pid, ref, v, g, inn) for p, pid, ref, v, g, inn, k in dry_log
+                        if k == 'review']
+
+        if main_items:
+            print(f"\n{'pct':>5}  {'post_id':>8}  {'ref':<18}  {'v/g':<10}  tag?  fragment")
+            print('-' * 115)
+            for pct, pid, ref, votes, total_g, inner in main_items:
+                fragment = re.sub(r'\s+', ' ', _strip_bbcode_tags(inner)).strip()[:200]
+                min_v = max(2, int(total_g * _BIBLE_COVERAGE + 0.9999))
+                tag_mark = 'TAK' if votes >= min_v else '---'
+                print(f"{pct*100:>4.0f}%  {pid:>8}  [{ref:<16}]  {votes}/{total_g:<8}  {tag_mark}  {fragment!r}")
+
+        if review_shown:
+            print(f"\n--- REVIEW: 1 trafienie, >=1/12 (8%) ({len(review_shown)} pozycji) ---")
+            print(f"{'pct':>5}  {'post_id':>8}  {'ref':<18}  {'v/g':<10}  fragment")
+            print('-' * 110)
+            for pct, pid, ref, votes, total_g, inner in review_shown:
+                fragment = re.sub(r'\s+', ' ', _strip_bbcode_tags(inner)).strip()[:200]
+                print(f"{pct*100:>4.0f}%  {pid:>8}  [{ref:<16}]  {votes}/{total_g:<8}  {fragment!r}")
+
+    # Zbierz review_items z dry_log jeśli dry_run
+    if dry_run:
+        review_items = [(pid, ref, v, g, p, inn)
+                        for p, pid, ref, v, g, inn, k in dry_log if k == 'review']
+
+    if review_items and review_path:
+        # Zapisz do pliku review z placeholderami do edycji (zawsze, także przy dry-run)
+        with open(review_path, 'w', encoding='utf-8') as rf:
+            rf.write("# Bible review: 1 trafienie n-gramu, pokrycie >=1/12\n")
+            rf.write("# Dla każdej pozycji zmień SKIP na BIBLE jeśli cytat jest biblijny.\n")
+            rf.write("# Nie zmieniaj linii zaczynających się od #.\n\n")
+            for pid, ref, votes, total_g, pct, inner in sorted(review_items, key=lambda x: x[4], reverse=True):
+                fragment = re.sub(r'\s+', ' ', _strip_bbcode_tags(inner)).strip()[:300]
+                rf.write(f"# POST {pid}  [{ref}]  {votes}/{total_g}  ({pct*100:.0f}%)\n")
+                rf.write(f"# {fragment}\n")
+                rf.write(f"SKIP  POST={pid}  REF={ref}\n")
+                rf.write("\n")
+        print(f"  Zapisano {len(review_items)} pozycji do przeglądu: {review_path}")
+
+    auto_count = len(set(x[1] for x in dry_log if x[6] == 'auto')) if dry_run else len(updates)
+    print(f"\n  Wykryto cytatów biblijnych: {bible_total:,} w {auto_count:,} postach")
+    if review_items:
+        print(f"  Do przeglądu (review): {len(review_items)}")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=?, nested_status=? WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    return bible_total
+
+
+# ---------------------------------------------------------------------------
+# Pass: analyze-depth – maksymalne zagnieżdżenie tagów dla quote_status=1
+# ---------------------------------------------------------------------------
+
+_ANYDEPTH_OPEN_RE  = re.compile(r'\[(quote|fquote|Bible)(?:[^\]]*)\]', re.IGNORECASE)
+_ANYDEPTH_CLOSE_RE = re.compile(r'\[/(quote|fquote|Bible)\]', re.IGNORECASE)
+
+
+def run_analyze_depth(conn, sample_count=5):
+    """Dla postów z quote_status=1 zlicza maksymalne zagnieżdżenie tagów.
+
+    Reguła głębokości:
+      0 = brak tagów
+      1 = pojedynczy [quote]/[fquote]/[Bible]
+      2 = [quote] w [quote], [Bible] w [quote] itp.
+      itd.
+
+    Raporty błędów gdy typ zamykającego != typ ostatniego otwierającego.
+    Wypisuje rozkład głębokości i kilka przykładów o max głębokości.
+    """
+    rows = conn.execute(
+        "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        " WHERE quote_status = 1"
+    ).fetchall()
+
+    depth_counts = {}   # max_depth -> count
+    max_depth_posts = []  # (post_id, max_depth, content)
+    errors = 0
+    global_max = 0
+
+    for post_id, content in rows:
+        if not content:
+            depth_counts[0] = depth_counts.get(0, 0) + 1
+            continue
+
+        # Zbierz wszystkie zdarzenia w kolejności
+        events = []
+        for m in _ANYDEPTH_OPEN_RE.finditer(content):
+            events.append((m.start(), 'open', m.group(1).lower()))
+        for m in _ANYDEPTH_CLOSE_RE.finditer(content):
+            events.append((m.start(), 'close', m.group(1).lower()))
+        events.sort(key=lambda x: x[0])
+
+        stack = []
+        depth = 0
+        max_d = 0
+        post_errors = 0
+
+        for _, kind, tag_type in events:
+            if kind == 'open':
+                stack.append(tag_type)
+                depth += 1
+                if depth > max_d:
+                    max_d = depth
+            else:
+                if stack:
+                    expected = stack[-1]
+                    if expected != tag_type:
+                        post_errors += 1
+                    stack.pop()
+                    depth -= 1
+                else:
+                    post_errors += 1
+
+        if post_errors:
+            errors += 1
+
+        depth_counts[max_d] = depth_counts.get(max_d, 0) + 1
+
+        if max_d > global_max:
+            global_max = max_d
+            max_depth_posts = [(post_id, max_d, content)]
+        elif max_d == global_max and max_d > 0:
+            max_depth_posts.append((post_id, max_d, content))
+
+    # Wyniki
+    print(f"\nAnaliza głębokości tagów (quote_status=1):")
+    print(f"  Postów z błędami typów tagów: {errors:,}")
+    print(f"\n  Rozkład max zagnieżdżenia:")
+    for d in sorted(depth_counts):
+        label = {0: 'brak tagów', 1: 'płaskie', 2: 'quote w quote'}.get(d, f'poziom {d}')
+        print(f"    głębokość {d} ({label}): {depth_counts[d]:,} postów")
+
+    print(f"\n  Maksymalne zagnieżdżenie: {global_max}")
+    print(f"\n  Przykłady (max {sample_count}) z głębokością {global_max}:")
+    for post_id, max_d, content in max_depth_posts[:sample_count]:
+        # Pokaż fragment okolicy najgłębszego zagnieżdżenia
+        snippet = re.sub(r'\s+', ' ', content).strip()[:300]
+        print(f"\n  POST={post_id}")
+        print(f"    {snippet!r}")
+
+    return global_max
+
+
+# ---------------------------------------------------------------------------
+# Pass: mark-broken – oznacz posty z niezbalansowanymi [quote]/[/quote]
+# ---------------------------------------------------------------------------
+
+_QUOTE_OPEN_ONLY_RE  = re.compile(r'\[quote(?:[^\]]*)\]', re.IGNORECASE)
+_QUOTE_CLOSE_ONLY_RE = re.compile(r'\[/quote\]', re.IGNORECASE)
+
+
+def run_mark_broken(conn, dry_run=False):
+    """Sprawdza pole content (oryginalne) czy liczba [quote...] == liczba [/quote].
+    Jeśli nie → content_quotes=NULL, quote_status=4, nested_status=0.
+    """
+    rows = conn.execute(
+        "SELECT post_id, content FROM posts"
+        " WHERE content LIKE '%[quote%'"
+    ).fetchall()
+
+    updates = []
+    broken = 0
+
+    for post_id, content in rows:
+        if not content:
+            continue
+        n_open  = len(_QUOTE_OPEN_ONLY_RE.findall(content))
+        n_close = len(_QUOTE_CLOSE_ONLY_RE.findall(content))
+        if n_open == n_close:
+            continue
+
+        broken += 1
+        if dry_run:
+            print(f"  POST={post_id}  open={n_open}  close={n_close}")
+        else:
+            updates.append((post_id,))
+
+    print(f"\n  Niezbalansowanych postów: {broken:,}")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=NULL, quote_status=4, nested_status=0"
+            " WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    return broken
+
+
+# ---------------------------------------------------------------------------
+# Pass: fix-status – przelicz quote_status i nested_status z aktualnej treści
+# ---------------------------------------------------------------------------
+
+def run_fix_status(conn, dry_run=False):
+    """Dla postów z quote_status IN (2,3):
+    1. Zamienia pozostałe nierozwiązane [quote] → [fquote] (jak to-fquote).
+    2. Przelicza quote_status i nested_status z aktualnej treści.
+    """
+    rows = conn.execute(
+        "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        " WHERE quote_status IN (2, 3)"
+    ).fetchall()
+
+    updates = []
+    fixed = 0
+    converted = 0
+
+    for post_id, content in rows:
+        if not content:
+            updates.append((content, 0, 1, post_id))
+            fixed += 1
+            continue
+
+        # Krok 1: zamień pozostałe nierozwiązane [quote] → [fquote]
+        # Przetwarzaj tylko liście per runda (re-parse eliminuje problem pozycji)
+        new_content = content
+        while True:
+            all_blocks = parse_quotes(new_content)
+            unresolved = [
+                b for b in all_blocks
+                if new_content[b.start:b.start + 6].lower() == '[quote'
+                and not _ANY_POST_ID_RE.search(new_content[b.start:b.tag_end])
+                and not _BIBLE_OPEN_RE.match(new_content[b.start:b.tag_end])
+            ]
+            if not unresolved:
+                break
+            leaves = [b for b in unresolved if not any(
+                id(o) != id(b) and o.start >= b.inner_start and o.end <= b.inner_end
+                for o in unresolved
+            )]
+            if not leaves:
+                break
+            for b in sorted(leaves, key=lambda x: x.start, reverse=True):
+                old_open = new_content[b.start:b.tag_end]
+                author_m = re.search(r'="([^"]*)"', old_open)
+                new_open = '[fquote="%s"]' % author_m.group(1) if author_m else '[fquote]'
+                new_content = (new_content[:b.start] + new_open
+                               + new_content[b.tag_end:b.inner_end] + '[/fquote]'
+                               + new_content[b.end:])
+                converted += 1
+
+        # Fallback: osierocone [quote] bez pary (niezamknięte)
+        orphan_open = len(re.findall(r'\[quote\]', new_content, re.IGNORECASE))
+        new_content = re.sub(r'\[quote\]',  '[fquote]',  new_content, flags=re.IGNORECASE)
+        new_content = re.sub(r'\[/quote\]', '[/fquote]', new_content, flags=re.IGNORECASE)
+        converted += orphan_open
+
+        # Krok 2: przelicz status
+        n_unresolved = len(_UNRESOLVED_OPEN_RE.findall(new_content))
+        n_found      = len(_BIBLE_FOUND_RE.findall(new_content))
+        n_not_found  = len(re.findall(r'post_id=not_found', new_content, re.IGNORECASE))
+        n_any_found  = n_found + n_not_found
+        if n_unresolved == 0:
+            new_qs = 1 if n_any_found > 0 else 0
+        elif n_any_found == 0:
+            new_qs = 2
+        else:
+            new_qs = 3
+        new_ns = 2 if n_unresolved > 0 else 1
+
+        if dry_run:
+            if unresolved:
+                print(f"  POST={post_id}  +{len(unresolved)} quote→fquote  status→{new_qs}")
+        else:
+            updates.append((new_content, new_qs, new_ns, post_id))
+        fixed += 1
+
+    print(f"\n  Postów: {fixed:,}  w tym zamieniono quote→fquote: {converted:,}")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=?, nested_status=? WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    return fixed
+
+
+# ---------------------------------------------------------------------------
+# Pass: to-fquote – zamień pozostałe nierozwiązane [quote] na [fquote]
+# ---------------------------------------------------------------------------
+
+def run_to_fquote(conn, dry_run=False):
+    """Zamienia wszystkie nierozwiązane [quote...] (status 2/3) na [fquote...].
+
+    Dla każdego bloku bez post_id:
+      - [quote="X"] → [fquote="X"],  [/quote] → [/fquote]
+      - [quote]     → [fquote],      [/quote] → [/fquote]
+    Ustawia quote_status=1 i nested_status=1.
+    """
+    rows = conn.execute(
+        "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        " WHERE quote_status IN (2, 3)"
+        "   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%')"
+    ).fetchall()
+
+    updates = []
+    converted_total = 0
+    posts_changed = 0
+
+    for post_id, content in rows:
+        if not content:
+            continue
+
+        # Zamieniaj tylko bloki liściowe (bez zagnieżdżonych nierozwiązanych),
+        # re-parsuj po każdej rundzie — bezpieczne pozycje bez przesunięć
+        new_content = content
+        post_converted = 0
+        while True:
+            all_blocks = parse_quotes(new_content)
+            unresolved = [
+                b for b in all_blocks
+                if new_content[b.start:b.start + 6].lower() == '[quote'
+                and not _ANY_POST_ID_RE.search(new_content[b.start:b.tag_end])
+                and not _BIBLE_OPEN_RE.match(new_content[b.start:b.tag_end])
+            ]
+            if not unresolved:
+                break
+
+            # Tylko liście: żaden inny nierozwiązany nie jest w środku
+            leaves = [b for b in unresolved if not any(
+                id(o) != id(b) and o.start >= b.inner_start and o.end <= b.inner_end
+                for o in unresolved
+            )]
+            if not leaves:
+                break
+
+            for b in sorted(leaves, key=lambda x: x.start, reverse=True):
+                old_open = new_content[b.start:b.tag_end]
+                author_m = re.search(r'="([^"]*)"', old_open)
+                new_open  = '[fquote="%s"]' % author_m.group(1) if author_m else '[fquote]'
+                new_content = (new_content[:b.start]
+                               + new_open
+                               + new_content[b.tag_end:b.inner_end]
+                               + '[/fquote]'
+                               + new_content[b.end:])
+                post_converted += 1
+
+        if not post_converted:
+            continue
+
+        converted_total += post_converted
+        posts_changed += 1
+
+        if dry_run:
+            print(f"  POST={post_id}  {len(unresolved)} quote→fquote")
+            continue
+
+        updates.append((new_content, 1, 1, post_id))
+
+    print(f"\n  Zamieniono: {converted_total:,} tagów w {posts_changed:,} postach")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=?, nested_status=? WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    return converted_total
+
+
+# ---------------------------------------------------------------------------
+# Pass: mark-not-found – oznacz cytaty znanych użytkowników jako not_found
+# ---------------------------------------------------------------------------
+
+_NAMED_UNRESOLVED_RE = re.compile(
+    r'\[quote="([^"]+)"\]',
+    re.IGNORECASE,
+)
+_ANY_POST_ID_RE = re.compile(r'post_id=', re.IGNORECASE)
+
+
+def run_mark_not_found(conn, known_users, dry_run=False):
+    """Oznacza nierozwiązane cytaty jako post_id=not_found w dwóch przypadkach:
+    1. Autor jest w sfinia_users_real.db (known user, post nie znaleziony).
+    2. Cytat zawiera zagnieżdżone [quote]/[fquote]/[Bible] w środku
+       (cytat wielopoziomowy / zagraniczny).
+    """
+    rows = conn.execute(
+        "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        " WHERE quote_status IN (2, 3)"
+        "   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%')"
+    ).fetchall()
+
+    updates = []
+    marked_known = 0
+    marked_nested = 0
+    posts_changed = 0
+
+    for post_id, content in rows:
+        if not content:
+            continue
+
+        # --- Reguła 1: znany użytkownik (regex, lewa→prawa z offsetem) ---
+        new_content = content
+        offset = 0
+        changed = 0
+
+        for m in _NAMED_UNRESOLVED_RE.finditer(content):
+            author = m.group(1)
+            if author.lower() not in known_users:
+                continue
+            new_tag = '[quote="%s" post_id=not_found]' % author
+            pos = m.start() + offset
+            new_content = new_content[:pos] + new_tag + new_content[pos + len(m.group(0)):]
+            offset += len(new_tag) - len(m.group(0))
+            changed += 1
+            marked_known += 1
+
+        # --- Reguła 2: nierozwiązany cytat z zagnieżdżoną zawartością ---
+        # Parsuj bloki w (już częściowo zaktualizowanym) new_content
+        all_blocks = parse_quotes(new_content)
+        unresolved_blocks = [
+            b for b in all_blocks
+            if not _ANY_POST_ID_RE.search(new_content[b.start:b.tag_end])
+            and not _BIBLE_OPEN_RE.match(new_content[b.start:b.tag_end])
+        ]
+
+        # Zastępuj od prawej do lewej (bezpieczne dla pozycji)
+        for b in sorted(unresolved_blocks, key=lambda x: x.start, reverse=True):
+            inner = new_content[b.inner_start:b.inner_end]
+            if not _ANY_QUOTE_OPEN_RE.search(inner):
+                continue
+            old_tag = new_content[b.start:b.tag_end]
+            author_m = re.search(r'="([^"]*)"', old_tag)
+            author = author_m.group(1) if author_m else None
+            if author:
+                new_tag = '[quote="%s" post_id=not_found]' % author
+            else:
+                new_tag = '[quote post_id=not_found]'
+            new_content = new_content[:b.start] + new_tag + new_content[b.tag_end:]
+            changed += 1
+            marked_nested += 1
+
+        if not changed:
+            continue
+
+        posts_changed += 1
+
+        n_unresolved = len(_UNRESOLVED_OPEN_RE.findall(new_content))
+        new_quote_status = 1 if n_unresolved == 0 else 3
+        new_nested_status = 2 if _UNRESOLVED_OPEN_RE.search(new_content) else 1
+
+        if dry_run:
+            print(f"  POST={post_id}  +{changed} not_found  status→{new_quote_status}")
+        else:
+            updates.append((new_content, new_quote_status, new_nested_status, post_id))
+
+    print(f"\n  Oznaczono post_id=not_found łącznie: {marked_known + marked_nested:,} w {posts_changed:,} postach")
+    print(f"    znany użytkownik (post nie znaleziony): {marked_known:,}")
+    print(f"    cytat z zagnieżdżoną zawartością:       {marked_nested:,}")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=?, nested_status=? WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    return marked_known + marked_nested
+
+
+# ---------------------------------------------------------------------------
+# Pass: bible-review-apply – zastosuj decyzje z pliku review (BIBLE/SKIP)
+# ---------------------------------------------------------------------------
+
+def run_bible_review_apply(conn, review_path, dry_run=False):
+    """Czyta plik review i taguje posty oznaczone BIBLE.
+
+    Format pliku:
+        BIBLE  POST=<id>  REF=<ref>
+        SKIP   POST=<id>  REF=<ref>
+    """
+    if _BIBLE_NGRAM_INDEX is None:
+        print("BŁĄD: Bible index nie załadowany. Użyj --bible-index.")
+        return 0
+
+    # Wczytaj decyzje
+    bible_decisions = {}   # post_id -> ref
+    line_re = re.compile(r'^(BIBLE|SKIP)\s+POST=(\d+)\s+REF=(.+)$', re.IGNORECASE)
+    with open(review_path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            m = line_re.match(line)
+            if not m:
+                continue
+            action, post_id_s, ref = m.group(1).upper(), int(m.group(2)), m.group(3).strip()
+            if action == 'BIBLE':
+                bible_decisions[post_id_s] = ref
+
+    if not bible_decisions:
+        print("Brak wpisów BIBLE w pliku review.")
+        return 0
+
+    print(f"  Wpisów BIBLE do zastosowania: {len(bible_decisions)}")
+
+    # Pobierz posty
+    placeholders = ','.join('?' * len(bible_decisions))
+    rows = conn.execute(
+        f"SELECT post_id, COALESCE(content_quotes, content) FROM posts"
+        f" WHERE post_id IN ({placeholders})",
+        list(bible_decisions.keys())
+    ).fetchall()
+
+    updates = []
+    tagged = 0
+
+    for post_id, content in rows:
+        if not content:
+            continue
+        target_ref = bible_decisions[post_id]
+
+        all_blocks = parse_quotes(content)
+        unresolved = [b for b in all_blocks
+                      if not _ENRICHED_TAG_RE.search(content[b.start:b.tag_end])
+                      and not _BIBLE_OPEN_RE.match(content[b.start:b.tag_end])]
+
+        def is_leaf(b):
+            for other in unresolved:
+                if id(other) != id(b) and other.start >= b.inner_start and other.end <= b.inner_end:
+                    return False
+            return True
+
+        leaf_blocks = [b for b in unresolved if is_leaf(b)]
+
+        # Znajdź blok który głosował na target_ref
+        best_block = None
+        best_votes = 0
+        for b in leaf_blocks:
+            inner = content[b.inner_start:b.inner_end]
+            if _ANY_QUOTE_OPEN_RE.search(inner):
+                continue
+            ref, votes, _ = _bible_votes(inner)
+            if ref == target_ref and votes > best_votes:
+                best_block = b
+                best_votes = votes
+
+        if best_block is None:
+            print(f"  UWAGA: nie znaleziono bloku dla POST={post_id} REF={target_ref}")
+            continue
+
+        b = best_block
+        new_tag   = '[Bible=%s]' % target_ref
+        new_close = '[/Bible]'
+        new_content = (content[:b.start] + new_tag
+                       + content[b.tag_end:b.inner_end] + new_close
+                       + content[b.end:])
+        tagged += 1
+
+        if dry_run:
+            inner = content[b.inner_start:b.inner_end]
+            fragment = re.sub(r'\s+', ' ', _strip_bbcode_tags(inner)).strip()[:120]
+            print(f"  DRY  POST={post_id}  [{target_ref}]  {fragment!r}")
+            continue
+
+        n_unresolved = len(_UNRESOLVED_OPEN_RE.findall(new_content))
+        n_found      = len(_BIBLE_FOUND_RE.findall(new_content))
+        if n_unresolved == 0 and n_found > 0:
+            new_qs = 1
+        elif n_found == 0:
+            new_qs = 2
+        else:
+            new_qs = 3
+        new_ns = 2 if _UNRESOLVED_OPEN_RE.search(new_content) else 1
+        updates.append((new_content, new_qs, new_ns, post_id))
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=?, nested_status=? WHERE post_id=?",
+            updates,
+        )
+        conn.commit()
+
+    print(f"\n  Otagowano: {tagged} postów")
+    return tagged
+
+
+# ---------------------------------------------------------------------------
+# Pass: bible-filter – cofnij [Bible=] które nie spełniają kryterium pokrycia
+# ---------------------------------------------------------------------------
+
+def run_bible_filter(conn, dry_run=False, coverage_min=0.0):
+    """Sprawdź każdy [Bible=ref] w content_quotes tym samym kryterium pokrycia co bible pass.
+
+    Jeśli pokrycie < _BIBLE_COVERAGE I >= coverage_min → cofa na [quote]...[/quote].
+    coverage_min (domyślnie 0) pozwala zobaczyć tylko zakres, np. 0.28–0.40.
+    Zwraca liczbę cofniętych tagów.
+    """
+    if _BIBLE_NGRAM_INDEX is None:
+        print("BŁĄD: Bible index nie załadowany. Użyj --bible-index.")
+        return 0
+
+    _BIBLE_TAG_RE = re.compile(
+        r'\[Bible=(?P<ref>[^\]]+)\](?P<inner>.*?)\[/Bible\]',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    rows = conn.execute(
+        "SELECT post_id, content_quotes FROM posts"
+        " WHERE content_quotes IS NOT NULL AND content_quotes LIKE '%[Bible=%'"
+    ).fetchall()
+
+    updates = []
+    reverted_total = 0
+
+    for post_id, content in rows:
+        if not content:
             continue
 
         new_content = content
-        offset = 0   # shift as we make replacements
+        offset = 0
+        reverted = 0
 
-        for block_start, block_end, tag_end, opening_tag in top_quotes:
-            # Identify which cited post this outer block links to
-            m = _ENRICHED_TAG_RE.match(opening_tag)
-            if not m:
-                continue
-            outer_cited_id = int(m.group("post_id"))
-            inner_citations = post_citations.get(outer_cited_id)
-            if not inner_citations:
-                continue
+        # Szukaj od lewej, śledź offset
+        for m in _BIBLE_TAG_RE.finditer(content):
+            ref   = m.group('ref')
+            inner = m.group('inner')
 
-            # Build lookup: author → (post_id, created_at) — skip truly ambiguous authors
-            author_map: dict[str, tuple[int, str] | None] = {}
-            for c in inner_citations:
-                a   = c["author"].lower()
-                val = (c["post_id"], c["created_at"])
-                if a in author_map:
-                    if author_map[a] != val:
-                        author_map[a] = None  # genuinely different targets → ambiguous
-                    # else: duplicate entry for same target — keep as-is
+            # Sprawdź pokrycie tym samym algorytmem co lookup_bible
+            text = _strip_bbcode_tags(inner)
+            ws = norm_for_bible(text).split()
+            n = _BIBLE_NGRAM_SIZE
+
+            is_false_positive = False
+
+            if len(ws) < n:
+                # Krótki tekst - ufamy że był poprawny
+                pass
+            else:
+                ref_votes = {}
+                for i in range(len(ws) - n + 1):
+                    key = ' '.join(ws[i:i + n])
+                    r = _BIBLE_NGRAM_INDEX.get(key)
+                    if r:
+                        ref_votes[r] = ref_votes.get(r, 0) + 1
+
+                total_grams = len(ws) - n + 1
+                if ref in ref_votes:
+                    best_count   = ref_votes[ref]
+                    is_nt        = ',' in ref
+                    min_coverage = max(1, int(total_grams * _BIBLE_COVERAGE))
+                    base_min     = 1 if is_nt else 2
+                    min_votes    = max(base_min, min_coverage)
+                    if best_count < min_votes:
+                        is_false_positive = True
                 else:
-                    author_map[a] = val
+                    best_count = 0
+                    total_grams = max(total_grams, 1)
+                    is_false_positive = True
 
-            # Replace plain [quote=A] / [quote] tags within this block's inner content
-            inner_start = block_start + (tag_end - block_start)
-            inner_end   = block_end - len("[/quote]")
-            inner       = new_content[inner_start + offset: inner_end + offset]
+            if not is_false_positive:
+                continue
 
-            def _replace_plain(m2):
-                raw_author = (m2.group("author") or "").strip('"').strip()
-                key = raw_author.lower()
-                hit = author_map.get(key) if key else None
-                # For anonymous [quote]: try if there's exactly one inner citation
-                if not key and len([v for v in author_map.values() if v]) == 1:
-                    hit = next(v for v in author_map.values() if v)
-                    raw_author = next(k for k, v in author_map.items() if v)
-                if hit is None:
-                    return m2.group(0)  # keep as-is
-                cited_pid, cited_cat = hit
-                unix = _to_unix(cited_cat)
-                if raw_author:
-                    return f"[quote={raw_author} post_id={cited_pid} time={unix}]"
-                return f"[quote post_id={cited_pid} time={unix}]"
+            pct_val = best_count / max(1, total_grams)
+            if pct_val < coverage_min:
+                continue   # poniżej dolnego progu – pomijamy
+            print(f"  COFA  post {post_id:>7}  [{ref}]  {best_count}/{total_grams} n-gramów ({pct_val*100:.0f}%)  |  {inner[:60].strip()!r}")
 
-            new_inner, n = _PLAIN_TAG_RE.subn(_replace_plain, inner)
-            if n and new_inner != inner:
-                new_content = (
-                    new_content[:inner_start + offset]
-                    + new_inner
-                    + new_content[inner_end + offset:]
-                )
-                offset += len(new_inner) - len(inner)
-                enriched_total += n
+            # Cofnij: [Bible=ref]...[/Bible] → [quote]...[/quote]
+            new_tag   = '[quote]'
+            new_close = '[/quote]'
+            adj_start = m.start() + offset
+            adj_end   = m.end()   + offset
+            adj_inner_start = adj_start + len(m.group(0)) - len(inner) - len('[/Bible]')
 
-        if new_content != content:
-            updates.append((new_content, post_id))
-
-    conn.executemany(
-        "UPDATE posts SET content_quotes=? WHERE post_id=?", updates
-    )
-    stdout.write(f"  Zaktualizowano {len(updates)} postów.")
-    return enriched_total
-
-
-# ---------------------------------------------------------------------------
-# Management command
-# ---------------------------------------------------------------------------
-
-_SETUP_SQL = """
--- Add content_quotes column if missing
--- (SQLite doesn't have IF NOT EXISTS for ALTER TABLE, handled in Python)
-
--- quote_status per post:
---   0 = brak cytatów (default)
---   1 = wszystkie cytaty znalezione
---   2 = żadne cytaty nieznalezione
---   3 = część znaleziona, część nie
-
-CREATE TABLE IF NOT EXISTS quotes (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    citing_post_id   INTEGER NOT NULL,
-    cited_post_id    INTEGER,
-    quote_author     TEXT,
-    canonical_author TEXT,
-    found            INTEGER NOT NULL DEFAULT 0,
-    is_foreign       INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_quotes_citing ON quotes(citing_post_id);
-CREATE INDEX IF NOT EXISTS idx_quotes_cited  ON quotes(cited_post_id);
-"""
-
-
-class Command(BaseCommand):
-    help = "Enrich [quote] tags in sfiniabb.db with post_id and Unix timestamps"
-
-    def add_arguments(self, parser):
-        parser.add_argument("archive_db",
-                            help="Path to sfiniabb.db")
-        parser.add_argument("--users-db", default="",
-                            help="Path to sfinia_users_real.db (for username validation)")
-        parser.add_argument("--lookahead", type=int, default=0,
-                            help="Max preceding posts per topic to search (0 = full topic, default)")
-        parser.add_argument("--reset", action="store_true",
-                            help="Drop and recreate quotes table; reprocess all posts")
-        parser.add_argument("--only-unfound", action="store_true",
-                            help="Only reprocess posts with quote_status 2 or 3 (faster re-run)")
-        parser.add_argument("--propagate", action="store_true",
-                            help="Propagate enrichments to nested quotes via the quotes chain table")
-        parser.add_argument("--bible-index", default="",
-                            help="Path to bible_ngram.pkl; enables Bible-verse detection on unfound quotes")
-        parser.add_argument("--detect-bible", action="store_true",
-                            help="Run Bible-detection pass on posts with unfound quotes (requires --bible-index)")
-        parser.add_argument("--search-not-found", action="store_true",
-                            help="Search all posts by known author for not_found quotes (unlimited distance)")
-        parser.add_argument("--search-anonymous", action="store_true",
-                            help="Search for anonymous [quote]...[/quote] blocks via 5-gram index")
-
-    def handle(self, *args, **options):
-        db_path          = options["archive_db"]
-        users_path       = options["users_db"]
-        lookahead        = options["lookahead"]
-        reset            = options["reset"]
-        only_unfound     = options["only_unfound"]
-        do_propagate     = options["propagate"]
-        bible_idx_path   = options["bible_index"]
-        do_bible         = options["detect_bible"]
-        do_search_nf     = options["search_not_found"]
-        do_search_anon   = options["search_anonymous"]
-
-        if bible_idx_path:
-            try:
-                _load_bible_index(bible_idx_path)
-                self.stdout.write(f"Załadowano indeks Biblii z {bible_idx_path} ({len(_BIBLE_NGRAM_INDEX)} n-gramów)")
-            except Exception as e:
-                raise CommandError(f"Nie można otworzyć bible-index: {e}")
-        elif do_bible:
-            raise CommandError("--detect-bible wymaga --bible-index")
-
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-        except Exception as e:
-            raise CommandError(f"Cannot open {db_path}: {e}")
-
-        # --- Schema setup ---
-        if reset:
-            conn.execute("DROP TABLE IF EXISTS quotes")
-            self.stdout.write("Usunięto starą tabelę quotes.")
-
-        conn.executescript(_SETUP_SQL)
-
-        # Add content_quotes column if missing
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(posts)")}
-        if "content_quotes" not in cols:
-            conn.execute("ALTER TABLE posts ADD COLUMN content_quotes TEXT")
-            conn.commit()
-            self.stdout.write("Dodano kolumnę content_quotes.")
-
-        # --- Load known usernames ---
-        known_users: dict[str, str] = {}   # lowercase → canonical
-
-        if users_path:
-            try:
-                uconn = sqlite3.connect(users_path)
-                for row in uconn.execute("SELECT username FROM users"):
-                    name = row[0]
-                    if name:
-                        known_users[name]        = name   # exact key
-                        known_users[name.lower()] = name  # lowercase fallback
-                uconn.close()
-                self.stdout.write(f"Załadowano {len(known_users)//2} userów z {users_path}")
-            except Exception as e:
-                self.stderr.write(f"Ostrzeżenie: nie można otworzyć users-db: {e}")
-
-        # Supplement from posts table (author_name column)
-        if not known_users:
-            for row in conn.execute("SELECT DISTINCT author_name FROM posts WHERE author_name IS NOT NULL"):
-                name = row[0]
-                known_users[name]        = name
-                known_users[name.lower()] = name
-            self.stdout.write(f"Załadowano {len(known_users)//2} userów z posts.author_name")
-
-        # Skip main enrichment loop when running a standalone auxiliary pass
-        _aux_only = (do_bible or do_search_nf or do_search_anon) and not only_unfound and not reset
-        run_main_loop = not _aux_only
-
-        # --- Count posts to process ---
-        if only_unfound:
-            total_posts = conn.execute(
-                "SELECT count(*) FROM posts WHERE quote_status IN (2,3)"
-            ).fetchone()[0]
-            self.stdout.write(f"Postów do ponownego przetworzenia (status 2+3): {total_posts}")
-            unfound_ids = {
-                row[0] for row in
-                conn.execute("SELECT post_id FROM posts WHERE quote_status IN (2,3)")
-            }
-        else:
-            total_posts = conn.execute(
-                "SELECT count(*) FROM posts WHERE content LIKE '%[quote%'"
-            ).fetchone()[0]
-            self.stdout.write(f"Postów z cytatami: {total_posts}")
-            unfound_ids = None
-
-        # --- Build global index for cross-topic fallback (50 preceding posts by post_id) ---
-        # Load all posts once; only stripped content needed for matching
-        _GLOBAL_FALLBACK_N = 250
-        global_sorted: list[dict] = []   # sorted by post_id ASC
-        global_post_ids: list[int] = []  # parallel list for bisect
-
-        for row in conn.execute(
-            "SELECT post_id, author_name, content, created_at FROM posts ORDER BY post_id ASC"
-        ):
-            raw = row[2] or ""
-            s   = _strip_bbcode(raw)
-            d = {
-                "post_id":      row[0],
-                "author_name":  row[1] or "",
-                "content":      raw,
-                "created_at":   row[3] or "",
-                "stripped":     s,
-                "stripped_ascii": _to_ascii(s),
-            }
-            global_sorted.append(d)
-            global_post_ids.append(row[0])
-
-        # --- Process topic by topic ---
-        if run_main_loop:
-            topics = [
-                row[0] for row in
-                conn.execute("SELECT DISTINCT topic_id FROM posts ORDER BY topic_id")
-            ]
-            self.stdout.write(f"Tematów: {len(topics)}")
-        else:
-            topics = []
-
-        processed = found_count = not_found_count = 0
-        all_quote_rows: list[dict] = []
-
-        for topic_id in topics:
-            topic_posts = conn.execute(
-                "SELECT post_id, author_name, content, content_quotes, quote_status, created_at "
-                "FROM posts WHERE topic_id=? ORDER BY post_order ASC, post_id ASC",
-                (topic_id,)
-            ).fetchall()
-
-            # Set of post_ids in this topic — used to exclude from global fallback
-            topic_post_id_set = {row["post_id"] for row in topic_posts}
-
-            # window: list of post dicts for this topic (all preceding posts)
-            window: list[dict] = []
-
-            updates: list[tuple[str, int]] = []
-
-            for row in topic_posts:
-                post_id      = row["post_id"]
-                content      = row["content"] or ""
-                content_q    = row["content_quotes"] or ""
-                post_qs      = row["quote_status"] or 0
-
-                should_process = (
-                    "[quote" in content.lower() and
-                    (unfound_ids is None or post_id in unfound_ids)
-                )
-
-                if should_process:
-                    # Cross-topic fallback: N posts globally preceding this post_id,
-                    # excluding posts from the same topic (already in window)
-                    idx = bisect.bisect_left(global_post_ids, post_id)
-                    fallback_slice = global_sorted[max(0, idx - _GLOBAL_FALLBACK_N): idx]
-                    global_fallback = [p for p in fallback_slice
-                                       if p["post_id"] not in topic_post_id_set]
-
-                    short_window = window[-_SHORT_FP_WINDOW:] if window else None
-
-                    # For status=3 (mixed), use content_quotes as base so already-found
-                    # enriched tags [quote=X post_id=N time=T] are preserved and skipped
-                    # by _extract_top_quotes (which only matches plain [quote]/[quote="X"]).
-                    # For status=0/2 (none found or fresh), use original content.
-                    if only_unfound and post_qs == 3 and content_q:
-                        base_content = content_q
-                    else:
-                        base_content = content
-
-                    quotes_for_post: list[dict] = []
-                    enriched = _enrich_content(
-                        post_id, base_content, window, known_users,
-                        quotes_for_post, global_fallback or None, short_window,
-                    )
-                    updates.append((enriched, post_id))
-                    for q in quotes_for_post:
-                        if q["found"]:
-                            found_count += 1
-                        else:
-                            not_found_count += 1
-                    if only_unfound:
-                        if post_qs == 3:
-                            # Preserve already-found citations; only replace unfound ones
-                            conn.execute(
-                                "DELETE FROM quotes WHERE citing_post_id=? AND found=0",
-                                (post_id,)
-                            )
-                        else:
-                            conn.execute(
-                                "DELETE FROM quotes WHERE citing_post_id=?", (post_id,)
-                            )
-                    all_quote_rows.extend(quotes_for_post)
-                    processed += 1
-
-                # Add current post to window AFTER processing (can't quote yourself)
-                _s = _strip_bbcode(content)
-                window.append({
-                    "post_id":       post_id,
-                    "author_name":   row["author_name"] or "",
-                    "content":       content,
-                    "created_at":    row["created_at"] or "",
-                    "stripped":      _s,
-                    "stripped_ascii": _to_ascii(_s),
-                })
-                # lookahead=0 means full topic (no limit)
-                if lookahead and len(window) > lookahead:
-                    window.pop(0)
-
-            # Batch-write enriched content
-            if updates:
-                conn.executemany(
-                    "UPDATE posts SET content_quotes=? WHERE post_id=?",
-                    updates
-                )
-
-        # Write quotes table
-        conn.executemany(
-            "INSERT INTO quotes (citing_post_id, cited_post_id, quote_author, canonical_author, found, is_foreign) "
-            "VALUES (:citing_post_id, :cited_post_id, :quote_author, :canonical_author, :found, :is_foreign)",
-            all_quote_rows
-        )
-
-        # Add quote_status column if missing, then populate
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(posts)")}
-        if "quote_status" not in cols:
-            conn.execute("ALTER TABLE posts ADD COLUMN quote_status INTEGER NOT NULL DEFAULT 0")
-        else:
-            conn.execute("UPDATE posts SET quote_status = 0")   # reset before repopulating
-
-        conn.execute("""
-            UPDATE posts SET quote_status = (
-                SELECT
-                    CASE
-                        WHEN sum(found) = count(*) THEN 1
-                        WHEN sum(found) = 0         THEN 2
-                        ELSE                              3
-                    END
-                FROM quotes q
-                WHERE q.citing_post_id = posts.post_id
+            new_content = (
+                new_content[:adj_start]
+                + new_tag
+                + inner
+                + new_close
+                + new_content[adj_end:]
             )
-            WHERE post_id IN (SELECT DISTINCT citing_post_id FROM quotes)
-        """)
+            offset += (len(new_tag) + len(new_close)) - len(m.group(0))
+            reverted += 1
+            reverted_total += 1
 
+        if reverted:
+            # Przelicz quote_status
+            n_unresolved = len(_UNRESOLVED_OPEN_RE.findall(new_content))
+            n_found      = len(_BIBLE_FOUND_RE.findall(new_content))
+            if n_unresolved == 0 and n_found > 0:
+                new_status = 1
+            elif n_found == 0:
+                new_status = 2
+            else:
+                new_status = 3
+            new_nested = 2 if _UNRESOLVED_OPEN_RE.search(new_content) else 1
+            updates.append((new_content, new_status, new_nested, post_id))
+
+    print(f"  Cofnięto false positives: {reverted_total:,} tagów w {len(updates):,} postach")
+
+    if not dry_run and updates:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=?, nested_status=? WHERE post_id=?",
+            updates,
+        )
         conn.commit()
 
-        # Optional anonymous n-gram search pass
-        if do_search_anon:
-            anon_found = self._search_anonymous_by_ngram(conn, self.stdout)
-            conn.commit()
-            self.stdout.write(f"Search-anonymous: znaleziono {anon_found} cytatów.")
+    return reverted_total
 
-        # Optional search-not-found pass
-        if do_search_nf:
-            nf_found = self._search_not_found_by_author(conn, self.stdout)
-            conn.commit()
-            self.stdout.write(f"Search-not-found: znaleziono {nf_found} cytatów.")
 
-        # Optional Bible detection pass
-        if do_bible and _BIBLE_NGRAM_INDEX:
-            bible_count = self._detect_bible_quotes(conn)
-            conn.commit()
-            self.stdout.write(f"Biblia: znaleziono {bible_count} cytatów biblijnych.")
+def enrich_post(content, post_id, topic_id, post_order,
+                known_users, cache, lookback=20,
+                pass_type='known-user', gcache=None,
+                topic_cache_all=None, global_cache_all=None,
+                ngram_index=None, ngram_post_author=None):
+    """Process a single post's content.
 
-        # Optional propagation pass
-        if do_propagate:
-            prop_count = _propagate_chain_quotes(conn, self.stdout)
-            conn.commit()
-            self.stdout.write(f"Propagacja: wzbogacono {prop_count} zagnieżdżonych cytatów.")
+    Returns (new_content_quotes, quote_status, list_of_quote_records).
+    new_content_quotes: enriched content, or None if no quotes at all.
+    quote_status: 0=no quotes, 1=all found, 2=none found, 3=mixed.
+    """
+    is_anon_pass = pass_type in ('anon-topic', 'anon-global', 'ngram')
 
+    quotes = parse_quotes(content)
+    # For anon passes: all quotes (named and anonymous)
+    # For known-user passes: only named quotes
+    if is_anon_pass:
+        all_quotes = quotes
+    else:
+        all_quotes = [q for q in quotes if q.author]
+
+    if not all_quotes:
+        if _QUOTE_OPEN_RE.search(content):
+            return content, 2, []
+        return None, 0, []
+
+    # For known-user passes: skip if no known author
+    if not is_anon_pass:
+        has_known = any(q.author.lower() in known_users for q in all_quotes)
+        if not has_known:
+            return content, 2, [{
+                'post_id': post_id,
+                'quoted_user': q.author,
+                'quoted_user_resolved': q.author,
+                'source_post_id': None,
+                'quote_text_preview': normalize_text(extract_quote_text(content, q))[:100],
+                'quote_index': i,
+                'found': 0,
+            } for i, q in enumerate(all_quotes)]
+
+    new_content = content
+    offset = 0
+    quote_records = []
+    found_count = 0
+    total_count = 0
+
+    for i, q in enumerate(all_quotes):
+        # Check if already enriched (has post_id= in opening tag)
+        raw_open_tag = content[q.start:q.tag_end]
+        already_enriched = bool(_ENRICHED_TAG_RE.search(raw_open_tag))
+
+        if already_enriched:
+            # Count as found, no record update needed
+            found_count += 1
+            total_count += 1
+            continue
+
+        total_count += 1
+        author_lower = q.author.lower() if q.author else None
+        quote_norm = normalize_text(extract_quote_text(content, q))
+        preview = quote_norm[:100]
+        source_post_id = None
+        resolved_author = q.author  # may be updated from matched post
+
+        if pass_type == 'known-user':
+            if author_lower and author_lower in known_users:
+                candidates = cache_lookup(cache, topic_id, author_lower,
+                                          post_order, lookback)
+                for cand_pid, cand_norm in candidates:
+                    if match_quote_in_post(quote_norm, cand_norm):
+                        source_post_id = cand_pid
+                        break
+
+        elif pass_type == 'known-user-global':
+            if author_lower and author_lower in known_users:
+                candidates = global_cache_lookup(gcache, author_lower,
+                                                 post_id, lookback)
+                for cand_pid, cand_norm in candidates:
+                    if match_quote_in_post(quote_norm, cand_norm):
+                        source_post_id = cand_pid
+                        break
+
+        elif pass_type == 'anon-topic':
+            candidates = topic_cache_all_lookup(topic_cache_all, topic_id,
+                                                post_order, lookback)
+            for cand_pid, cand_auth, cand_norm in candidates:
+                if match_quote_in_post(quote_norm, cand_norm):
+                    source_post_id = cand_pid
+                    resolved_author = cand_auth
+                    break
+
+        elif pass_type == 'anon-global':
+            candidates = global_cache_all_lookup(global_cache_all, post_id,
+                                                 lookback)
+            for cand_pid, cand_auth, cand_norm in candidates:
+                if match_quote_in_post(quote_norm, cand_norm):
+                    source_post_id = cand_pid
+                    resolved_author = cand_auth
+                    break
+
+        elif pass_type == 'ngram':
+            found_pid, found_auth = ngram_lookup(
+                ngram_index, ngram_post_author, quote_norm, post_id
+            )
+            if found_pid is not None:
+                source_post_id = found_pid
+                resolved_author = found_auth
+
+        found = 1 if source_post_id is not None else 0
+        found_count += found
+
+        quote_records.append({
+            'post_id': post_id,
+            'quoted_user': q.author,
+            'quoted_user_resolved': resolved_author,
+            'source_post_id': source_post_id,
+            'quote_text_preview': preview,
+            'quote_index': i,
+            'found': found,
+        })
+
+        if source_post_id is not None:
+            if q.author:
+                new_tag = '[quote="%s" post_id=%d]' % (q.author, source_post_id)
+            else:
+                new_tag = '[quote post_id=%d]' % source_post_id
+            new_content = (
+                new_content[:q.start + offset]
+                + new_tag
+                + new_content[q.tag_end + offset:]
+            )
+            offset += len(new_tag) - len(raw_open_tag)
+
+    if total_count == 0:
+        quote_status = 0
+    elif found_count == total_count:
+        quote_status = 1
+    elif found_count == 0:
+        quote_status = 2
+    else:
+        quote_status = 3
+
+    return new_content, quote_status, quote_records
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description='Enrich BBCode quotes with post_id')
+    p.add_argument('--pass', dest='pass_type', choices=PASS_TYPES,
+                   default='known-user',
+                   help='Rodzaj przetwarzania (default: known-user)')
+    p.add_argument('--lookback', type=int, default=20,
+                   help='Ile postów wstecz tego samego autora przeszukiwać (default: 20)')
+    p.add_argument('--limit', type=int, default=None,
+                   help='Ogranicz liczbę przetwarzanych postów')
+    p.add_argument('--dry-run', action='store_true',
+                   help='Nie zapisuj zmian w bazie')
+    p.add_argument('--reset', action='store_true',
+                   help='Wyczyść content_quotes, quote_status i tabelę quotes')
+    p.add_argument('--bible-index', default=None, metavar='PATH',
+                   help='Ścieżka do bible_index.pkl (wymagana dla --pass bible/bible-filter)')
+    p.add_argument('--bible-coverage', type=float, default=0.40, metavar='FRAC',
+                   help='Max. pokrycie n-gramów przy bible-filter (0–1, domyślnie 0.40)')
+    p.add_argument('--bible-coverage-min', type=float, default=0.0, metavar='FRAC',
+                   help='Min. pokrycie przy bible-filter – pokaż/usuń tylko powyżej tego progu (domyślnie 0)')
+    p.add_argument('--bible-review', default=None, metavar='PATH',
+                   help='Plik do zapisu cytatów do ręcznego przeglądu (1 głos, >=25%)')
+    p.add_argument('--bible-dry-min', type=float, default=0.09, metavar='FRAC',
+                   help='Min. pokrycie do wyświetlenia w dry-run (0–1, domyślnie 0.09)')
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    lookback = args.lookback
+    dry_run = args.dry_run
+    reset = args.reset
+    limit = args.limit
+    pass_type = args.pass_type
+    bible_index_path     = args.bible_index
+    bible_coverage_min   = args.bible_coverage_min
+    bible_review_path    = args.bible_review
+    global _BIBLE_COVERAGE, _BIBLE_DRY_MIN
+    _BIBLE_COVERAGE = args.bible_coverage
+    _BIBLE_DRY_MIN  = args.bible_dry_min
+
+    print(f"=== Enrich Quotes (--pass {pass_type}) ===")
+    print(f"  DB:       {DB_PATH}")
+    print(f"  Users DB: {USERS_DB_PATH}")
+    print(f"  Lookback: {lookback} posts")
+    print(f"  Dry run:  {dry_run}")
+    if limit:
+        print(f"  Limit:    {limit}")
+    print()
+
+    # Load known users
+    known_users = load_known_users(USERS_DB_PATH)
+    print(f"Załadowano {len(known_users)} znanych użytkowników")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    if reset:
+        print("Resetuję content_quotes, quote_status i tabelę quotes...")
+        conn.execute("UPDATE posts SET content_quotes = NULL, quote_status = 0")
+        conn.execute("DROP TABLE IF EXISTS quotes")
+        conn.commit()
+
+    create_quotes_table(conn)
+
+    # Pass propagate i bible są obsługiwane osobno
+    if pass_type == 'propagate':
+        total = run_propagate(conn, dry_run=dry_run)
+        print(f"\n=== Propagacja zakończona: {total:,} tagów wzbogaconych ===")
         conn.close()
+        return
 
-        total_quotes = found_count + not_found_count
-        pct = (found_count / total_quotes * 100) if total_quotes else 0
-        self.stdout.write(self.style.SUCCESS(
-            f"\nGotowe!\n"
-            f"  Postów przetworzonych: {processed}\n"
-            f"  Cytatów ogółem:        {total_quotes}\n"
-            f"  Znaleziono:            {found_count} ({pct:.1f}%)\n"
-            f"  Nieznalezionych:       {not_found_count}\n"
-            f"\nNastępny krok — przejrzyj nieznalezione:\n"
-            f"  SELECT q.*, substr(p.content,1,200) FROM quotes q\n"
-            f"  JOIN posts p ON q.citing_post_id=p.post_id\n"
-            f"  WHERE q.found=0 LIMIT 20;"
-        ))
+    if pass_type == 'mark-not-found':
+        total = run_mark_not_found(conn, known_users, dry_run=dry_run)
+        print(f"\n=== Mark-not-found zakończony: {total:,} cytatów oznaczonych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
 
-    # -----------------------------------------------------------------------
-    # Bible detection pass
-    # -----------------------------------------------------------------------
+    if pass_type == 'to-fquote':
+        total = run_to_fquote(conn, dry_run=dry_run)
+        print(f"\n=== To-fquote zakończony: {total:,} tagów zamienionych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
 
-    def _detect_bible_quotes(self, conn) -> int:
-        """Scan posts with unfound quotes; replace matching [quote] blocks with [Bible=ref].
+    if pass_type == 'fix-status':
+        total = run_fix_status(conn, dry_run=dry_run)
+        print(f"\n=== Fix-status zakończony: {total:,} postów poprawionych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
 
-        Returns total number of Bible tags inserted.
-        """
-        # Regex for Bible tag detection (already tagged from a previous pass)
-        _BIBLE_TAG_RE = re.compile(r'\[Bible=[^\]]*\]', re.IGNORECASE)
+    if pass_type == 'mark-broken':
+        total = run_mark_broken(conn, dry_run=dry_run)
+        print(f"\n=== Mark-broken zakończony: {total:,} postów oznaczonych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
 
-        # Posts that still have unfound quotes
-        post_rows = conn.execute(
-            "SELECT post_id, content_quotes, content "
-            "FROM posts WHERE quote_status IN (2, 3)"
-        ).fetchall()
+    if pass_type == 'analyze-depth':
+        run_analyze_depth(conn)
+        conn.close()
+        return
 
-        # Regex patterns for counting found/unfound tags in content_quotes
-        _UNFOUND_TAG_RE = re.compile(
-            r'\[quote(?:="[^"]*")?\]',   # [quote] or [quote="X"] — no post_id
-            re.IGNORECASE
-        )
-        _FOUND_TAG_RE = re.compile(
-            r'\[(?:quote[^\]]+post_id=|Bible=)[^\]]*\]',  # [quote ... post_id=] or [Bible=...]
-            re.IGNORECASE
-        )
+    if pass_type in ('bible', 'bible-filter', 'bible-review-apply'):
+        if not bible_index_path:
+            print("BŁĄD: --pass bible wymaga --bible-index PATH")
+            conn.close()
+            sys.exit(1)
+        print(f"Wczytuję indeks biblijny z {bible_index_path}...")
+        load_bible_index(bible_index_path)
+        print(f"  Załadowano {len(_BIBLE_NGRAM_INDEX):,} n-gramów")
+        if pass_type == 'bible':
+            total = run_bible(conn, dry_run=dry_run, review_path=bible_review_path)
+            print(f"\n=== Bible pass zakończony: {total:,} tagów [Bible=] wstawionych ===")
+        elif pass_type == 'bible-filter':
+            total = run_bible_filter(conn, dry_run=dry_run,
+                                     coverage_min=bible_coverage_min)
+            print(f"\n=== Bible-filter zakończony: {total:,} false positives cofniętych ===")
+        else:
+            if not bible_review_path:
+                print("BŁĄD: --pass bible-review-apply wymaga --bible-review PATH")
+                conn.close()
+                sys.exit(1)
+            total = run_bible_review_apply(conn, bible_review_path, dry_run=dry_run)
+            print(f"\n=== Bible-review-apply zakończony: {total:,} tagów wstawionych ===")
+        if dry_run:
+            print("[DRY RUN] Nie zapisano zmian.")
+        conn.close()
+        return
 
-        updates = []
-        bible_total = 0
+    # Build in-memory cache(s)
+    cache = None
+    gcache = None
+    tcache_all = None
+    gcache_all = None
+    ngram_index = None
+    ngram_post_author = None
 
-        for row in post_rows:
-            post_id  = row[0]
-            base     = row[1] or row[2] or ""
-            if not base:
-                continue
+    if pass_type == 'known-user':
+        cache = build_author_cache(conn, known_users)
+    elif pass_type == 'known-user-global':
+        gcache = build_global_cache(conn, known_users)
+    elif pass_type == 'anon-topic':
+        tcache_all = build_topic_cache_all(conn)
+    elif pass_type == 'anon-global':
+        gcache_all = build_global_cache_all(conn)
+    elif pass_type == 'ngram':
+        ngram_index, ngram_post_author = build_ngram_index(conn)
 
-            blocks = _extract_top_quotes(base)
-            if not blocks:
-                continue
+    # Count posts to process
+    if reset:
+        where = "content LIKE '%[quote%'"
+    elif pass_type == 'known-user':
+        where = "content LIKE '%[quote%' AND quote_status = 0"
+    else:
+        where = "quote_status IN (2, 3)"
 
-            new_content = base
-            offset = 0
-            found_any = False
+    total_posts = conn.execute(
+        f"SELECT COUNT(*) FROM posts WHERE {where}"
+    ).fetchone()[0]
+    print(f"Postów do przetworzenia: {total_posts:,}")
 
-            for block_start, block_end, tag_end, raw_username in blocks:
-                inner = base[tag_end:block_end - len("[/quote]")]
-                ref = _lookup_bible(inner)
-                if ref is None:
-                    continue
+    if limit:
+        total_posts = min(total_posts, limit)
 
-                # Build [Bible=ref] replacement tag
-                new_tag = f"[Bible={ref}]"
-                # Replace the opening tag only; keep inner content and [/quote]
-                adj_start = block_start + offset
-                adj_tag_end = tag_end + offset
-                new_content = (
-                    new_content[:adj_start]
-                    + new_tag
-                    + new_content[adj_tag_end:]
-                )
-                offset += len(new_tag) - (tag_end - block_start)
-                bible_total += 1
-                found_any = True
+    # Process posts
+    batch_size = 500
+    processed = 0
+    found_total = 0
+    not_found_total = 0
+    status_counts = {0: 0, 1: 0, 2: 0, 3: 0}
 
-            if found_any:
-                updates.append((new_content, post_id))
-                # Save updated content_quotes
-                conn.execute(
-                    "UPDATE posts SET content_quotes=? WHERE post_id=?",
-                    (new_content, post_id)
-                )
-                # Recompute quote_status from tag counts in new content_quotes
-                # (Don't touch quotes table — we can't map blocks to rows reliably)
-                n_unfound = len(_UNFOUND_TAG_RE.findall(new_content))
-                n_found   = len(_FOUND_TAG_RE.findall(new_content))
-                if n_unfound == 0 and n_found > 0:
-                    status = 1
-                elif n_found == 0:
-                    status = 2
-                else:
-                    status = 3
-                conn.execute(
-                    "UPDATE posts SET quote_status=? WHERE post_id=?",
-                    (status, post_id)
-                )
+    # For global pass, read content_quotes (partially enriched); else content
+    content_col = "COALESCE(content_quotes, content)" if pass_type == 'known-user-global' else "content"
 
-        self.stdout.write(f"  Zaktualizowano {len(updates)} postów ({bible_total} tagów [Bible]).")
-        return bible_total
+    cursor = conn.execute(
+        f"""SELECT post_id, topic_id, {content_col}, post_order
+            FROM posts WHERE {where}
+            ORDER BY post_id
+            {"LIMIT " + str(limit) if limit else ""}"""
+    )
 
-    # -----------------------------------------------------------------------
-    # Search anonymous unfound quotes via n-gram index
-    # -----------------------------------------------------------------------
+    content_updates = []
+    quote_inserts = []
 
-    def _search_anonymous_by_ngram(self, conn, stdout) -> int:
-        """Find posts for anonymous [quote]...[/quote] blocks using a 5-gram index.
+    for row in cursor:
+        post_id, topic_id, content, post_order = row
 
-        Builds a 5-gram → [post_id] index from content_user for all posts.
-        For each anonymous unfound quote, votes on candidate posts via n-gram
-        lookups.  Requires ≥2 matching 5-grams pointing to the same post
-        (or ≥1 when inner text yields only 1–4 distinct 5-grams and that
-        single post is unambiguous).
-
-        Returns number of blocks resolved.
-        """
-        stdout.write("Budowanie 5-gram indeksu z content_user (wszystkie posty)...")
-        import time as _time
-        t0 = _time.time()
-
-        # ngram → list of post_ids (only keep unique lists — skip common phrases)
-        ngram_index: dict[str, list] = {}
-        post_author: dict[int, tuple] = {}  # post_id → (author_name, created_at)
-
-        _MAX_POSTS_PER_GRAM = 5   # skip very common 5-grams (stop-phrase style)
-
-        for row in conn.execute(
-            "SELECT post_id, author_name, content_user, created_at FROM posts "
-            "WHERE content_user IS NOT NULL AND content_user != ''"
-        ):
-            pid, author, cu, cat = row[0], row[1] or "", row[2] or "", row[3] or ""
-            post_author[pid] = (author, cat)
-            ws = _norm_for_bible(cu).split()   # reuse normalizer (alnum + space)
-            for i in range(len(ws) - 4):
-                key = ' '.join(ws[i:i+5])
-                lst = ngram_index.get(key)
-                if lst is None:
-                    ngram_index[key] = [pid]
-                elif len(lst) < _MAX_POSTS_PER_GRAM:
-                    lst.append(pid)
-                # else: already marked as common — leave as-is
-
-        t1 = _time.time()
-        stdout.write(
-            f"  {len(ngram_index):,} unikalnych 5-gramów, "
-            f"zbudowano w {t1-t0:.1f}s"
+        new_content, quote_status, quote_records = enrich_post(
+            content, post_id, topic_id, post_order,
+            known_users, cache, lookback,
+            pass_type=pass_type, gcache=gcache,
+            topic_cache_all=tcache_all, global_cache_all=gcache_all,
+            ngram_index=ngram_index, ngram_post_author=ngram_post_author,
         )
 
-        # Find anonymous unfound quotes
-        # Join with posts to get content_quotes; quote has canonical_author IS NULL
-        anon_posts = conn.execute(
-            "SELECT DISTINCT p.post_id, p.content_quotes "
-            "FROM posts p "
-            "JOIN quotes q ON q.citing_post_id = p.post_id "
-            "WHERE q.found=0 AND q.canonical_author IS NULL "
-            "AND p.content_quotes IS NOT NULL"
-        ).fetchall()
-        stdout.write(f"  Postów z anonimowymi unfound: {len(anon_posts)}")
+        content_updates.append((new_content, quote_status, post_id))
+        for qr in quote_records:
+            quote_inserts.append((
+                qr['post_id'], qr['quoted_user'], qr['quoted_user_resolved'],
+                qr['source_post_id'], qr['quote_text_preview'],
+                qr['quote_index'], qr['found'],
+            ))
 
-        found_total = 0
-        _CLOSE_RE    = re.compile(r'\[/quote\]', re.IGNORECASE)
-        _ANY_OPEN_RE = _QUOTE_ANY_OPEN_RE
-
-        for citing_post_id, cq in anon_posts:
-            # Parse all top-level quote blocks
-            events = []
-            for m in _ANY_OPEN_RE.finditer(cq):
-                events.append((m.start(), "open", m.group(0), m.end()))
-            for m in _CLOSE_RE.finditer(cq):
-                events.append((m.start(), "close", None, m.end()))
-            events.sort(key=lambda x: x[0])
-
-            depth = 0
-            block_start = tag_end = -1
-            opening_tag = ""
-            blocks = []
-            for pos, kind, tag_text, end in events:
-                if kind == "open":
-                    if depth == 0:
-                        block_start = pos
-                        tag_end     = end
-                        opening_tag = tag_text or ""
-                    depth += 1
-                else:
-                    if depth > 0:
-                        depth -= 1
-                        if depth == 0 and block_start >= 0:
-                            blocks.append((block_start, end, tag_end, opening_tag))
-                            block_start = -1
-
-            new_cq = cq
-            offset = 0
-            changed = False
-
-            for block_start, block_end, tag_end, opening_tag in blocks:
-                # Only process truly anonymous plain [quote] or [quote=""] blocks
-                # Skip enriched [quote=X post_id=N], [quote=X post_id=not_found], [Bible=]
-                if 'post_id=' in opening_tag.lower() or opening_tag.lower().startswith('[bible'):
-                    continue
-                # Skip named quotes (they have an author and were handled by main pass)
-                nf_m = _QUOTE_OPEN_RE.match(opening_tag)
-                if nf_m is None:
-                    continue   # not a plain [quote] or [quote="X"]
-                raw_author = nf_m.group(1)  # None for bare [quote]
-                if raw_author:
-                    continue   # has author → was already tried, skip
-
-                inner = cq[tag_end: block_end - len("[/quote]")]
-                ws    = _norm_for_bible(_strip_bbcode(inner)).split()
-                if len(ws) < 5:
-                    continue
-
-                # Vote on candidate posts via 5-gram lookup
-                votes: dict[int, int] = {}
-                grams_tried = 0
-                for i in range(0, len(ws) - 4, 2):   # stride 2 for speed
-                    key = ' '.join(ws[i:i+5])
-                    pids = ngram_index.get(key)
-                    if pids and len(pids) <= _MAX_POSTS_PER_GRAM:
-                        for p in pids:
-                            votes[p] = votes.get(p, 0) + 1
-                    grams_tried += 1
-                    if grams_tried > 60:
-                        break   # enough evidence
-
-                if not votes:
-                    continue
-
-                best_pid = max(votes, key=votes.get)
-                best_cnt = votes[best_pid]
-
-                # Require ≥2 matching grams, OR ≥1 if inner text is very short
-                min_votes = 1 if grams_tried <= 3 else 2
-                if best_cnt < min_votes:
-                    continue
-                # Ensure it's not ambiguous (no other candidate with same score)
-                if best_cnt > 1:
-                    rivals = [p for p, c in votes.items() if c == best_cnt and p != best_pid]
-                    if rivals:
-                        continue   # ambiguous
-
-                if best_pid == citing_post_id:
-                    continue   # can't cite yourself
-
-                author_name, created_at = post_author[best_pid]
-                unix_time  = _to_unix(created_at)
-                if author_name:
-                    new_tag = f"[quote={author_name} post_id={best_pid} time={unix_time}]"
-                else:
-                    new_tag = f"[quote post_id={best_pid} time={unix_time}]"
-
-                adj_start   = block_start + offset
-                adj_tag_end = tag_end     + offset
-                new_cq = (
-                    new_cq[:adj_start]
-                    + new_tag
-                    + new_cq[adj_tag_end:]
-                )
-                offset  += len(new_tag) - (tag_end - block_start)
+        status_counts[quote_status] = status_counts.get(quote_status, 0) + 1
+        for qr in quote_records:
+            if qr['found']:
                 found_total += 1
-                changed = True
+            else:
+                not_found_total += 1
 
-                conn.execute(
-                    "UPDATE quotes SET found=1, cited_post_id=?, canonical_author=? "
-                    "WHERE citing_post_id=? AND found=0 AND canonical_author IS NULL "
-                    "ORDER BY id LIMIT 1",
-                    (best_pid, author_name or None, citing_post_id)
-                )
+        processed += 1
 
-            if changed:
-                _UNFOUND = re.compile(
-                    r'\[quote(?:="[^"]*")?\]|\[quote=[^ \]]+\s+post_id=not_found\]',
-                    re.IGNORECASE
-                )
-                _FOUND = re.compile(
-                    r'\[(?:quote[^\]]+post_id=(?!not_found)|Bible=)[^\]]*\]',
-                    re.IGNORECASE
-                )
-                n_u = len(_UNFOUND.findall(new_cq))
-                n_f = len(_FOUND.findall(new_cq))
-                if n_u == 0 and n_f > 0:
-                    status = 1
-                elif n_f == 0:
-                    status = 2
-                else:
-                    status = 3
-                conn.execute(
+        # Progress
+        if processed % 1000 == 0 or processed == total_posts:
+            pct = processed / total_posts * 100 if total_posts else 0
+            print(
+                f"\r  [{processed:,}/{total_posts:,}] {pct:.1f}%  "
+                f"found={found_total:,} not_found={not_found_total:,}",
+                end='', flush=True,
+            )
+
+        # Batch write
+        if len(content_updates) >= batch_size:
+            if not dry_run:
+                conn.executemany(
                     "UPDATE posts SET content_quotes=?, quote_status=? WHERE post_id=?",
-                    (new_cq, status, citing_post_id)
+                    content_updates,
                 )
+                conn.executemany(
+                    """INSERT OR REPLACE INTO quotes
+                       (post_id, quoted_user, quoted_user_resolved,
+                        source_post_id, quote_text_preview, quote_index, found)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    quote_inserts,
+                )
+                conn.commit()
+            content_updates.clear()
+            quote_inserts.clear()
 
-        stdout.write(f"  Znaleziono {found_total} anonimowych cytatów.")
-        return found_total
-
-    # -----------------------------------------------------------------------
-    # Search not-found quotes by author (unlimited distance)
-    # -----------------------------------------------------------------------
-
-    def _search_not_found_by_author(self, conn, stdout) -> int:
-        """Try to find real posts for [quote=Author post_id=not_found] blocks.
-
-        Builds a per-author full-text index from content_user, then for each
-        not_found block searches ALL posts by that author using fingerprints
-        (same algorithm as the main pass, but without distance limit).
-
-        Returns number of blocks successfully resolved.
-        """
-        stdout.write("Budowanie indeksu per-autor z content_user...")
-
-        # author_lower → list of post dicts (stripped content_user)
-        author_index: dict[str, list[dict]] = {}
-        for row in conn.execute(
-            "SELECT post_id, author_name, content_user, created_at FROM posts "
-            "WHERE content_user IS NOT NULL AND content_user != ''"
-        ):
-            author = (row[1] or "").lower()
-            if not author:
-                continue
-            s = _strip_bbcode(row[2] or "")
-            author_index.setdefault(author, []).append({
-                "post_id":       row[0],
-                "author_name":   row[1] or "",
-                "stripped":      s,
-                "stripped_ascii": _to_ascii(s),
-                "created_at":    row[3] or "",
-            })
-
-        total_authors = len(author_index)
-        total_posts_indexed = sum(len(v) for v in author_index.values())
-        stdout.write(
-            f"  {total_authors} autorów, {total_posts_indexed:,} postów zaindeksowanych."
+    # Final batch
+    if content_updates and not dry_run:
+        conn.executemany(
+            "UPDATE posts SET content_quotes=?, quote_status=? WHERE post_id=?",
+            content_updates,
         )
-
-        # Find all posts with not_found blocks
-        nf_posts = conn.execute(
-            "SELECT post_id, content_quotes FROM posts "
-            "WHERE content_quotes LIKE '%post_id=not_found%'"
-        ).fetchall()
-        stdout.write(f"  Postów z not_found do przeszukania: {len(nf_posts)}")
-
-        found_total = 0
-        post_updates: list[tuple[str, int]] = []
-
-        # Regex to find all not_found opening tags with their author
-        _NF_OPEN_RE  = _NOT_FOUND_TAG_RE   # [quote=Author post_id=not_found]
-        _CLOSE_RE    = re.compile(r'\[/quote\]', re.IGNORECASE)
-        _ANY_OPEN_RE = _QUOTE_ANY_OPEN_RE  # any [quote...] opening
-
-        for citing_post_id, cq in nf_posts:
-            if not cq:
-                continue
-
-            # Find all not_found blocks using a depth-aware scan
-            # We need to pair each not_found opening tag with its [/quote]
-            new_cq = cq
-            offset = 0
-            changed = False
-
-            # Collect all events: (pos, kind, tag_text, end)
-            events = []
-            for m in _ANY_OPEN_RE.finditer(cq):
-                events.append((m.start(), "open", m.group(0), m.end()))
-            for m in _CLOSE_RE.finditer(cq):
-                events.append((m.start(), "close", None, m.end()))
-            events.sort(key=lambda x: x[0])
-
-            # Walk events to find top-level not_found blocks
-            depth = 0
-            block_start = tag_end = -1
-            opening_tag = ""
-
-            blocks: list[tuple[int, int, int, str]] = []  # (block_start, block_end, tag_end, opening_tag)
-            for pos, kind, tag_text, end in events:
-                if kind == "open":
-                    if depth == 0:
-                        block_start = pos
-                        tag_end     = end
-                        opening_tag = tag_text or ""
-                    depth += 1
-                else:
-                    if depth > 0:
-                        depth -= 1
-                        if depth == 0 and block_start >= 0:
-                            blocks.append((block_start, end, tag_end, opening_tag))
-                            block_start = -1
-
-            for block_start, block_end, tag_end, opening_tag in blocks:
-                # Only process not_found blocks
-                nf_m = _NF_OPEN_RE.match(opening_tag)
-                if not nf_m:
-                    continue
-                raw_author = nf_m.group("author")
-                author_key = raw_author.lower()
-
-                posts_by_author = author_index.get(author_key, [])
-                if not posts_by_author:
-                    continue
-
-                inner = cq[tag_end: block_end - len("[/quote]")]
-                fps   = _fingerprints(inner)
-                if not fps:
-                    continue
-
-                # Search all posts by this author — no distance limit
-                match = _match_post(fps, posts_by_author, raw_author)
-                if match is None:
-                    continue
-
-                # Found — build replacement tag
-                cited_id  = match["post_id"]
-                unix_time = _to_unix(match["created_at"])
-                new_tag   = f"[quote={raw_author} post_id={cited_id} time={unix_time}]"
-
-                # Apply replacement in new_cq (adjusting for prior offset changes)
-                adj_start   = block_start + offset
-                adj_tag_end = tag_end    + offset
-                new_cq = (
-                    new_cq[:adj_start]
-                    + new_tag
-                    + new_cq[adj_tag_end:]
-                )
-                offset  += len(new_tag) - (tag_end - block_start)
-                found_total += 1
-                changed = True
-
-                # Update quotes table: mark the corresponding row as found
-                conn.execute(
-                    "UPDATE quotes SET found=1, cited_post_id=? "
-                    "WHERE citing_post_id=? AND found=0 AND canonical_author=? "
-                    "ORDER BY id LIMIT 1",
-                    (cited_id, citing_post_id, raw_author)
-                )
-
-            if changed:
-                # Recompute quote_status from tag counts
-                _UNFOUND = re.compile(
-                    r'\[quote(?:="[^"]*")?\]|\[quote=[^ \]]+\s+post_id=not_found\]',
-                    re.IGNORECASE
-                )
-                _FOUND   = re.compile(
-                    r'\[(?:quote[^\]]+post_id=(?!not_found)|Bible=)[^\]]*\]',
-                    re.IGNORECASE
-                )
-                n_u = len(_UNFOUND.findall(new_cq))
-                n_f = len(_FOUND.findall(new_cq))
-                if n_u == 0 and n_f > 0:
-                    status = 1
-                elif n_f == 0:
-                    status = 2
-                else:
-                    status = 3
-                conn.execute(
-                    "UPDATE posts SET content_quotes=?, quote_status=? WHERE post_id=?",
-                    (new_cq, status, citing_post_id)
-                )
-                post_updates.append(citing_post_id)
-
-        stdout.write(
-            f"  Zaktualizowano {len(post_updates)} postów, "
-            f"znaleziono {found_total} cytatów."
+        conn.executemany(
+            """INSERT INTO quotes
+               (post_id, quoted_user, quoted_user_resolved,
+                source_post_id, quote_text_preview, quote_index, found)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            quote_inserts,
         )
-        return found_total
+        conn.commit()
+
+    print()  # newline after progress
+    print()
+    print(f"=== Wyniki ===")
+    print(f"  Przetworzono postów: {processed:,}")
+    print(f"  Cytatów znalezionych:    {found_total:,}")
+    print(f"  Cytatów nieznalezionych: {not_found_total:,}")
+    print(f"  quote_status=0 (brak cytatów):       {status_counts.get(0, 0):,}")
+    print(f"  quote_status=1 (wszystkie znalezione): {status_counts.get(1, 0):,}")
+    print(f"  quote_status=2 (żadne nieznalezione):  {status_counts.get(2, 0):,}")
+    print(f"  quote_status=3 (mieszane):             {status_counts.get(3, 0):,}")
+
+    if dry_run:
+        print("\n[DRY RUN] Nie zapisano zmian w bazie.")
+        # Show some examples
+        print("\nPrzykłady (pierwsze 3 znalezione):")
+        shown = 0
+        conn2 = sqlite3.connect(DB_PATH)
+        for cu in content_updates[:50]:
+            new_content, status, pid = cu
+            if status in (1, 3) and new_content:
+                orig = conn2.execute(
+                    "SELECT content FROM posts WHERE post_id=?", (pid,)
+                ).fetchone()[0]
+                if orig != new_content:
+                    print(f"\n--- post {pid} (status={status}) ---")
+                    # Show just the quote tags
+                    for m in re.finditer(r'\[quote="[^"]*"(?:\s+post_id=\d+)?\]', new_content):
+                        print(f"  {m.group(0)}")
+                    shown += 1
+                    if shown >= 3:
+                        break
+        conn2.close()
+
+    conn.close()
+    print("\nGotowe.")
+
+
+if __name__ == '__main__':
+    main()

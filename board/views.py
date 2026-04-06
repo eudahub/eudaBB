@@ -741,53 +741,85 @@ def login_view(request):
 
 
 def request_reset(request):
-    """Step 1: user asks for a reset code. Sends 6-digit code by email."""
-    from .models import User as ForumUser
+    """Step 1: user asks for a reset code. Sends 6-digit code by email or shows popup."""
+    from django.http import JsonResponse
+    from .models import User as ForumUser, SiteConfig
 
-    reason = request.GET.get("reason", "")          # 'invalidated' or '' (forgot)
+    reason = request.GET.get("reason", "")
     prefill_username = request.GET.get("username", "")
 
-    sent = False
-    error = None
-
     if request.method == "POST":
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
         username = request.POST.get("username", "").strip()
+
+        def ajax_err(msg):
+            return JsonResponse({"ok": False, "error": msg})
+
         try:
             user = ForumUser.objects.get(username=username)
         except ForumUser.DoesNotExist:
-            # Don't reveal whether user exists — same message
-            sent = True
-        else:
-            if not user.email:
-                error = (
-                    "To konto nie ma przypisanego adresu email. "
-                    "Skontaktuj się z administratorem."
-                )
-            else:
-                allowed, sent_count = _can_send_reset_code(user)
-                if not allowed:
-                    error = (
-                        f"Wysłano już {PasswordResetCode.MAX_PER_HOUR} kody w ciągu ostatniej godziny. "
-                        "Sprawdź skrzynkę lub spróbuj ponownie za chwilę."
-                    )
-                else:
-                    code = _generate_reset_code()
-                    expires = timezone.now() + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
-                    PasswordResetCode.objects.create(user=user, code=code, expires_at=expires)
-                    if getattr(settings, "TEST_MODE", False):
-                        # TEST_MODE: show code on screen instead of sending email
-                        return render(request, "registration/request_reset.html", {
-                            "sent": True,
-                            "test_code": code,
-                            "username": username,
-                            "email_mask": mask_email(user.email),
-                        })
-                    _send_reset_code_email(user, code, user.email)
-                    sent = True
+            if is_ajax:
+                return JsonResponse({"ok": False, "error": "Nie znaleziono konta o tym nicku."})
+            return render(request, "registration/request_reset.html", {
+                "error": "Nie znaleziono konta o tym nicku.",
+                "reason": reason, "prefill_username": username,
+            })
+
+        if not user.email:
+            msg = "To konto nie ma adresu email. Skontaktuj się z administratorem."
+            if is_ajax:
+                return ajax_err(msg)
+            return render(request, "registration/request_reset.html", {
+                "error": msg, "reason": reason, "prefill_username": username,
+            })
+
+        allowed, _ = _can_send_reset_code(user)
+        if not allowed:
+            msg = (f"Wysłano już {PasswordResetCode.MAX_PER_HOUR} kody w ciągu ostatniej godziny. "
+                   "Sprawdź skrzynkę lub spróbuj ponownie za chwilę.")
+            if is_ajax:
+                return ajax_err(msg)
+            return render(request, "registration/request_reset.html", {
+                "error": msg, "reason": reason, "prefill_username": username,
+            })
+
+        code = _generate_reset_code()
+        expires = timezone.now() + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
+        PasswordResetCode.objects.create(user=user, code=code, expires_at=expires)
+
+        cfg = SiteConfig.get()
+        use_popup = (cfg.reset_mode == SiteConfig.RESET_POPUP)
+
+        if use_popup:
+            sent_at = timezone.now().strftime("%Y-%m-%d %H:%M")
+            if is_ajax:
+                return JsonResponse({
+                    "ok": True,
+                    "popup": True,
+                    "code": code,
+                    "username": username,
+                    "sent_at": sent_at,
+                    "do_reset_url": f"/ustaw-haslo/?username={username}",
+                })
+            # Non-AJAX fallback
+            return render(request, "registration/request_reset.html", {
+                "popup_code": code,
+                "popup_username": username,
+                "popup_sent_at": sent_at,
+                "do_reset_url": f"/ustaw-haslo/?username={username}",
+                "reason": reason,
+            })
+
+        _send_reset_code_email(user, code, user.email)
+        if is_ajax:
+            return JsonResponse({"ok": True, "popup": False,
+                                 "email_mask": mask_email(user.email)})
+        return render(request, "registration/request_reset.html", {
+            "sent": True, "email_mask": mask_email(user.email),
+            "reason": reason,
+        })
 
     return render(request, "registration/request_reset.html", {
-        "sent": sent,
-        "error": error,
         "reason": reason,
         "prefill_username": prefill_username,
     })
@@ -1114,6 +1146,23 @@ def pm_delete(request, box_id):
 # ---------------------------------------------------------------------------
 # Quote link: redirect to the source post
 # ---------------------------------------------------------------------------
+
+def root_config(request):
+    """Root-only view to toggle site-wide settings."""
+    from .models import SiteConfig
+    if not request.user.is_authenticated or not request.user.is_root:
+        return HttpResponseForbidden()
+
+    cfg = SiteConfig.get()
+
+    if request.method == "POST":
+        cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
+        cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
+        cfg.save()
+        return redirect("root_config")
+
+    return render(request, "board/root_config.html", {"cfg": cfg, "SiteConfig": SiteConfig})
+
 
 def goto_post(request, post_id):
     """Redirect to the topic page anchored at the given post."""

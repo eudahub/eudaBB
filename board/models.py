@@ -388,6 +388,10 @@ class Post(models.Model):
     # Sequential position within topic — used for pagination and quote references
     post_order = models.PositiveIntegerField(default=0)
 
+    # Set during import when the post has unbalanced [quote]/[/quote] tags
+    # (quote_status=4 in sfiniabb.db). Content is displayed verbatim, not parsed.
+    broken_tags = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["post_order"]
         db_table = "forum_posts"
@@ -397,3 +401,32 @@ class Post(models.Model):
 
     def __str__(self):
         return f"Post #{self.post_order} in '{self.topic}'"
+
+
+class SiteConfig(models.Model):
+    """Singleton table (always pk=1) — site-wide toggles configurable by root."""
+
+    # Reset code delivery: 'email' sends real mail, 'popup' shows code on screen
+    RESET_EMAIL = "email"
+    RESET_POPUP = "popup"
+    RESET_MODE_CHOICES = [
+        (RESET_EMAIL, "Wyślij emailem"),
+        (RESET_POPUP, "Pokaż w oknie (tryb testowy)"),
+    ]
+    reset_mode = models.CharField(
+        max_length=10, choices=RESET_MODE_CHOICES, default=RESET_EMAIL
+    )
+
+    # Show "Przełącz" link in nav (lets you quickly switch accounts — test use only)
+    show_switch_link = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "forum_siteconfig"
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "SiteConfig"

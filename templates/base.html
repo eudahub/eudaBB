@@ -142,11 +142,13 @@
         <span>{{ user.username }}</span>
         <a href="{% url 'pm_inbox' %}">PM{% if pm_unread %} <strong>({{ pm_unread }})</strong>{% endif %}</a>
         {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
+        {% if user.is_root %}<a href="{% url 'root_config' %}">Konfiguracja</a>{% endif %}
         <form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Wyloguj</button></form>
-        {% if user.is_root or user.is_staff or settings.TEST_MODE %}<form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<input type="hidden" name="next" value="{% url 'login' %}"><button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Przełącz</button></form>{% endif %}
+        {% if site_config.show_switch_link %}<form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<input type="hidden" name="next" value="{% url 'login' %}"><button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Przełącz</button></form>{% endif %}
       {% else %}
         <a href="{% url 'login' %}">Zaloguj</a>
         <a href="{% url 'register' %}">Rejestracja</a>
+        {% if site_config.show_switch_link %}<span style="color:#c00;font-weight:bold;font-size:10px;">[popup]</span>{% endif %}
       {% endif %}
     </div>
   </nav>

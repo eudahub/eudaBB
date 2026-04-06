@@ -2,9 +2,12 @@ from django.conf import settings
 
 
 def test_mode(request):
+    from board.models import SiteConfig
+    cfg = SiteConfig.get()
     return {
         "TEST_MODE": getattr(settings, "TEST_MODE", False),
         "SITE_NOTICE": getattr(settings, "SITE_NOTICE", ""),
+        "site_config": cfg,
     }
 
 

@@ -18,6 +18,7 @@ urlpatterns = [
     path("kontakt/", views.contact, name="contact"),
     path("admin/blocked-ips/", views.admin_blocked_ips, name="admin_blocked_ips"),
     path("post/<int:post_id>/flag-ip/", views.flag_post_ip, name="flag_post_ip"),
+    path("root/config/", views.root_config, name="root_config"),
     path("post/<int:post_id>/", views.goto_post, name="goto_post"),
     # Private Messages
     path("pm/",                     views.pm_inbox,   name="pm_inbox"),
