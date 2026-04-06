@@ -127,7 +127,13 @@ python manage.py apply_username_aliases --db /path/to/sfinia_users_real.db
 Notes:
 - `build_import_db` now expects plaintext `email` in the generated `users` table; the old `email_hash/email_mask` import format is legacy-only.
 - alias decisions (`username_aliases`) are still read directly from `sfinia_users_real.db`; in the future they could also be copied into `sfinia_import.db`.
-- root can later rename a user from `/root/config/`; the rename also updates quoted author names in stored `[quote]` and `[fquote]` tags.
+- post import also builds the `forum_quote_refs` quote index (citing post, source post, nesting depth).
+- root can later rename a user from `/root/config/`; the rename uses `forum_quote_refs`, so it does not have to scan the whole posts table.
+- for an already imported Django database, you can rebuild the quote index with:
+
+```bash
+python manage.py rebuild_quote_refs
+```
 
 ## Production (nginx + gunicorn)
 

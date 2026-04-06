@@ -3,6 +3,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 
 from .models import Forum, Section, Topic, User, Post
+from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
 
@@ -48,6 +49,11 @@ class UserRenameTests(TestCase):
             author=other_user,
             content_bbcode=f'[fquote="Stary Łoś" post_id={source_post.pk}]abc[/fquote]',
             post_order=4,
+        )
+        rebuild_quote_references_for_posts(
+            Post.objects.filter(pk__in=[
+                named_quote_post.pk, enriched_quote_post.pk, foreign_quote_post.pk
+            ]).only("pk", "content_bbcode")
         )
 
         result = rename_user_and_update_quotes(renamed_user, "Nowy Żubr")
@@ -106,6 +112,7 @@ class UserRenameTests(TestCase):
             content_bbcode=f'[quote="Błędny" post_id={source_post.pk}]abc[/quote]',
             post_order=2,
         )
+        rebuild_quote_references_for_post(quoting_post)
 
         client = Client()
         client.force_login(root)
@@ -124,3 +131,18 @@ class UserRenameTests(TestCase):
         quoting_post.refresh_from_db()
         self.assertEqual(renamed_user.username, "AdminY")
         self.assertIn('[quote="AdminY" post_id=', quoting_post.content_bbcode)
+
+    def test_quote_refs_capture_nested_depth(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode='[quote="A"]x[quote="B"]y[/quote][/quote]',
+            post_order=1,
+        )
+
+        rebuild_quote_references_for_post(post)
+        refs = list(post.quote_references.order_by("quote_index").values_list("quoted_username", "depth"))
+
+        self.assertEqual(refs, [("A", 1), ("B", 2)])

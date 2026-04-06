@@ -406,6 +406,37 @@ class Post(models.Model):
         return f"Post #{self.post_order} in '{self.topic}'"
 
 
+class QuoteReference(models.Model):
+    """Index of quote/fquote tags found in a post's BBCode."""
+
+    class QuoteType(models.TextChoices):
+        QUOTE = "quote", "Quote"
+        FQUOTE = "fquote", "Foreign quote"
+
+    post = models.ForeignKey(
+        Post, on_delete=models.CASCADE, related_name="quote_references"
+    )
+    source_post = models.ForeignKey(
+        Post, on_delete=models.SET_NULL, null=True, blank=True, related_name="quoted_by"
+    )
+    quote_type = models.CharField(max_length=6, choices=QuoteType.choices)
+    quoted_username = models.TextField(blank=True, default="")
+    depth = models.PositiveSmallIntegerField(default=1)
+    quote_index = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "forum_quote_refs"
+        unique_together = [("post", "quote_index")]
+        indexes = [
+            models.Index(fields=["source_post"]),
+            models.Index(fields=["quoted_username"]),
+            models.Index(fields=["post", "depth"]),
+        ]
+
+    def __str__(self):
+        return f"QuoteRef post={self.post_id} idx={self.quote_index}"
+
+
 class SiteConfig(models.Model):
     """Singleton table (always pk=1) — site-wide toggles configurable by root."""
 

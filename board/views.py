@@ -23,6 +23,7 @@ from .middleware import invalidate_blocked_ips_cache
 from .auth_utils import prehash_password
 from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
+from .quote_refs import rebuild_quote_references_for_post
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ def _get_client_ip(request):
 def _render_and_create_post(topic: Topic, author, content_bbcode: str,
                              post_order: int, author_ip: str = None) -> Post:
     retain_until = _retain_until(flagged=False) if author_ip else None
-    return Post.objects.create(
+    post = Post.objects.create(
         topic=topic,
         author=author,
         content_bbcode=content_bbcode,
@@ -71,6 +72,8 @@ def _render_and_create_post(topic: Topic, author, content_bbcode: str,
         author_ip=author_ip,
         ip_retain_until=retain_until,
     )
+    rebuild_quote_references_for_post(post)
+    return post
 
 
 # ---------------------------------------------------------------------------

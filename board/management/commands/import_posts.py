@@ -34,6 +34,7 @@ _WARSAW = ZoneInfo("Europe/Warsaw")
 
 from board.models import Forum, Post, Topic, User
 from board.management.commands.update_forum_counts import compute_recursive_counts
+from board.quote_refs import rebuild_quote_references_for_posts
 
 
 TOPIC_TYPE_MAP = {
@@ -176,6 +177,7 @@ class Command(BaseCommand):
 
         posts_created = topics_created = skipped_forum = 0
         sfinia_to_django = {}  # sfinia post_id (int) → django post_id (int)
+        imported_post_ids = []
 
         # --- Group by topic_id (rows already sorted by topic_id, post_order) ---
         with transaction.atomic():
@@ -240,6 +242,7 @@ class Command(BaseCommand):
                 for sfinia_id, post_obj in zip(sfinia_ids, post_objects):
                     if post_obj.pk:
                         sfinia_to_django[sfinia_id] = post_obj.pk
+                        imported_post_ids.append(post_obj.pk)
 
                 # Update topic reply_count and last_post_at
                 total = len(post_objects)
@@ -277,6 +280,13 @@ class Command(BaseCommand):
                 Post.objects.bulk_update(batch, ["content_bbcode"])
                 remapped += len(batch)
             self.stdout.write(f"  Zaktualizowano {remapped} postów.")
+
+        if imported_post_ids:
+            self.stdout.write("Buduję indeks cytowań (forum_quote_refs)…")
+            indexed = rebuild_quote_references_for_posts(
+                Post.objects.filter(pk__in=imported_post_ids).only("pk", "content_bbcode")
+            )
+            self.stdout.write(f"  Zindeksowano {indexed} postów.")
 
         # --- Set topic.last_post FK ---
         self.stdout.write("Ustawiam last_post na wątkach…")

@@ -4,7 +4,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 
-from .models import Post, User
+from .models import Post, QuoteReference, User
+from .quote_refs import rebuild_quote_references_for_posts
 from .username_utils import normalize
 
 
@@ -93,22 +94,22 @@ def _rewrite_enriched_quotes(content: str, old_username: str, new_username: str,
 def rename_user_and_update_quotes(user: User, new_username: str) -> dict:
     new_username = validate_new_username(user, new_username)
     old_username = user.username
-    source_post_ids = frozenset(
-        Post.objects.filter(author=user).values_list("pk", flat=True)
-    )
+    source_post_ids = frozenset(Post.objects.filter(author=user).values_list("pk", flat=True))
 
-    posts_qs = (
-        Post.objects.filter(
-            Q(content_bbcode__contains=old_username) |
-            Q(content_bbcode__contains="post_id=")
+    quote_post_ids = list(
+        QuoteReference.objects.filter(
+            Q(quoted_username=old_username) |
+            Q(source_post__author=user)
         )
-        .only("pk", "content_bbcode")
-        .order_by("pk")
+        .values_list("post_id", flat=True)
+        .distinct()
     )
+    posts_qs = Post.objects.filter(pk__in=quote_post_ids).only("pk", "content_bbcode").order_by("pk")
 
     posts_changed = 0
     tags_changed = 0
     batch = []
+    changed_post_ids = []
 
     with transaction.atomic():
         for post in posts_qs.iterator(chunk_size=500):
@@ -124,6 +125,7 @@ def rename_user_and_update_quotes(user: User, new_username: str) -> dict:
 
             post.content_bbcode = updated_content
             batch.append(post)
+            changed_post_ids.append(post.pk)
             posts_changed += 1
             tags_changed += changed_total
 
@@ -133,6 +135,11 @@ def rename_user_and_update_quotes(user: User, new_username: str) -> dict:
 
         if batch:
             Post.objects.bulk_update(batch, ["content_bbcode"])
+
+        if changed_post_ids:
+            rebuild_quote_references_for_posts(
+                Post.objects.filter(pk__in=changed_post_ids).only("pk", "content_bbcode")
+            )
 
         user.username = new_username
         user.save(update_fields=["username"])
