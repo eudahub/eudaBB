@@ -18,10 +18,13 @@ Usage examples:
   python manage.py import_posts sfiniabb.db --random 10000
 """
 
+import re
 import sqlite3
 from datetime import datetime
 from itertools import groupby
 from zoneinfo import ZoneInfo
+
+_POST_ID_RE = re.compile(r'(post_id=)(\d+)', re.IGNORECASE)
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -172,6 +175,7 @@ class Command(BaseCommand):
         )
 
         posts_created = topics_created = skipped_forum = 0
+        sfinia_to_django = {}  # sfinia post_id (int) → django post_id (int)
 
         # --- Group by topic_id (rows already sorted by topic_id, post_order) ---
         with transaction.atomic():
@@ -206,14 +210,17 @@ class Command(BaseCommand):
 
                 # Re-number posts 1, 2, 3… within this topic
                 post_objects = []
+                sfinia_ids = []   # parallel to post_objects
                 for new_order, row in enumerate(posts_in_topic, start=1):
                     author = user_map.get(row["author_name"])
-                    # Use enriched content_quotes if available (enrich_quotes command)
                     keys = row.keys()
-                    content_bbcode = (
-                        (row["content_quotes"] if "content_quotes" in keys else None)
-                        or row["content"]
-                        or ""
+                    # Use enriched content_quotes when available, fall back to content.
+                    # When quote_status=4 the post has unbalanced tags — content_quotes
+                    # is NULL there, so content is used and broken_tags is set True.
+                    content_quotes = row["content_quotes"] if "content_quotes" in keys else None
+                    content_bbcode = content_quotes or row["content"] or ""
+                    broken_tags = (
+                        "quote_status" in keys and row["quote_status"] == 4
                     )
                     dt = parse_pl_date(row["created_at"])
                     post_objects.append(Post(
@@ -221,12 +228,18 @@ class Command(BaseCommand):
                         author=author,
                         subject=row["subject"] or "",
                         content_bbcode=content_bbcode,
+                        broken_tags=broken_tags,
                         post_order=new_order,
                         **({"created_at": dt} if dt else {}),
                     ))
+                    sfinia_ids.append(row["post_id"])
                     posts_created += 1
 
                 Post.objects.bulk_create(post_objects)
+                # bulk_create sets pk on objects (Django 4.1+, SQLite 3.35+)
+                for sfinia_id, post_obj in zip(sfinia_ids, post_objects):
+                    if post_obj.pk:
+                        sfinia_to_django[sfinia_id] = post_obj.pk
 
                 # Update topic reply_count and last_post_at
                 total = len(post_objects)
@@ -237,6 +250,33 @@ class Command(BaseCommand):
                     topic.last_post_at = last_dt
                     update_fields.append("last_post_at")
                 topic.save(update_fields=update_fields)
+
+        # --- Remap sfinia post_ids in content_bbcode → django post_ids ---
+        if sfinia_to_django:
+            self.stdout.write("ReMapuję post_id w cytatach (sfinia → django)…")
+
+            def _remap(content):
+                def sub(m):
+                    old = int(m.group(2))
+                    new = sfinia_to_django.get(old)
+                    return f'{m.group(1)}{new}' if new else m.group(0)
+                return _POST_ID_RE.sub(sub, content)
+
+            batch = []
+            remapped = 0
+            for post in Post.objects.only("pk", "content_bbcode").iterator(chunk_size=2000):
+                new_content = _remap(post.content_bbcode)
+                if new_content != post.content_bbcode:
+                    post.content_bbcode = new_content
+                    batch.append(post)
+                if len(batch) >= 1000:
+                    Post.objects.bulk_update(batch, ["content_bbcode"])
+                    remapped += len(batch)
+                    batch = []
+            if batch:
+                Post.objects.bulk_update(batch, ["content_bbcode"])
+                remapped += len(batch)
+            self.stdout.write(f"  Zaktualizowano {remapped} postów.")
 
         # --- Set topic.last_post FK ---
         self.stdout.write("Ustawiam last_post na wątkach…")
