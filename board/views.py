@@ -173,6 +173,7 @@ def topic_detail(request, topic_id):
     poll_can_vote = False
     poll_can_change_vote = False
     poll_show_results = False
+    poll_max_option_votes = 0
 
     if poll is not None:
         poll_is_closed = poll.is_closed or (poll.ends_at is not None and poll.ends_at <= poll_now)
@@ -194,6 +195,7 @@ def topic_detail(request, topic_id):
             or poll_is_closed
             or bool(poll_user_votes)
         )
+        poll_max_option_votes = max((option.vote_count for option in poll.options.all()), default=0)
 
     reply_form = ReplyForm() if not topic.is_locked else None
 
@@ -225,6 +227,7 @@ def topic_detail(request, topic_id):
         "poll_can_vote": poll_can_vote,
         "poll_can_change_vote": poll_can_change_vote,
         "poll_user_vote_option_ids": poll_user_vote_option_ids,
+        "poll_max_option_votes": poll_max_option_votes,
     })
 
 

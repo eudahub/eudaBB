@@ -24,7 +24,12 @@
         {% for option in topic.poll.options.all %}
           <div style="margin-bottom:.45rem;">
             <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:11px;">
-              <span>{{ option.option_text }}</span>
+              <span>
+                {{ option.option_text }}
+                {% if option.pk in poll_user_vote_option_ids %}
+                  <strong style="color:#800000;"> · X Twój głos</strong>
+                {% endif %}
+              </span>
               <span>
                 {% widthratio option.vote_count topic.poll.total_votes|default:1 100 as option_pct %}
                 {{ option.vote_count }} gł.
@@ -32,12 +37,15 @@
               </span>
             </div>
             <div style="height:10px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.15rem;">
-              <div style="height:100%;background:#800000;width:{% if topic.poll.total_votes %}{% widthratio option.vote_count topic.poll.total_votes 100 %}{% else %}0{% endif %}%;"></div>
+              <div style="height:100%;background:#800000;width:{% if poll_max_option_votes %}{% widthratio option.vote_count poll_max_option_votes 100 %}{% else %}0{% endif %}%;"></div>
             </div>
           </div>
         {% endfor %}
         <div style="font-size:11px;color:#555;margin-top:.35rem;">
           Łącznie głosów: {{ topic.poll.total_votes }}
+          {% if poll_max_option_votes and topic.poll.total_votes != poll_max_option_votes %}
+            · paski w skali do najwyższej odpowiedzi
+          {% endif %}
         </div>
       {% endif %}
 

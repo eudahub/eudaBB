@@ -796,6 +796,33 @@ class UserRenameTests(TestCase):
         response = client.get(reverse("topic_detail", args=[topic.pk]))
         self.assertContains(response, "Łącznie głosów: 1")
         self.assertNotContains(response, "Wyniki będą widoczne po oddaniu głosu")
+        self.assertContains(response, "X Twój głos")
+
+    def test_topic_detail_scales_poll_bars_to_highest_option(self):
+        author = User.objects.create_user(username="AutorPollScale", password="x")
+        reader = User.objects.create_user(username="CzytelnikPollScale", password="x")
+        topic = self._make_topic(author, title="Skala ankiety")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Treść posta", post_order=1)
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=True,
+            is_archived_import=False,
+            total_votes=10,
+        )
+        PollOption.objects.create(poll=poll, option_text="Tak", vote_count=4, sort_order=1)
+        PollOption.objects.create(poll=poll, option_text="Nie", vote_count=2, sort_order=2)
+        PollOption.objects.create(poll=poll, option_text="Może", vote_count=2, sort_order=3)
+        PollOption.objects.create(poll=poll, option_text="Trudno powiedzieć", vote_count=2, sort_order=4)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("topic_detail", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "paski w skali do najwyższej odpowiedzi")
+        self.assertContains(response, "width:100%;", html=False)
+        self.assertContains(response, "width:50%;", html=False)
 
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")
