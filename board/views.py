@@ -1,4 +1,5 @@
 import secrets
+import re
 from datetime import timedelta
 
 from django.db import models as django_models
@@ -12,7 +13,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostSearchIndex
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content,
@@ -25,6 +26,7 @@ from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
 from .quote_refs import rebuild_quote_references_for_post
 from .quote_selection import extract_exact_quote_fragment, normalize_selected_text
+from .search_index import normalize_search_text
 
 
 # ---------------------------------------------------------------------------
@@ -331,18 +333,95 @@ def contact(request):
     return render(request, "board/contact.html", {"sent": sent, "error": error})
 
 
-# ---------------------------------------------------------------------------
-# TODO: Search
-# ---------------------------------------------------------------------------
-# Search must require login (@login_required) — DDoS protection.
-# Full-text search is expensive; anonymous access would allow trivial amplification.
-#
-# Implementation notes:
-# - Use PostgreSQL full-text search (SearchVector on Post.content_bbcode)
-# - Filter results by forum access_level <= request.user.archive_access
-# - Paginate results (reuse POSTS_PER_PAGE)
-# - Client-side Argon2 + server-side SHA3-256 for login (see auth TODO below)
-# ---------------------------------------------------------------------------
+_SEARCH_PHRASE_RE = re.compile(r'"([^"]+)"|(\S+)')
+_SAFE_STOP_WORDS = {
+    "nie", "to", "w", "i", "sie", "ze", "na", "z", "a", "do", "o", "ale",
+}
+
+
+def _parse_search_query(raw_query: str):
+    phrases = []
+    terms = []
+    skipped_terms = []
+
+    for match in _SEARCH_PHRASE_RE.finditer(raw_query or ""):
+        phrase = match.group(1)
+        token = match.group(2)
+        if phrase is not None:
+            normalized_phrase = normalize_search_text(phrase)
+            if normalized_phrase:
+                phrases.append(normalized_phrase)
+            continue
+
+        normalized_token = normalize_search_text(token or "")
+        if not normalized_token:
+            continue
+        if normalized_token in _SAFE_STOP_WORDS:
+            skipped_terms.append(token)
+            continue
+        terms.append(normalized_token)
+
+    return {
+        "phrases": phrases,
+        "terms": terms,
+        "skipped_terms": skipped_terms,
+    }
+
+
+@login_required
+def search(request):
+    raw_query = (request.GET.get("q") or "").strip()
+    forum_id_raw = (request.GET.get("forum_id") or "").strip()
+    page_num = request.GET.get("page")
+
+    indexed_forums = Forum.objects.filter(search_posts__isnull=False).distinct().order_by("title")
+    selected_forum = None
+    parsed = {"phrases": [], "terms": [], "skipped_terms": []}
+    page = None
+    info_message = ""
+
+    if forum_id_raw:
+        try:
+            selected_forum = indexed_forums.get(pk=int(forum_id_raw))
+        except (ValueError, Forum.DoesNotExist):
+            info_message = "Wybrane forum nie istnieje w indeksie wyszukiwania."
+
+    if raw_query and not info_message:
+        parsed = _parse_search_query(raw_query)
+        if not parsed["phrases"] and not parsed["terms"]:
+            if parsed["skipped_terms"]:
+                info_message = (
+                    "Zapytanie składa się wyłącznie ze słów pomijanych: "
+                    + ", ".join(parsed["skipped_terms"])
+                )
+            else:
+                info_message = "Podaj szukany tekst."
+        else:
+            max_forum_level = getattr(request.user, "archive_access", 0)
+            qs = (
+                PostSearchIndex.objects
+                .select_related("post", "author", "topic", "forum")
+                .filter(forum__archive_level__lte=max_forum_level)
+            )
+            if selected_forum is not None:
+                qs = qs.filter(forum=selected_forum)
+
+            for phrase in parsed["phrases"]:
+                qs = qs.filter(content_search_author_normalized__contains=phrase)
+            for term in parsed["terms"]:
+                qs = qs.filter(content_search_author_normalized__contains=term)
+
+            paginator = Paginator(qs.order_by("-created_at", "-post_id"), getattr(settings, "POSTS_PER_PAGE", 20))
+            page = paginator.get_page(page_num)
+
+    return render(request, "board/search.html", {
+        "indexed_forums": indexed_forums,
+        "selected_forum": selected_forum,
+        "raw_query": raw_query,
+        "parsed_query": parsed,
+        "info_message": info_message,
+        "page": page,
+    })
 
 
 # ---------------------------------------------------------------------------

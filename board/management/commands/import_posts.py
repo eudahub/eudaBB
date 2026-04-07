@@ -35,6 +35,7 @@ _WARSAW = ZoneInfo("Europe/Warsaw")
 from board.models import Forum, Post, Topic, User
 from board.management.commands.update_forum_counts import compute_recursive_counts
 from board.quote_refs import rebuild_quote_references_for_posts
+from board.search_index import rebuild_post_search_index_for_posts
 
 
 TOPIC_TYPE_MAP = {
@@ -287,6 +288,12 @@ class Command(BaseCommand):
                 Post.objects.filter(pk__in=imported_post_ids).only("pk", "content_bbcode")
             )
             self.stdout.write(f"  Zindeksowano {indexed} postów.")
+
+            self.stdout.write("Buduję indeks wyszukiwania (forum_post_search)…")
+            indexed_search = rebuild_post_search_index_for_posts(
+                Post.objects.filter(pk__in=imported_post_ids).select_related("topic", "topic__forum", "author")
+            )
+            self.stdout.write(f"  Zindeksowano wyszukiwanie dla {indexed_search} postów.")
 
         # --- Set topic.last_post FK ---
         self.stdout.write("Ustawiam last_post na wątkach…")

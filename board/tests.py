@@ -6,8 +6,10 @@ from .models import Forum, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
+from .search_index import extract_author_search_text, rebuild_post_search_index_for_posts
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
+from .views import _parse_search_query
 
 
 class UserRenameTests(TestCase):
@@ -216,6 +218,62 @@ class UserRenameTests(TestCase):
             "def",
         )
         self.assertEqual(fragment, '[quote="Semele" post_id=20](...)\ndef\n(...)[/quote]')
+
+    def test_extract_author_search_text_skips_quote_like_blocks(self):
+        text = extract_author_search_text(
+            'Ala [b]ma[/b] kota [quote="X"]ukryj[/quote] '
+            '[fquote="Y"]też ukryj[/fquote] '
+            '[Bible="J 1:1"]ukryj[/Bible] '
+            '[AI="bot"]ukryj[/AI] [code]x=1[/code] i psa'
+        )
+        self.assertEqual(text, "Ala ma kota i psa")
+
+    def test_rebuild_post_search_index_creates_author_only_text(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode='Początek [quote="X"]ukryj[/quote] koniec',
+            post_order=1,
+        )
+
+        total = rebuild_post_search_index_for_posts(
+            Post.objects.filter(pk=post.pk).select_related("topic", "topic__forum", "author")
+        )
+
+        self.assertEqual(total, 1)
+        post.refresh_from_db()
+        self.assertEqual(post.search_index.content_search_author, "Początek koniec")
+        self.assertEqual(post.search_index.topic_id, topic.pk)
+        self.assertEqual(post.search_index.forum_id, topic.forum_id)
+
+    def test_parse_search_query_skips_stop_words_but_keeps_phrases(self):
+        parsed = _parse_search_query('do "do rzeczy" byt ale')
+
+        self.assertEqual(parsed["phrases"], ["do rzeczy"])
+        self.assertEqual(parsed["terms"], ["byt"])
+        self.assertEqual(parsed["skipped_terms"], ["do", "ale"])
+
+    def test_search_view_returns_indexed_post_match(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        reader = User.objects.create_user(username="Czytelnik", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Byt i świadomość",
+            post_order=1,
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"q": "byt", "forum_id": topic.forum_id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Wyszukiwarka")
+        self.assertContains(response, topic.title)
+        self.assertContains(response, post.search_index.content_search_author)
 
     def test_quote_fragment_endpoint_returns_exact_source_when_safe(self):
         author = User.objects.create_user(username="Autor", password="x")

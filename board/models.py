@@ -1,6 +1,8 @@
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from django.utils import timezone
 
 
@@ -438,6 +440,37 @@ class QuoteReference(models.Model):
         return f"QuoteRef post={self.post_id} idx={self.quote_index}"
 
 
+class PostSearchIndex(models.Model):
+    """Materialized search source for one post (1:1 with Post)."""
+
+    post = models.OneToOneField(
+        Post, on_delete=models.CASCADE, related_name="search_index"
+    )
+    topic = models.ForeignKey(
+        Topic, on_delete=models.CASCADE, related_name="search_posts"
+    )
+    forum = models.ForeignKey(
+        Forum, on_delete=models.CASCADE, related_name="search_posts"
+    )
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="search_posts"
+    )
+    created_at = models.DateTimeField()
+    content_search_author = models.TextField(blank=True, default="")
+    content_search_author_normalized = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table = "forum_post_search"
+        indexes = [
+            models.Index(fields=["forum", "created_at"]),
+            models.Index(fields=["topic", "created_at"]),
+            models.Index(fields=["author"]),
+        ]
+
+    def __str__(self):
+        return f"PostSearch post={self.post_id}"
+
+
 class SiteConfig(models.Model):
     """Singleton table (always pk=1) — site-wide toggles configurable by root."""
 
@@ -465,3 +498,11 @@ class SiteConfig(models.Model):
 
     def __str__(self):
         return "SiteConfig"
+
+
+@receiver(post_save, sender=Post)
+def _sync_post_search_index(sender, instance, raw, **kwargs):
+    if raw:
+        return
+    from .search_index import update_post_search_index
+    update_post_search_index(instance)

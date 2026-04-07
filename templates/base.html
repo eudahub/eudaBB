@@ -160,6 +160,7 @@
     <div>
       {% if user.is_authenticated %}
         <span>{{ user.username }}</span>
+        <a href="{% url 'search' %}">Szukaj</a>
         <a href="{% url 'pm_inbox' %}">PM{% if pm_unread %} <strong>({{ pm_unread }})</strong>{% endif %}</a>
         {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
         {% if user.is_root %}<a href="{% url 'root_config' %}">Konfiguracja</a>{% endif %}
