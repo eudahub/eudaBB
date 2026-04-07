@@ -251,6 +251,7 @@ function getSelectedNestedQuote(postBox) {
 }
 
 function quotePost(btn) {
+  if (btn.disabled) return;
   var postBox = btn.closest('.post-box');
   var author = btn.getAttribute('data-author') || '';
   var postId = btn.getAttribute('data-post-id') || '';
@@ -292,5 +293,33 @@ document.querySelectorAll('[data-quote-trigger="1"]').forEach(function(btn) {
     e.preventDefault();
   });
 });
+
+function syncTopicQuoteButtons() {
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-quote-trigger="1"]'));
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+    buttons.forEach(function(btn) { btn.disabled = false; });
+    return;
+  }
+  var range = sel.getRangeAt(0);
+  var anchor = range.commonAncestorContainer;
+  var node = anchor.nodeType === 1 ? anchor : anchor.parentNode;
+  var postBox = node ? node.closest('.post-box') : null;
+  if (!postBox) {
+    buttons.forEach(function(btn) { btn.disabled = false; });
+    return;
+  }
+  var selectedText = getSelectionWithinPost(postBox);
+  if (!selectedText) {
+    buttons.forEach(function(btn) { btn.disabled = false; });
+    return;
+  }
+  buttons.forEach(function(btn) {
+    btn.disabled = btn.closest('.post-box') !== postBox;
+  });
+}
+
+document.addEventListener('selectionchange', syncTopicQuoteButtons);
+window.addEventListener('load', syncTopicQuoteButtons);
 </script>
 {% endblock %}
