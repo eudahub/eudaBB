@@ -130,3 +130,6 @@ SNAPSHOT_DIR = config("SNAPSHOT_DIR", default=str(BASE_DIR / "snapshots"))
 PM_INBOX_LIMIT  = config("PM_INBOX_LIMIT",  default=300, cast=int)
 PM_SENT_LIMIT   = config("PM_SENT_LIMIT",   default=300, cast=int)
 PM_OUTBOX_LIMIT = config("PM_OUTBOX_LIMIT", default=50,  cast=int)  # anti-spam: max in-flight
+
+# Search results snippet length (characters around the best hit)
+SEARCH_SNIPPET_CHARS = config("SEARCH_SNIPPET_CHARS", default=220, cast=int)

@@ -583,6 +583,7 @@ def search(request):
                         parsed["phrases"],
                         parsed["terms"],
                         df_map,
+                        width=max(80, getattr(settings, "SEARCH_SNIPPET_CHARS", 220)),
                     )
 
     return render(request, "board/search.html", {
