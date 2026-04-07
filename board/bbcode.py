@@ -223,7 +223,8 @@ _parser.add_formatter("AI", _render_ai, render_embedded=True,
 # ---------------------------------------------------------------------------
 
 def _render_spoiler(tag_name, value, options, parent, context):
-    label = options.get("spoiler", "").strip() or "Spoiler"
+    raw_label = options.get("spoiler", "").strip()
+    label = f"Spoiler: {raw_label}" if raw_label else "Spoiler"
     return f"<details><summary>{label}</summary>{value}</details>"
 
 _parser.add_formatter("spoiler", _render_spoiler, swallow_trailing_newline=True)

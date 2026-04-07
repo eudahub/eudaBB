@@ -15,6 +15,15 @@
   <label>{{ form.title.label }}{{ form.title }}
     {% if form.title.errors %}<small style="color:red;">{{ form.title.errors|join:", " }}</small>{% endif %}
   </label>
+  <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
+    <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
+    <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
+    <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
+    <button type="button" class="bb-btn" data-open="[spoiler]" data-close="[/spoiler]" data-prompt="Krótki opis spoilera (opcjonalnie):" data-open-template="[spoiler={value}]">spoiler</button>
+    <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
+    <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
+    <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
+  </div>
   <label>{{ form.content.label }}{{ form.content }}
     {% if form.content.errors %}<small style="color:red;">{{ form.content.errors|join:", " }}</small>{% endif %}
   </label>
@@ -36,5 +45,33 @@
   textarea.addEventListener('input', update);
   update();
 })();
+
+document.querySelectorAll('.bb-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var ta = document.getElementById('id_content');
+    var open = btn.getAttribute('data-open');
+    var close = btn.getAttribute('data-close');
+    var promptText = btn.getAttribute('data-prompt');
+    var openTemplate = btn.getAttribute('data-open-template');
+    if (promptText && openTemplate) {
+      var response = window.prompt(promptText, '');
+      if (response === null) return;
+      var trimmed = response.trim();
+      if (trimmed) {
+        open = openTemplate.replace('{value}', trimmed.replace(/]/g, ''));
+      }
+    }
+    var start = ta.selectionStart, end = ta.selectionEnd;
+    var sel = ta.value.substring(start, end);
+    var replacement = open + sel + close;
+    ta.setRangeText(replacement, start, end, 'select');
+    ta.focus();
+    if (start === end) {
+      ta.selectionStart = start + open.length;
+      ta.selectionEnd = start + open.length;
+    }
+    textarea.dispatchEvent(new Event('input', {bubbles: true}));
+  });
+});
 </script>
 {% endblock %}

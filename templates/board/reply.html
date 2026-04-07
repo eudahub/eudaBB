@@ -20,6 +20,7 @@
       <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
       <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
       <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
+      <button type="button" class="bb-btn" data-open="[spoiler]" data-close="[/spoiler]" data-prompt="Krótki opis spoilera (opcjonalnie):" data-open-template="[spoiler={value}]">spoiler</button>
       <button type="button" id="enter-quote-picker" style="font-weight:bold;">quote</button>
       <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
       <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
@@ -274,6 +275,16 @@ document.querySelectorAll('.bb-btn').forEach(function(btn) {
     var ta = document.getElementById('reply-content');
     var open = btn.getAttribute('data-open');
     var close = btn.getAttribute('data-close');
+    var promptText = btn.getAttribute('data-prompt');
+    var openTemplate = btn.getAttribute('data-open-template');
+    if (promptText && openTemplate) {
+      var response = window.prompt(promptText, '');
+      if (response === null) return;
+      var trimmed = response.trim();
+      if (trimmed) {
+        open = openTemplate.replace('{value}', trimmed.replace(/]/g, ''));
+      }
+    }
     var start = ta.selectionStart, end = ta.selectionEnd;
     var sel = ta.value.substring(start, end);
     var replacement = open + sel + close;

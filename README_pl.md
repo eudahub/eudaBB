@@ -265,6 +265,18 @@ http://127.0.0.1:8000/topic/7784/?page=1
 - Przy selekcji obejmującej cytat w cytacie system stara się zachować zagnieżdżony `[quote ... post_id=...]`; jeśli zaznaczenie przecina taki cytat, może zbudować jego skróconą wersję z `(...)`.
 - Zwykły `quote` ma obowiązkowy `post_id` i jest walidowany przy zapisie. `fquote` zostaje do cytatów zewnętrznych.
 
+## Tag `spoiler`
+
+- BBCode `spoiler` jest już obsługiwane.
+- Działa w dwóch wariantach:
+  - `[spoiler]treść[/spoiler]`
+  - `[spoiler=Etykieta]treść[/spoiler]`
+- Render opiera się o HTML `<details><summary>...</summary>...</details>`, więc treść jest domyślnie zakryta i odkrywa się po kliknięciu.
+- W odróżnieniu od ankiety `spoiler` nie pamięta stanu:
+  - po ponownym wejściu na post znowu jest zamknięty
+  - to jest zachowanie celowe
+- Stan odkrycia nie jest zapisywany do bazy ani do profilu usera; działa tylko chwilowo po stronie przeglądarki.
+
 ## Wyszukiwarka — kandydaci na stop-words
 
 Na bazie analizy `content_user` z `sfiniabb.db`:

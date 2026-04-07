@@ -265,6 +265,18 @@ http://127.0.0.1:8000/topic/7784/?page=1
 - When a selection includes a nested quote, the system tries to preserve the nested `[quote ... post_id=...]`; if the selection cuts through it, it may build a shortened version using `(...)`.
 - Regular `quote` requires `post_id` and is validated on submit. `fquote` remains for outside sources.
 
+## `spoiler` tag
+
+- The `spoiler` BBCode tag is already supported.
+- It works in two forms:
+  - `[spoiler]content[/spoiler]`
+  - `[spoiler=Label]content[/spoiler]`
+- Rendering uses HTML `<details><summary>...</summary>...</details>`, so the content is hidden by default and revealed on click.
+- Unlike polls, `spoiler` does not remember its state:
+  - after reopening the post it is hidden again
+  - this is intentional
+- The revealed/hidden state is not stored in the database or user profile; it exists only temporarily in the browser.
+
 ## Search — stop-word candidates
 
 Based on `content_user` analysis from `sfiniabb.db`:
