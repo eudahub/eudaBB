@@ -169,6 +169,28 @@ class UserRenameTests(TestCase):
         self.assertContains(response, f'data-post-id="{post.pk}"')
         self.assertContains(response, 'data-post-content="1"')
 
+    def test_reply_view_renders_quote_picker_and_recent_post_buttons(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        reader = User.objects.create_user(username="Czytelnik", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Treść posta",
+            post_order=1,
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("reply", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="enter-quote-picker"', html=False)
+        self.assertContains(response, 'id="quote-picker-confirm"', html=False)
+        self.assertContains(response, 'id="recent-posts-panel"', html=False)
+        self.assertContains(response, 'data-quote-post="1"', html=False)
+        self.assertContains(response, f'data-post-id="{post.pk}"', html=False)
+
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")
         self.assertEqual(fragment, "def")

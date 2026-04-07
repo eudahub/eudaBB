@@ -14,33 +14,36 @@
 <form method="post" id="reply-form">
   {% csrf_token %}
 
-  {# BBCode toolbar #}
-  <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
-    <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
-    <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
-    <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
-    <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
-    <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
-    <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
-  </div>
-
-  <div style="display:flex;border:1px solid #BC8F8F;background:#fff;">
-    <div id="reply-line-numbers"
-         aria-hidden="true"
-         style="flex:0 0 auto;padding:.35rem .45rem;text-align:right;color:#888;
-                background:#f8f1f1;border-right:1px solid #d8b8b8;font:12px/1.4 monospace;
-                user-select:none;white-space:pre;">1</div>
-    <textarea id="reply-content" name="content" rows="12"
-              style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;
-                     line-height:1.4;border:0;resize:vertical;padding:.35rem .45rem;">{{ form.content.value|default_if_none:"" }}</textarea>
-  </div>
-  <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
-    <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:nowrap;">
-      <button type="button" onclick="doPreview()" style="width:auto;flex:0 0 auto;">Podgląd</button>
-      <button type="button" onclick="doValidate()" style="width:auto;flex:0 0 auto;">Walidacja</button>
-      <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Wyślij</button>
+  <div id="reply-editor-panel">
+    {# BBCode toolbar #}
+    <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
+      <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
+      <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
+      <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
+      <button type="button" id="enter-quote-picker" style="font-weight:bold;">quote</button>
+      <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
+      <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
+      <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
     </div>
-    <a href="{% url 'topic_detail' topic.pk %}" style="margin-left:auto;">Anuluj</a>
+
+    <div style="display:flex;border:1px solid #BC8F8F;background:#fff;">
+      <div id="reply-line-numbers"
+           aria-hidden="true"
+           style="flex:0 0 auto;padding:.35rem .45rem;text-align:right;color:#888;
+                  background:#f8f1f1;border-right:1px solid #d8b8b8;font:12px/1.4 monospace;
+                  user-select:none;white-space:pre;">1</div>
+      <textarea id="reply-content" name="content" rows="12"
+                style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;
+                       line-height:1.4;border:0;resize:vertical;padding:.35rem .45rem;">{{ form.content.value|default_if_none:"" }}</textarea>
+    </div>
+    <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:nowrap;">
+        <button type="button" onclick="doPreview()" style="width:auto;flex:0 0 auto;">Podgląd</button>
+        <button type="button" onclick="doValidate()" style="width:auto;flex:0 0 auto;">Walidacja</button>
+        <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Wyślij</button>
+      </div>
+      <a href="{% url 'topic_detail' topic.pk %}" style="margin-left:auto;">Anuluj</a>
+    </div>
   </div>
 </form>
 
@@ -57,17 +60,42 @@
 
 <hr style="margin:.8rem 0;">
 
+<div id="quote-picker-banner"
+     style="display:none;margin:.7rem 0;padding:.8rem 1rem;border:2px solid #BC8F8F;
+            background:#fff5f5;">
+  <div style="font-size:1.1rem;font-weight:bold;color:#7a1f1f;margin-bottom:.35rem;">
+    Zaznacz fragment wybranego posta, którego cytujesz, i naciśnij OK, aby dodać cytat.
+  </div>
+  <div style="font-size:.92rem;color:#654;">
+    Możesz też użyć przycisku „Cytuj” przy konkretnym poście, aby dodać zaznaczony fragment
+    albo cały post bez wychodzenia z pełnego edytora.
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.65rem;">
+    <button type="button" id="quote-picker-confirm">OK</button>
+    <button type="button" id="quote-picker-cancel" class="secondary">Anuluj</button>
+  </div>
+</div>
+
 {# Recent posts - scrollable #}
 <strong style="font-size:11px;color:#555;">Ostatnie posty w wątku:</strong>
-<div style="max-height:320px;overflow-y:scroll;border:1px solid #BC8F8F;
+<div id="recent-posts-panel"
+     style="max-height:320px;overflow-y:scroll;border:1px solid #BC8F8F;
             margin-top:.3rem;font-size:11px;line-height:1.5;">
   {% load bbcode_tags %}
   {% for post in recent_posts %}
-  <div style="padding:.3rem .5rem;border-bottom:1px solid #e0d0d0;
+  <div data-quote-post="1"
+       data-post-id="{{ post.pk }}"
+       data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
+       data-bbcode="{{ post.content_bbcode|escape }}"
+       style="padding:.3rem .5rem;border-bottom:1px solid #e0d0d0;
               {% if forloop.last %}border-bottom:none;{% endif %}">
-    <span style="color:#800000;font-weight:bold;">{{ post.author.username|default:"[usunięty]" }}</span>
-    <span style="color:#888;margin-left:.4rem;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
-    <div style="margin-top:.2rem;">{{ post|post_content }}</div>
+    <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+      <span style="color:#800000;font-weight:bold;">{{ post.author.username|default:"[usunięty]" }}</span>
+      <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
+      <button type="button" class="recent-quote-btn" data-keep-selection="1" onclick="quoteRecentPost(this)"
+              style="margin-left:auto;">Cytuj</button>
+    </div>
+    <div style="margin-top:.2rem;" data-post-content="1">{{ post|post_content }}</div>
   </div>
   {% empty %}
     <p style="padding:.3rem .5rem;color:#888;">Brak postów.</p>
@@ -94,6 +122,17 @@
   window.syncReplyEditorChrome = function() {
     updateLineNumbers();
     syncLineNumberScroll();
+  };
+
+  window.appendReplyQuote = function(quoteText) {
+    if (!quoteText) return;
+    if (textarea.value && !textarea.value.endsWith('\n')) {
+      textarea.value += '\n';
+    }
+    textarea.value += quoteText;
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+    window.syncReplyEditorChrome();
   };
 
   var key = 'reply_draft_{{ topic.pk }}';
@@ -134,6 +173,152 @@ document.querySelectorAll('.bb-btn').forEach(function(btn) {
       ta.selectionStart = start + open.length;
       ta.selectionEnd = start + open.length;
     }
+  });
+});
+
+function normalizeQuotedSelection(text) {
+  return (text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function buildQuoteTag(author, postId, body) {
+  return '[quote="' + author + '" post_id=' + postId + ']\n' + body + '\n[/quote]\n\n';
+}
+
+function getQuoteSelectionPayload() {
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  var range = sel.getRangeAt(0);
+  var anchor = range.commonAncestorContainer;
+  var contentNode = anchor.nodeType === 1 ? anchor : anchor.parentNode;
+  var postContent = contentNode ? contentNode.closest('[data-post-content="1"]') : null;
+  if (!postContent) return null;
+  var postBox = postContent.closest('[data-quote-post="1"]');
+  if (!postBox) return null;
+  var selectedText = normalizeQuotedSelection(sel.toString());
+  if (!selectedText) return null;
+  return {
+    postBox: postBox,
+    postId: postBox.getAttribute('data-post-id') || '',
+    author: postBox.getAttribute('data-author') || '',
+    selectedText: selectedText
+  };
+}
+
+function requestQuoteBody(postId, selectedText, fallbackBody) {
+  if (!selectedText) {
+    return Promise.resolve((fallbackBody || '').trim());
+  }
+  return fetch('{% url "quote_fragment" 0 %}'.replace('/0/', '/' + postId + '/'), {
+    method: 'POST',
+    headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'selected_text=' + encodeURIComponent(selectedText)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    return (data && data.body) ? data.body : selectedText;
+  })
+  .catch(function() {
+    return selectedText;
+  });
+}
+
+function clearBrowserSelection() {
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (sel && sel.removeAllRanges) sel.removeAllRanges();
+}
+
+function appendQuoteFromPost(postBox, selectedText) {
+  if (!postBox) return Promise.resolve(false);
+  var postId = postBox.getAttribute('data-post-id') || '';
+  var author = postBox.getAttribute('data-author') || '';
+  var fallbackBody = postBox.getAttribute('data-bbcode') || '';
+  return requestQuoteBody(postId, selectedText, fallbackBody).then(function(body) {
+    if (!body) return false;
+    window.appendReplyQuote(buildQuoteTag(author, postId, body));
+    clearBrowserSelection();
+    return true;
+  });
+}
+
+var quotePickerState = {
+  active: false
+};
+
+function setQuotePickerMode(active) {
+  quotePickerState.active = !!active;
+  document.getElementById('reply-editor-panel').style.display = active ? 'none' : 'block';
+  ['validate-area', 'preview-area'].forEach(function(id) {
+    var node = document.getElementById(id);
+    if (active) {
+      node.setAttribute('data-quote-prev-display', node.style.display || '');
+      node.style.display = 'none';
+      return;
+    }
+    var prev = node.getAttribute('data-quote-prev-display');
+    node.style.display = prev !== null ? prev : node.style.display;
+    node.removeAttribute('data-quote-prev-display');
+  });
+  document.getElementById('quote-picker-banner').style.display = active ? 'block' : 'none';
+  var panel = document.getElementById('recent-posts-panel');
+  panel.style.maxHeight = active ? '72vh' : '320px';
+  panel.style.fontSize = active ? '12px' : '11px';
+  if (active) {
+    document.getElementById('quote-picker-banner').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  } else {
+    document.getElementById('reply-content').focus();
+  }
+}
+
+function quoteRecentPost(btn) {
+  var postBox = btn.closest('[data-quote-post="1"]');
+  var selected = getQuoteSelectionPayload();
+  var selectedText = '';
+  if (selected && selected.postBox === postBox) {
+    selectedText = selected.selectedText;
+  }
+  appendQuoteFromPost(postBox, selectedText).then(function(appended) {
+    if (!appended) return;
+    if (quotePickerState.active) {
+      setQuotePickerMode(false);
+      return;
+    }
+    document.getElementById('reply-content').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  });
+}
+
+function confirmQuotePickerSelection() {
+  var payload = getQuoteSelectionPayload();
+  if (!payload) {
+    window.alert('Najpierw zaznacz fragment jednego z postów poniżej.');
+    return;
+  }
+  appendQuoteFromPost(payload.postBox, payload.selectedText).then(function(appended) {
+    if (!appended) return;
+    setQuotePickerMode(false);
+  });
+}
+
+document.getElementById('enter-quote-picker').addEventListener('click', function() {
+  setQuotePickerMode(true);
+});
+
+document.getElementById('quote-picker-confirm').addEventListener('click', function() {
+  confirmQuotePickerSelection();
+});
+
+document.getElementById('quote-picker-cancel').addEventListener('click', function() {
+  clearBrowserSelection();
+  setQuotePickerMode(false);
+});
+
+document.querySelectorAll('.recent-quote-btn, #quote-picker-confirm').forEach(function(btn) {
+  btn.addEventListener('mousedown', function(e) {
+    e.preventDefault();
   });
 });
 

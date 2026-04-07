@@ -126,7 +126,8 @@ python manage.py apply_username_aliases --db /path/to/sfinia_users_real.db
 
 Notes:
 - `build_import_db` now expects plaintext `email` in the generated `users` table; the old `email_hash/email_mask` import format is legacy-only.
-- alias decisions (`username_aliases`) are still read directly from `sfinia_users_real.db`; in the future they could also be copied into `sfinia_import.db`.
+- `build_import_db` also copies the `username_aliases` table from `sfinia_users_real.db` into `sfinia_import.db`.
+- the current `apply_username_aliases` command still reads aliases directly from `sfinia_users_real.db`; copying them into `sfinia_import.db` prepares the next import steps.
 - post import also builds the `forum_quote_refs` quote index (citing post, source post, nesting depth).
 - root can later rename a user from `/root/config/`; the rename uses `forum_quote_refs`, so it does not have to scan the whole posts table.
 - for an already imported Django database, you can rebuild the quote index with:
@@ -134,6 +135,20 @@ Notes:
 ```bash
 python manage.py rebuild_quote_refs
 ```
+
+## Quoting in the full editor
+
+- In thread view each post has a `Quote` button; without a selection it uses the whole post, and with a selection it tries to recover the closest exact BBCode fragment.
+- In the full editor, the `quote` toolbar button does not insert an empty `[quote][/quote]`.
+- Instead it switches the page into quote-picking mode using the recent-post list below the editor:
+  - the editor is temporarily hidden,
+  - the recent-post list is expanded,
+  - a large instruction banner with `OK` / `Cancel` is shown.
+- In that mode you can:
+  - select a fragment from one of the posts and press `OK`,
+  - or press the per-post `Quote` button in the recent-post list.
+- The resulting quote is appended to the end of the editor without leaving the page, so multiple quotes can be added one after another.
+- Regular `quote` requires `post_id` and is validated on submit. `fquote` remains for outside sources.
 
 ## Production (nginx + gunicorn)
 

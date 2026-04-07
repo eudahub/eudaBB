@@ -21,7 +21,7 @@
     <span>#{{ post.post_order }}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
     <span style="display:flex;gap:.35rem;align-items:center;">
-      <button class="bbsrc-btn" onclick="quotePost(this)"
+      <button class="bbsrc-btn" data-quote-trigger="1" onclick="quotePost(this)"
               data-post-id="{{ post.pk }}"
               data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
               data-bbcode="{{ post.content_bbcode|escape }}">Cytuj</button>
@@ -81,7 +81,7 @@
     <span>#{{ post.post_order }}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
     <span style="display:flex;gap:.35rem;align-items:center;">
-      <button class="bbsrc-btn" onclick="quotePost(this)"
+      <button class="bbsrc-btn" data-quote-trigger="1" onclick="quotePost(this)"
               data-post-id="{{ post.pk }}"
               data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
               data-bbcode="{{ post.content_bbcode|escape }}">Cytuj</button>
@@ -192,5 +192,11 @@ function quotePost(btn) {
     storeQuoteAndOpenEditor(author, postId, selectedText);
   });
 }
+
+document.querySelectorAll('[data-quote-trigger="1"]').forEach(function(btn) {
+  btn.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+  });
+});
 </script>
 {% endblock %}

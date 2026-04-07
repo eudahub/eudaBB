@@ -126,7 +126,8 @@ python manage.py apply_username_aliases --db /path/to/sfinia_users_real.db
 
 Uwagi:
 - `build_import_db` buduje tabelę `users` z kolumną `email` w plaintext; stary format `email_hash/email_mask` nie jest już używany do importu.
-- decyzje aliasów (`username_aliases`) są nadal czytane bezpośrednio z `sfinia_users_real.db`; przyszłościowo można je też kopiować do `sfinia_import.db`.
+- `build_import_db` kopiuje też tabelę `username_aliases` z `sfinia_users_real.db` do `sfinia_import.db`.
+- obecna komenda `apply_username_aliases` nadal czyta aliasy bezpośrednio z `sfinia_users_real.db`; kopiowanie do `sfinia_import.db` przygotowuje kolejne kroki importu.
 - import postów buduje też indeks cytowań `forum_quote_refs` (post cytujący, post źródłowy, głębokość zagnieżdżenia).
 - root może potem ręcznie zmienić nick użytkownika w `/root/config/`; rename korzysta z `forum_quote_refs`, więc nie musi skanować całej tabeli postów.
 - dla już istniejącej bazy Django można odbudować indeks cytowań komendą:
@@ -134,6 +135,20 @@ Uwagi:
 ```bash
 python manage.py rebuild_quote_refs
 ```
+
+## Cytowanie w pełnym edytorze
+
+- W widoku wątku przy każdym poście jest przycisk `Cytuj`; bez selekcji bierze cały post, a z selekcją próbuje odtworzyć możliwie dokładny fragment BBCode.
+- W pełnym edytorze przycisk `quote` nie wstawia pustego `[quote][/quote]`.
+- Zamiast tego uruchamia tryb wyboru cytatu z listy ostatnich postów pod edytorem:
+  - edytor jest chwilowo ukrywany,
+  - lista postów dostaje więcej miejsca,
+  - pojawia się duży komunikat z przyciskami `OK` / `Anuluj`.
+- W tym trybie można:
+  - zaznaczyć fragment jednego z postów i nacisnąć `OK`,
+  - albo użyć przycisku `Cytuj` przy konkretnym poście na liście.
+- Cytat jest dopisywany na końcu pola edycyjnego bez opuszczania pełnego edytora, więc można dodać kilka cytatów z różnych postów jeden po drugim.
+- Zwykły `quote` ma obowiązkowy `post_id` i jest walidowany przy zapisie. `fquote` zostaje do cytatów zewnętrznych.
 
 ## Produkcja (nginx + gunicorn)
 
