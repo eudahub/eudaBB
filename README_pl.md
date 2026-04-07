@@ -88,22 +88,33 @@ sudo -u postgres createuser --superuser $USER
 # Utwórz bazę:
 createdb forum_db
 
-# Wygeneruj i zastosuj migracje:
-python manage.py makemigrations board
+# Zastosuj migracje:
 python manage.py migrate
-
-# Superuser (admin panelu):
-python manage.py createsuperuser
 ```
 
-### 4. Start
+### 4. Root i start
 
 ```bash
+source venv/bin/activate
+python manage.py create_root
+python manage.py set_root_password
 python manage.py runserver
 ```
 
 Forum dostępne na: http://127.0.0.1:8000/
 Panel admina: http://127.0.0.1:8000/admin/
+
+Jeśli chcesz udostępnić forum innym urządzeniom w sieci:
+
+```bash
+python manage.py runserver 0.0.0.0:8000
+```
+
+Możesz też podać inny port:
+
+```bash
+python manage.py runserver 8080
+```
 
 ## Pierwsze kroki po uruchomieniu
 
@@ -112,6 +123,46 @@ Panel admina: http://127.0.0.1:8000/admin/
 3. Utwórz **Forum** przypisane do tej sekcji (np. "Rozmowy")
 4. Wejdź na stronę główną — powinno być widoczne forum
 5. Zarejestruj zwykłego użytkownika przez `/register/`
+
+## Pełny reimport bazy Sfinia
+
+Pełna sekwencja reimportu:
+
+```bash
+source venv/bin/activate
+
+# 1. Wyczyść bazę danych (zachowuje strukturę tabel)
+python manage.py flush --no-input
+
+# 2. Zastosuj wszystkie migracje
+python manage.py migrate
+
+# 3. Zbuduj bazę użytkowników do importu
+python manage.py build_import_db \
+  /home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_admin.db \
+  /home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db \
+  /home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_import.db
+
+# 4. Importuj użytkowników i klasy spamu
+python manage.py import_from_sfinia /home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_import.db
+python manage.py import_spam_classes /home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db
+
+# 5. Importuj strukturę forum
+python manage.py import_forums /home/andrzej/wazne/gitmy/phpbb-archiver/sfiniabb.db
+
+# 6. Importuj posty
+python manage.py import_posts /home/andrzej/wazne/gitmy/phpbb-archiver/sfiniabb.db
+
+# 7. Odtwórz konto root po flush
+python manage.py create_root
+python manage.py set_root_password
+```
+
+Uwagi:
+- `flush` usuwa też konto `root`.
+- `build_import_db` bierze emaile z `sfinia_users_admin.db`, a resztę użytkowników z `sfinia_users_real.db`.
+- klasyfikacja spamu jest importowana osobno z `sfinia_users_real.db`.
+- po pełnym imporcie można od razu uruchomić `runserver`.
 
 ## Import użytkowników z Sfinia
 
@@ -134,6 +185,67 @@ Uwagi:
 
 ```bash
 python manage.py rebuild_quote_refs
+```
+
+## Indeksy i odbudowa po imporcie
+
+### Indeks cytowań
+
+Dla już istniejącej bazy:
+
+```bash
+python manage.py migrate
+python manage.py rebuild_quote_refs
+```
+
+### Indeks wyszukiwania
+
+Najpierw dla jednego forum testowego:
+
+```bash
+python manage.py build_search_index --forum-title "Filozofia"
+python manage.py inspect_search_index --forum-title "Filozofia" --limit 20
+```
+
+Pełny rebuild dla wszystkich forów:
+
+```bash
+python manage.py build_search_index
+```
+
+Komenda wypisuje też czas wykonania na końcu.
+
+### Rozmiar tabeli wyszukiwania
+
+```bash
+./venv/bin/python manage.py shell -c "from django.db import connection; c=connection.cursor(); c.execute(\"SELECT pg_size_pretty(pg_total_relation_size('forum_post_search')), pg_total_relation_size('forum_post_search')\"); print(c.fetchone())"
+```
+
+Rozbicie na dane i indeksy:
+
+```bash
+./venv/bin/python manage.py shell -c "from django.db import connection; c=connection.cursor(); c.execute(\"SELECT pg_size_pretty(pg_relation_size('forum_post_search')), pg_size_pretty(pg_indexes_size('forum_post_search')), pg_size_pretty(pg_total_relation_size('forum_post_search'))\"); print(c.fetchone())"
+```
+
+## Komendy serwisowe
+
+### Usuń wszystkie kody resetowania hasła
+
+Przez SQL:
+
+```bash
+psql -U andrzej forum_db -c "DELETE FROM forum_password_reset_codes;"
+```
+
+Albo z WWW:
+- root ma osobny przycisk w `/root/config/`
+
+### Uruchomienie testowe / szybki podgląd konkretnego wątku
+
+Po starcie serwera możesz wejść np. na:
+
+```text
+http://127.0.0.1:8000/topic/7784/?page=1
 ```
 
 ## Cytowanie w pełnym edytorze
@@ -246,9 +358,6 @@ Django łączy się przez TCP. Ustaw `DB_HOST=` (puste) w `.env`, żeby używać
 
 **`Peer authentication failed for user "postgres"`**
 Ustaw `DB_USER` w `.env` na swoją nazwę użytkownika systemowego (tę, której użyłeś przy `createuser`), nie `postgres`.
-
-**`Dependency on app with no migrations: board`**
-Uruchom `python manage.py makemigrations board` przed `migrate`.
 
 ## Do rozbudowania (kolejne kroki)
 
