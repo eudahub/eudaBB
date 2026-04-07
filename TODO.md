@@ -294,6 +294,11 @@ Pola do rozważenia:
   - mieszane zapytanie typu `pies "kot domowy" ogród` → `pies` AND `"kot domowy"` AND `ogród`
 - Nie wprowadzać OR w UI podstawowym
 - Jeśli kiedyś dodać OR/NOT, to dopiero jako tryb zaawansowany, nie domyślny
+- Decyzja kierunkowa:
+  - preferować jawne `OR` w trybie zaawansowanym zamiast automatycznego stemmingu
+  - przykład: user może wpisać `Putin OR Putina`, jeśli chce rozszerzyć wyniki świadomie
+  - to daje większą kontrolę i mniej "zalewu" wynikami niż stemming włączony globalnie
+  - stemming co najwyżej jako opcja eksperymentalna / pomocnicza, nie domyślna semantyka wyszukiwania
 
 ### Filtry dodatkowe
 
