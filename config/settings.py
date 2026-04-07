@@ -37,6 +37,11 @@ MIDDLEWARE = [
     "board.middleware.TorBlockMiddleware",
 ]
 
+# YouTube embeds require an HTTP Referer for playback. Django's stricter
+# same-origin policy breaks cross-origin iframe loads and causes YouTube
+# player error 153, so allow origin-only referers on cross-origin requests.
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
 ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [

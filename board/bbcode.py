@@ -258,7 +258,9 @@ def _render_youtube(tag_name, value, options, parent, context):
     return (
         f'<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;">'
         f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" '
-        f'src="https://www.youtube-nocookie.com/embed/{vid}" '
+        f'src="https://www.youtube.com/embed/{vid}?rel=0" '
+        f'referrerpolicy="strict-origin-when-cross-origin" '
+        f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" '
         f'frameborder="0" allowfullscreen loading="lazy"></iframe></div>'
     )
 
