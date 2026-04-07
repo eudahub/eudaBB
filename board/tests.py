@@ -3,7 +3,7 @@ from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Forum, Poll, PollOption, PostLike, Section, Topic, User, Post
+from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
@@ -740,6 +740,63 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Nie")
         self.assertContains(response, "Łącznie głosów: 10")
 
+    def test_topic_detail_hides_nonzero_poll_results_before_vote(self):
+        author = User.objects.create_user(username="AutorPollHide", password="x")
+        reader = User.objects.create_user(username="CzytelnikPollHide", password="x")
+        topic = self._make_topic(author, title="Ukryta ankieta")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Treść posta", post_order=1)
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=False,
+            is_archived_import=False,
+            total_votes=1,
+        )
+        yes = PollOption.objects.create(poll=poll, option_text="Tak", vote_count=1, sort_order=1)
+        PollOption.objects.create(poll=poll, option_text="Nie", vote_count=0, sort_order=2)
+        PollVote.objects.create(poll=poll, user=author, option=yes)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("topic_detail", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Wyniki będą widoczne po oddaniu głosu")
+        self.assertContains(response, "Głosuj")
+        self.assertNotContains(response, "Łącznie głosów: 1")
+
+    def test_vote_poll_records_vote_and_reveals_results(self):
+        author = User.objects.create_user(username="AutorPollVote", password="x")
+        voter = User.objects.create_user(username="CzytelnikPollVote", password="x")
+        topic = self._make_topic(author, title="Głosowanie")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Treść posta", post_order=1)
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=False,
+            is_archived_import=False,
+            total_votes=0,
+        )
+        yes = PollOption.objects.create(poll=poll, option_text="Tak", vote_count=0, sort_order=1)
+        PollOption.objects.create(poll=poll, option_text="Nie", vote_count=0, sort_order=2)
+
+        client = Client()
+        client.force_login(voter)
+        response = client.post(reverse("vote_poll", args=[topic.pk]), {
+            "poll_option": [str(yes.pk)],
+        })
+
+        self.assertEqual(response.status_code, 302)
+        poll.refresh_from_db()
+        yes.refresh_from_db()
+        self.assertEqual(poll.total_votes, 1)
+        self.assertEqual(yes.vote_count, 1)
+        self.assertTrue(PollVote.objects.filter(poll=poll, user=voter, option=yes).exists())
+
+        response = client.get(reverse("topic_detail", args=[topic.pk]))
+        self.assertContains(response, "Łącznie głosów: 1")
+        self.assertNotContains(response, "Wyniki będą widoczne po oddaniu głosu")
+
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")
         self.assertEqual(fragment, "def")
@@ -794,6 +851,52 @@ class UserRenameTests(TestCase):
         self.assertEqual(post.search_index.content_search_author, "Początek koniec")
         self.assertEqual(post.search_index.topic_id, topic.pk)
         self.assertEqual(post.search_index.forum_id, topic.forum_id)
+
+    def test_new_topic_form_accepts_poll_data(self):
+        form = NewTopicForm(data={
+            "title": "Temat z ankietą",
+            "content": "Treść",
+            "poll_enabled": "1",
+            "poll_question": "Czy tak?",
+            "poll_duration_days": "14",
+            "poll_allow_vote_change": "1",
+            "poll_options": ["Tak", "Nie", ""],
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["poll_data"]["question"], "Czy tak?")
+        self.assertEqual(form.cleaned_data["poll_data"]["duration_days"], 14)
+        self.assertEqual(form.cleaned_data["poll_data"]["options"], ["Tak", "Nie"])
+        self.assertTrue(form.cleaned_data["poll_data"]["allow_vote_change"])
+        self.assertFalse(form.cleaned_data["poll_data"]["allow_multiple_choice"])
+
+    def test_new_topic_view_creates_poll_with_options(self):
+        author = User.objects.create_user(username="AutorPoll", password="x")
+        client = Client()
+        client.force_login(author)
+
+        response = client.post(reverse("new_topic", args=[self.forum.pk]), {
+            "title": "Temat z ankietą",
+            "content": "Treść główna",
+            "poll_enabled": "1",
+            "poll_question": "Czy tak?",
+            "poll_duration_days": "14",
+            "poll_allow_vote_change": "1",
+            "poll_allow_multiple_choice": "1",
+            "poll_options": ["Tak", "Nie", ""],
+        })
+
+        self.assertEqual(response.status_code, 302)
+        topic = Topic.objects.get(title="Temat z ankietą")
+        self.assertTrue(hasattr(topic, "poll"))
+        self.assertEqual(topic.poll.question, "Czy tak?")
+        self.assertTrue(topic.poll.allow_vote_change)
+        self.assertTrue(topic.poll.allow_multiple_choice)
+        self.assertFalse(topic.poll.is_archived_import)
+        self.assertEqual(
+            list(topic.poll.options.values_list("option_text", flat=True)),
+            ["Tak", "Nie"],
+        )
 
     def test_parse_search_query_skips_stop_words_but_keeps_phrases(self):
         parsed = _parse_search_query('do "do rzeczy" byt ale')

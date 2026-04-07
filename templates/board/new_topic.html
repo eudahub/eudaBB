@@ -28,7 +28,7 @@
       <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
       <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
       <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
-      <button type="button" id="new-topic-poll-button" title="Tworzenie ankiety będzie dodane w kolejnym kroku.">ankieta</button>
+      <button type="button" id="new-topic-poll-button">ankieta</button>
     </div>
 
     <label>{{ form.content.label }}
@@ -51,9 +51,64 @@
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:nowrap;">
         <button type="button" onclick="doNewTopicPreview()" style="width:auto;flex:0 0 auto;">Podgląd</button>
         <button type="button" onclick="doNewTopicValidate()" style="width:auto;flex:0 0 auto;">Walidacja</button>
-        <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Utwórz wątek</button>
+        <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Dodaj wątek</button>
       </div>
       <a href="{% url 'forum_detail' forum.pk %}" style="margin-left:auto;">Anuluj</a>
+    </div>
+  </div>
+
+  <input type="hidden" name="poll_enabled" id="poll-enabled-input" value="{% if poll_panel_open %}1{% else %}0{% endif %}">
+
+  <div id="new-topic-poll-panel"
+       style="display:{% if poll_panel_open %}block{% else %}none{% endif %};margin-top:.8rem;padding:.8rem 1rem;border:1px solid #BC8F8F;background:#fff8f0;">
+    {% if form.non_field_errors %}
+      <div style="margin-bottom:.5rem;color:#8a1f1f;font-size:11px;">
+        {{ form.non_field_errors|join:" | " }}
+      </div>
+    {% endif %}
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:end;">
+      <label style="flex:1 1 320px;">
+        <span>Pytanie ankiety</span>
+        <input type="text" name="poll_question" id="poll-question"
+               value="{{ form.poll_question.value|default_if_none:'' }}">
+      </label>
+      <label style="flex:0 0 160px;">
+        <span>Czas trwania</span>
+        <div style="display:flex;gap:.35rem;align-items:center;">
+          <input type="number" min="1" name="poll_duration_days" id="poll-duration-days"
+                 value="{{ form.poll_duration_days.value|default_if_none:'14' }}">
+          <span>dni</span>
+        </div>
+      </label>
+    </div>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;">
+      <label style="display:flex;gap:.35rem;align-items:center;">
+        <input type="checkbox" name="poll_allow_vote_change" value="1"{% if form.poll_allow_vote_change.value %} checked{% endif %}>
+        <span>Można zmienić głos</span>
+      </label>
+      <label style="display:flex;gap:.35rem;align-items:center;">
+        <input type="checkbox" name="poll_allow_multiple_choice" value="1"{% if form.poll_allow_multiple_choice.value %} checked{% endif %}>
+        <span>Wielokrotny wybór</span>
+      </label>
+    </div>
+    <div style="margin-top:.7rem;">
+      <div style="display:flex;gap:.5rem;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+        <strong style="font-size:12px;">Opcje ankiety</strong>
+        <span id="poll-option-counter" style="font-size:11px;color:#666;">0/{{ poll_options_soft_limit }}</span>
+      </div>
+      <div id="poll-options-list" style="display:flex;flex-direction:column;gap:.35rem;margin-top:.45rem;">
+        {% for value in poll_option_values %}
+          <div class="poll-option-row" style="display:flex;gap:.4rem;align-items:center;">
+            <input type="text" name="poll_options" value="{{ value }}" placeholder="Opcja {{ forloop.counter }}" style="flex:1 1 auto;">
+            <button type="button" class="poll-remove-option" title="Usuń opcję">×</button>
+          </div>
+        {% endfor %}
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem;">
+        <button type="button" id="add-poll-option">+ dodaj opcję</button>
+        <button type="button" id="remove-poll-panel" class="secondary">Usuń ankietę</button>
+        <button type="submit">Dodaj wątek i ankietę</button>
+      </div>
     </div>
   </div>
 </form>
@@ -65,11 +120,6 @@
   <div id="new-topic-preview-content"
        style="border:1px solid #BC8F8F;padding:.4rem .6rem;margin-top:.2rem;
               font-size:12px;line-height:18px;background:#fffcfc;"></div>
-</div>
-
-<div id="new-topic-poll-note"
-     style="display:none;margin-top:.6rem;padding:.65rem .8rem;border:1px solid #BC8F8F;background:#fff8f0;font-size:11px;color:#654;">
-  Tworzenie ankiety dla nowego wątku będzie dodane w kolejnym kroku. Przycisk jest już w pełnym edytorze, żeby układ był docelowy.
 </div>
 
 <hr style="margin:.8rem 0;">
@@ -313,7 +363,7 @@ function updateNewTopicQuotePanelsLayout(active) {
 function setNewTopicQuotePickerMode(active) {
   newTopicQuotePickerState.active = !!active;
   document.getElementById('new-topic-editor-panel').style.display = active ? 'none' : 'block';
-  ['new-topic-validate-area', 'new-topic-preview-area', 'new-topic-poll-note'].forEach(function(id) {
+  ['new-topic-validate-area', 'new-topic-preview-area', 'new-topic-poll-panel'].forEach(function(id) {
     var node = document.getElementById(id);
     if (!node) return;
     if (active) {
@@ -437,9 +487,100 @@ document.querySelectorAll('.toggle-pinned-post').forEach(function(btn) {
 });
 
 document.getElementById('new-topic-poll-button').addEventListener('click', function() {
-  var note = document.getElementById('new-topic-poll-note');
-  if (!note) return;
-  note.style.display = note.style.display === 'none' ? 'block' : 'none';
+  togglePollPanel(true);
+});
+
+function getPollSoftLimit() {
+  return {{ poll_options_soft_limit }};
+}
+
+function ensureMinimumPollRows() {
+  var list = document.getElementById('poll-options-list');
+  if (!list) return;
+  while (list.querySelectorAll('.poll-option-row').length < 2) {
+    addPollOptionRow('');
+  }
+}
+
+function updatePollCounter() {
+  var list = document.getElementById('poll-options-list');
+  var counter = document.getElementById('poll-option-counter');
+  if (!list || !counter) return;
+  var rows = list.querySelectorAll('.poll-option-row').length;
+  counter.textContent = rows + '/' + getPollSoftLimit();
+}
+
+function wirePollOptionRow(row) {
+  var removeBtn = row.querySelector('.poll-remove-option');
+  if (!removeBtn) return;
+  removeBtn.addEventListener('click', function() {
+    var list = document.getElementById('poll-options-list');
+    if (!list) return;
+    if (list.querySelectorAll('.poll-option-row').length <= 2) {
+      row.querySelector('input[name="poll_options"]').value = '';
+      return;
+    }
+    row.remove();
+    updatePollCounter();
+  });
+}
+
+function addPollOptionRow(value) {
+  var list = document.getElementById('poll-options-list');
+  if (!list) return;
+  var row = document.createElement('div');
+  row.className = 'poll-option-row';
+  row.style.display = 'flex';
+  row.style.gap = '.4rem';
+  row.style.alignItems = 'center';
+  var count = list.querySelectorAll('.poll-option-row').length + 1;
+  row.innerHTML = '<input type="text" name="poll_options" value="" placeholder="Opcja ' + count + '" style="flex:1 1 auto;">'
+    + '<button type="button" class="poll-remove-option" title="Usuń opcję">×</button>';
+  row.querySelector('input[name="poll_options"]').value = value || '';
+  list.appendChild(row);
+  wirePollOptionRow(row);
+  updatePollCounter();
+}
+
+function togglePollPanel(forceOpen) {
+  var panel = document.getElementById('new-topic-poll-panel');
+  var enabled = document.getElementById('poll-enabled-input');
+  if (!panel || !enabled) return;
+  var open = forceOpen === true ? false : panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  enabled.value = open ? '0' : '1';
+  if (!open) {
+    ensureMinimumPollRows();
+    updatePollCounter();
+  }
+}
+
+document.querySelectorAll('.poll-option-row').forEach(wirePollOptionRow);
+updatePollCounter();
+ensureMinimumPollRows();
+updatePollCounter();
+
+document.getElementById('add-poll-option').addEventListener('click', function() {
+  addPollOptionRow('');
+});
+
+document.getElementById('remove-poll-panel').addEventListener('click', function() {
+  var panel = document.getElementById('new-topic-poll-panel');
+  var enabled = document.getElementById('poll-enabled-input');
+  if (!panel || !enabled) return;
+  var question = document.getElementById('poll-question');
+  var duration = document.getElementById('poll-duration-days');
+  if (question) question.value = '';
+  if (duration) duration.value = '14';
+  document.querySelectorAll('input[name="poll_options"]').forEach(function(input, index) {
+    input.value = '';
+    input.placeholder = 'Opcja ' + (index + 1);
+  });
+  document.querySelectorAll('input[name="poll_allow_vote_change"], input[name="poll_allow_multiple_choice"]').forEach(function(input) {
+    input.checked = false;
+  });
+  panel.style.display = 'none';
+  enabled.value = '0';
 });
 
 function requestNewTopicPreviewData() {

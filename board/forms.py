@@ -5,6 +5,7 @@ from .models import User
 from .username_utils import normalize
 from .email_utils import mask_email, mask_email_variants
 from .auth_utils import prehash_password
+from .polls import validate_poll_option_count
 
 TOPIC_TITLE_MAX_LENGTH = 70
 
@@ -199,9 +200,59 @@ def validate_pm_content(content: str, original_size: int = 0) -> tuple[str, list
 class NewTopicForm(forms.Form):
     title = forms.CharField(max_length=TOPIC_TITLE_MAX_LENGTH, label="Temat")
     content = forms.CharField(widget=forms.Textarea(attrs={"rows": 10}), label="Treść (BBCode)")
+    poll_enabled = forms.BooleanField(required=False)
+    poll_question = forms.CharField(required=False)
+    poll_duration_days = forms.IntegerField(required=False, min_value=1)
+    poll_allow_vote_change = forms.BooleanField(required=False)
+    poll_allow_multiple_choice = forms.BooleanField(required=False)
 
     def clean_content(self):
         return _validate_post_content(self.cleaned_data["content"])
+
+    def clean(self):
+        cleaned = super().clean()
+        raw_options = [value.strip() for value in self.data.getlist("poll_options")]
+        poll_options = [value for value in raw_options if value]
+        poll_enabled = cleaned.get("poll_enabled")
+        poll_question = (cleaned.get("poll_question") or "").strip()
+        duration = cleaned.get("poll_duration_days")
+        allow_vote_change = bool(cleaned.get("poll_allow_vote_change"))
+        allow_multiple_choice = bool(cleaned.get("poll_allow_multiple_choice"))
+
+        requested = bool(
+            poll_enabled
+            or poll_question
+            or any(raw_options)
+            or duration
+            or allow_vote_change
+            or allow_multiple_choice
+        )
+
+        if not requested:
+            cleaned["poll_data"] = None
+            return cleaned
+
+        errors = []
+        if not poll_question:
+            errors.append("Podaj pytanie ankiety.")
+        if len(poll_options) < 2:
+            errors.append("Ankieta musi mieć co najmniej 2 niepuste opcje.")
+        _, option_errors = validate_poll_option_count(len(poll_options))
+        errors.extend(option_errors)
+        if not duration:
+            errors.append("Podaj czas trwania ankiety w dniach.")
+
+        if errors:
+            raise forms.ValidationError(errors)
+
+        cleaned["poll_data"] = {
+            "question": poll_question,
+            "duration_days": int(duration),
+            "allow_vote_change": allow_vote_change,
+            "allow_multiple_choice": allow_multiple_choice,
+            "options": poll_options,
+        }
+        return cleaned
 
 
 class ReplyForm(forms.Form):

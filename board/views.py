@@ -4,6 +4,7 @@ from html import escape
 from datetime import timedelta
 
 from django.db import models as django_models
+from django.db import transaction
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -14,7 +15,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
@@ -164,6 +165,36 @@ def topic_detail(request, topic_id):
     else:
         visible_post_ids = None  # None = pokaż wszystkie
 
+    poll = getattr(topic, "poll", None)
+    poll_now = timezone.now()
+    poll_is_closed = False
+    poll_user_votes = []
+    poll_user_vote_option_ids = set()
+    poll_can_vote = False
+    poll_can_change_vote = False
+    poll_show_results = False
+
+    if poll is not None:
+        poll_is_closed = poll.is_closed or (poll.ends_at is not None and poll.ends_at <= poll_now)
+        if request.user.is_authenticated and not poll.is_archived_import:
+            poll_user_votes = list(
+                PollVote.objects.filter(poll=poll, user=request.user).select_related("option")
+            )
+            poll_user_vote_option_ids = {vote.option_id for vote in poll_user_votes}
+        poll_can_vote = (
+            request.user.is_authenticated
+            and not poll.is_archived_import
+            and not poll_is_closed
+            and (not poll_user_votes or poll.allow_vote_change)
+        )
+        poll_can_change_vote = poll_can_vote and bool(poll_user_votes) and poll.allow_vote_change
+        poll_show_results = (
+            poll.is_archived_import
+            or poll.total_votes == 0
+            or poll_is_closed
+            or bool(poll_user_votes)
+        )
+
     reply_form = ReplyForm() if not topic.is_locked else None
 
     is_mod = (
@@ -189,7 +220,87 @@ def topic_detail(request, topic_id):
         "is_moderator": is_mod,
         "dangerous_days": getattr(settings, "IP_BAN_DANGEROUS_DAYS", 90),
         "liked_post_ids": liked_post_ids,
+        "poll_is_closed": poll_is_closed,
+        "poll_show_results": poll_show_results,
+        "poll_can_vote": poll_can_vote,
+        "poll_can_change_vote": poll_can_change_vote,
+        "poll_user_vote_option_ids": poll_user_vote_option_ids,
     })
+
+
+@login_required
+def vote_poll(request, topic_id):
+    if request.method != "POST":
+        return redirect("topic_detail", topic_id=topic_id)
+
+    topic = get_object_or_404(Topic.objects.select_related("poll"), pk=topic_id)
+    poll = getattr(topic, "poll", None)
+    if poll is None or poll.is_archived_import:
+        messages.error(request, "W tym wątku nie ma aktywnej ankiety do głosowania.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    now = timezone.now()
+    if poll.is_closed or (poll.ends_at is not None and poll.ends_at <= now):
+        messages.error(request, "Ankieta jest już zamknięta.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    selected_ids_raw = request.POST.getlist("poll_option")
+    try:
+        selected_ids = [int(value) for value in selected_ids_raw]
+    except (TypeError, ValueError):
+        selected_ids = []
+
+    if not selected_ids:
+        messages.error(request, "Wybierz co najmniej jedną odpowiedź.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    option_qs = poll.options.filter(pk__in=selected_ids)
+    selected_options = list(option_qs)
+    if len(selected_options) != len(set(selected_ids)):
+        messages.error(request, "Wybrano nieprawidłową odpowiedź ankiety.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    if not poll.allow_multiple_choice and len(selected_options) != 1:
+        messages.error(request, "Ta ankieta pozwala wybrać tylko jedną odpowiedź.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    existing_votes = list(PollVote.objects.filter(poll=poll, user=request.user))
+    if existing_votes and not poll.allow_vote_change:
+        messages.error(request, "Swój głos w tej ankiecie można oddać tylko raz.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    with transaction.atomic():
+        if existing_votes:
+            PollVote.objects.filter(poll=poll, user=request.user).delete()
+        PollVote.objects.bulk_create([
+            PollVote(poll=poll, user=request.user, option=option)
+            for option in selected_options
+        ])
+
+        option_counts = {
+            row["option_id"]: row["count"]
+            for row in (
+                PollVote.objects
+                .filter(poll=poll)
+                .values("option_id")
+                .annotate(count=django_models.Count("id"))
+            )
+        }
+        options_to_update = list(poll.options.all())
+        for option in options_to_update:
+            option.vote_count = option_counts.get(option.pk, 0)
+        PollOption.objects.bulk_update(options_to_update, ["vote_count"])
+
+        total_voters = (
+            PollVote.objects.filter(poll=poll)
+            .values("user_id")
+            .distinct()
+            .count()
+        )
+        Poll.objects.filter(pk=poll.pk).update(total_votes=total_voters)
+
+    messages.success(request, "Głos zapisany.")
+    return redirect("topic_detail", topic_id=topic.pk)
 
 
 # ---------------------------------------------------------------------------
@@ -221,14 +332,53 @@ def new_topic(request, forum_id):
             _update_topic_stats(topic, post)
             _update_forum_stats(forum, post)
             _increment_user_post_count(request.user)
+            poll_data = form.cleaned_data.get("poll_data")
+            if poll_data:
+                poll = Poll.objects.create(
+                    topic=topic,
+                    question=poll_data["question"],
+                    ends_at=timezone.now() + timedelta(days=poll_data["duration_days"]),
+                    allow_vote_change=poll_data["allow_vote_change"],
+                    allow_multiple_choice=poll_data["allow_multiple_choice"],
+                    is_closed=False,
+                    is_archived_import=False,
+                    total_votes=0,
+                )
+                PollOption.objects.bulk_create([
+                    PollOption(
+                        poll=poll,
+                        option_text=option_text,
+                        sort_order=index,
+                    )
+                    for index, option_text in enumerate(poll_data["options"], start=1)
+                ])
             return redirect("topic_detail", topic_id=topic.pk)
     else:
         form = NewTopicForm()
+
+    raw_poll_options = request.POST.getlist("poll_options") if request.method == "POST" else []
+    poll_option_values = list(raw_poll_options) if raw_poll_options else ["", ""]
+    while len(poll_option_values) < 2:
+        poll_option_values.append("")
+    poll_panel_open = bool(
+        request.method == "POST" and (
+            request.POST.get("poll_enabled")
+            or (request.POST.get("poll_question") or "").strip()
+            or any(v.strip() for v in raw_poll_options)
+            or request.POST.get("poll_duration_days")
+            or request.POST.get("poll_allow_vote_change")
+            or request.POST.get("poll_allow_multiple_choice")
+            or form.non_field_errors()
+        )
+    )
 
     return render(request, "board/new_topic.html", {
         "forum": forum,
         "form": form,
         "pinned_topic_posts": _get_global_pinned_topic_posts(),
+        "poll_option_values": poll_option_values,
+        "poll_panel_open": poll_panel_open,
+        "poll_options_soft_limit": getattr(settings, "POLL_OPTIONS_SOFT_MAX", 32),
         "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
     })
 

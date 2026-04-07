@@ -16,28 +16,62 @@
   <div class="post-box" style="margin-bottom:.7rem;">
     <div class="post-header">
       <span>Ankieta</span>
-      <span>{% if topic.poll.is_closed %}zamknięta{% else %}otwarta{% endif %}</span>
+      <span>{% if poll_is_closed %}zamknięta{% else %}otwarta{% endif %}</span>
     </div>
     <div style="padding:.55rem .7rem;">
       <div style="font-weight:bold;margin-bottom:.45rem;">{{ topic.poll.question }}</div>
-      {% for option in topic.poll.options.all %}
-        <div style="margin-bottom:.45rem;">
-          <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:11px;">
-            <span>{{ option.option_text }}</span>
-            <span>
-              {% widthratio option.vote_count topic.poll.total_votes|default:1 100 as option_pct %}
-              {{ option.vote_count }} gł.
-              {% if topic.poll.total_votes %}· {{ option_pct }}%{% endif %}
-            </span>
+      {% if poll_show_results %}
+        {% for option in topic.poll.options.all %}
+          <div style="margin-bottom:.45rem;">
+            <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:11px;">
+              <span>{{ option.option_text }}</span>
+              <span>
+                {% widthratio option.vote_count topic.poll.total_votes|default:1 100 as option_pct %}
+                {{ option.vote_count }} gł.
+                {% if topic.poll.total_votes %}· {{ option_pct }}%{% endif %}
+              </span>
+            </div>
+            <div style="height:10px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.15rem;">
+              <div style="height:100%;background:#800000;width:{% if topic.poll.total_votes %}{% widthratio option.vote_count topic.poll.total_votes 100 %}{% else %}0{% endif %}%;"></div>
+            </div>
           </div>
-          <div style="height:10px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.15rem;">
-            <div style="height:100%;background:#800000;width:{% if topic.poll.total_votes %}{% widthratio option.vote_count topic.poll.total_votes 100 %}{% else %}0{% endif %}%;"></div>
-          </div>
+        {% endfor %}
+        <div style="font-size:11px;color:#555;margin-top:.35rem;">
+          Łącznie głosów: {{ topic.poll.total_votes }}
         </div>
-      {% endfor %}
-      <div style="font-size:11px;color:#555;margin-top:.35rem;">
-        Łącznie głosów: {{ topic.poll.total_votes }}
-      </div>
+      {% endif %}
+
+      {% if poll_can_vote %}
+        <form method="post" action="{% url 'vote_poll' topic.pk %}" style="margin-top:{% if poll_show_results %}.7rem{% else %}.2rem{% endif %};">
+          {% csrf_token %}
+          <div style="display:flex;flex-direction:column;gap:.35rem;">
+            {% for option in topic.poll.options.all %}
+              <label style="display:flex;gap:.45rem;align-items:flex-start;">
+                {% if topic.poll.allow_multiple_choice %}
+                  <input type="checkbox" name="poll_option" value="{{ option.pk }}"{% if option.pk in poll_user_vote_option_ids %} checked{% endif %}>
+                {% else %}
+                  <input type="radio" name="poll_option" value="{{ option.pk }}"{% if option.pk in poll_user_vote_option_ids %} checked{% endif %}>
+                {% endif %}
+                <span>{{ option.option_text }}</span>
+              </label>
+            {% endfor %}
+          </div>
+          <div style="margin-top:.55rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+            <button type="submit">{% if poll_can_change_vote %}Zmień głos{% else %}Głosuj{% endif %}</button>
+            {% if topic.poll.allow_multiple_choice %}
+              <small style="color:#666;">Możesz zaznaczyć więcej niż jedną odpowiedź.</small>
+            {% endif %}
+          </div>
+        </form>
+      {% elif not request.user.is_authenticated and not poll_is_closed and not topic.poll.is_archived_import %}
+        <div style="font-size:11px;color:#555;margin-top:.5rem;">
+          Zaloguj się, aby zagłosować.
+        </div>
+      {% elif topic.poll.total_votes and not poll_show_results %}
+        <div style="font-size:11px;color:#555;margin-top:.5rem;">
+          Wyniki będą widoczne po oddaniu głosu albo po zamknięciu ankiety.
+        </div>
+      {% endif %}
     </div>
   </div>
 {% endif %}
