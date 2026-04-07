@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError
+from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -192,6 +193,44 @@ class UserRenameTests(TestCase):
         self.assertContains(response, 'id="recent-posts-panel"', html=False)
         self.assertContains(response, 'data-quote-post="1"', html=False)
         self.assertContains(response, f'data-post-id="{post.pk}"', html=False)
+
+    def test_reply_view_paginates_recent_posts_for_quote_picker(self):
+        author = User.objects.create_user(username="Autor2", password="x")
+        reader = User.objects.create_user(username="Czytelnik2", password="x")
+        topic = self._make_topic(author)
+        forum = topic.forum
+        posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+
+        for order in range(1, posts_per_page + 3):
+            Post.objects.create(
+                topic=topic,
+                author=author,
+                content_bbcode=f"Treść {order}",
+                post_order=order,
+            )
+        topic.last_post = topic.posts.order_by("-post_order").first()
+        topic.reply_count = topic.posts.count() - 1
+        topic.save(update_fields=["last_post", "reply_count"])
+        forum.last_post = topic.last_post
+        forum.post_count = topic.posts.count()
+        forum.topic_count = 1
+        forum.save(update_fields=["last_post", "post_count", "topic_count"])
+
+        client = Client()
+        client.force_login(reader)
+
+        response_page_1 = client.get(reverse("reply", args=[topic.pk]))
+        self.assertEqual(response_page_1.status_code, 200)
+        self.assertContains(response_page_1, "Strona 1 / 2")
+        self.assertContains(response_page_1, "?quotes_page=2")
+        self.assertContains(response_page_1, f"Treść {posts_per_page + 2}")
+        self.assertNotContains(response_page_1, "Treść 1")
+
+        response_page_2 = client.get(reverse("reply", args=[topic.pk]), {"quotes_page": 2})
+        self.assertEqual(response_page_2.status_code, 200)
+        self.assertContains(response_page_2, "Strona 2 / 2")
+        self.assertContains(response_page_2, "?quotes_page=1")
+        self.assertContains(response_page_2, "Treść 1")
 
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")

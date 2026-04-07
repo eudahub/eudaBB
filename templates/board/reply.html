@@ -82,7 +82,7 @@
      style="max-height:320px;overflow-y:scroll;border:1px solid #BC8F8F;
             margin-top:.3rem;font-size:11px;line-height:1.5;">
   {% load bbcode_tags %}
-  {% for post in recent_posts %}
+  {% for post in recent_posts_page %}
   <div data-quote-post="1"
        data-post-id="{{ post.pk }}"
        data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
@@ -101,6 +101,24 @@
     <p style="padding:.3rem .5rem;color:#888;">Brak postów.</p>
   {% endfor %}
 </div>
+
+{% if recent_posts_page.paginator.num_pages > 1 %}
+  <div style="display:flex;gap:.8rem;align-items:center;justify-content:center;margin-top:.45rem;font-size:11px;">
+    {% if recent_posts_page.has_previous %}
+      <a href="?quotes_page={{ recent_posts_page.previous_page_number }}">Nowsze</a>
+    {% else %}
+      <span style="color:#999;">Nowsze</span>
+    {% endif %}
+    <span>
+      Strona {{ recent_posts_page.number }} / {{ recent_posts_page.paginator.num_pages }}
+    </span>
+    {% if recent_posts_page.has_next %}
+      <a href="?quotes_page={{ recent_posts_page.next_page_number }}">Starsze</a>
+    {% else %}
+      <span style="color:#999;">Starsze</span>
+    {% endif %}
+  </div>
+{% endif %}
 
 <script>
 // Load draft from quick reply

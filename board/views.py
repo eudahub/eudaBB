@@ -231,14 +231,17 @@ def reply(request, topic_id):
         form = ReplyForm()
 
     posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
-    recent_posts = (
+    recent_posts_qs = (
         topic.posts.select_related("author")
-        .order_by("-post_order")[:posts_per_page]
+        .order_by("-post_order")
+    )
+    recent_posts_page = Paginator(recent_posts_qs, posts_per_page).get_page(
+        request.GET.get("quotes_page")
     )
     return render(request, "board/reply.html", {
         "topic": topic,
         "form": form,
-        "recent_posts": recent_posts,
+        "recent_posts_page": recent_posts_page,
     })
 
 
