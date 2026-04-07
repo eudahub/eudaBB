@@ -140,14 +140,17 @@ python manage.py rebuild_quote_refs
 
 - In thread view each post has a `Quote` button; without a selection it uses the whole post, and with a selection it tries to recover the closest exact BBCode fragment.
 - In the full editor, the `quote` toolbar button does not insert an empty `[quote][/quote]`.
-- Instead it switches the page into quote-picking mode using the recent-post list below the editor:
+- Its role is mainly to teach the workflow: a normal forum quote should come from choosing an existing post, not from manually typing quote tags.
+- Clicking `quote` switches the page into quote-picking mode using the recent-post list below the editor:
   - the editor is temporarily hidden,
   - the recent-post list is expanded,
   - a large instruction banner with `OK` / `Cancel` is shown.
-- In that mode you can:
+- In practice, quoting through the per-post `Quote` buttons is the most convenient path:
   - select a fragment from one of the posts and press `OK`,
   - or press the per-post `Quote` button in the recent-post list.
+- The `quote` toolbar button exists mainly so users discover this workflow; the actual quote is built from post actions, not from an empty manual tag.
 - The resulting quote is appended to the end of the editor without leaving the page, so multiple quotes can be added one after another.
+- When a selection includes a nested quote, the system tries to preserve the nested `[quote ... post_id=...]`; if the selection cuts through it, it may build a shortened version using `(...)`.
 - Regular `quote` requires `post_id` and is validated on submit. `fquote` remains for outside sources.
 
 ## Production (nginx + gunicorn)

@@ -140,14 +140,17 @@ python manage.py rebuild_quote_refs
 
 - W widoku wątku przy każdym poście jest przycisk `Cytuj`; bez selekcji bierze cały post, a z selekcją próbuje odtworzyć możliwie dokładny fragment BBCode.
 - W pełnym edytorze przycisk `quote` nie wstawia pustego `[quote][/quote]`.
-- Zamiast tego uruchamia tryb wyboru cytatu z listy ostatnich postów pod edytorem:
+- Jego rola jest pomocnicza: ma użytkownikowi podpowiedzieć, że zwykły forumowy cytat robi się przez wybór posta do cytowania, a nie przez ręczne pisanie tagów.
+- Po kliknięciu `quote` uruchamia się tryb wyboru cytatu z listy ostatnich postów pod edytorem:
   - edytor jest chwilowo ukrywany,
   - lista postów dostaje więcej miejsca,
   - pojawia się duży komunikat z przyciskami `OK` / `Anuluj`.
-- W tym trybie można:
+- W praktyce najwygodniejsze jest cytowanie przyciskami `Cytuj` przy postach:
   - zaznaczyć fragment jednego z postów i nacisnąć `OK`,
   - albo użyć przycisku `Cytuj` przy konkretnym poście na liście.
+- Przycisk `quote` istnieje głównie po to, żeby user wpadł na ten sposób pracy; samo właściwe cytowanie dzieje się przy postach, nie przez ręczne wstawianie pustego taga.
 - Cytat jest dopisywany na końcu pola edycyjnego bez opuszczania pełnego edytora, więc można dodać kilka cytatów z różnych postów jeden po drugim.
+- Przy selekcji obejmującej cytat w cytacie system stara się zachować zagnieżdżony `[quote ... post_id=...]`; jeśli zaznaczenie przecina taki cytat, może zbudować jego skróconą wersję z `(...)`.
 - Zwykły `quote` ma obowiązkowy `post_id` i jest walidowany przy zapisie. `fquote` zostaje do cytatów zewnętrznych.
 
 ## Produkcja (nginx + gunicorn)
