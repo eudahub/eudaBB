@@ -56,7 +56,7 @@
           autor: {{ row.author.username|default:"[usunięty]" }}
           · <a href="/post/{{ row.post_id }}/">idź do posta</a>
         </div>
-        <div>{{ row.content_search_author|truncatechars:420 }}</div>
+        <div>{{ row.snippet_html|safe }}</div>
       </div>
     </div>
   {% empty %}

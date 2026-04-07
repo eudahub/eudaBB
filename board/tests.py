@@ -9,7 +9,7 @@ from .quote_validation import validate_enriched_quotes
 from .search_index import extract_author_search_text, rebuild_post_search_index_for_posts
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
-from .views import _parse_search_query
+from .views import _build_search_snippet, _matches_search_text, _parse_search_query
 
 
 class UserRenameTests(TestCase):
@@ -274,6 +274,54 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Wyszukiwarka")
         self.assertContains(response, topic.title)
         self.assertContains(response, post.search_index.content_search_author)
+
+    def test_goto_post_redirects_to_correct_page(self):
+        author = User.objects.create_user(username="Autor", password="x")
+        reader = User.objects.create_user(username="Czytelnik", password="x")
+        topic = self._make_topic(author)
+        target_post = None
+        for order in range(1, 26):
+            post = Post.objects.create(
+                topic=topic,
+                author=author,
+                content_bbcode=f"Post {order}",
+                post_order=order,
+            )
+            if order == 25:
+                target_post = post
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("goto_post", args=[target_post.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], f"/topic/{topic.pk}/?page=2#post-{target_post.pk}")
+
+    def test_build_search_snippet_prefers_phrase(self):
+        snippet = _build_search_snippet(
+            "Ala ma kota i potem wolna wola wraca do tematu.",
+            ["wolna wola"],
+            ["ala", "tematu"],
+            {"ala": 100, "tematu": 50},
+            width=30,
+        )
+        self.assertIn("wolna", snippet)
+        self.assertIn("<mark", snippet)
+
+    def test_build_search_snippet_prefers_rarest_term(self):
+        snippet = _build_search_snippet(
+            "slowo popularne jest na początku, ale unikatowe trafienie jest dużo dalej w tym poście",
+            [],
+            ["popularne", "unikatowe"],
+            {"popularne": 5000, "unikatowe": 10},
+            width=32,
+        )
+        self.assertIn("unikatowe", snippet)
+        self.assertIn("background:#d96a00", snippet)
+
+    def test_matches_search_text_requires_word_boundaries_for_phrase(self):
+        self.assertFalse(_matches_search_text("do rzeczywistego", ["do rzeczy"], []))
+        self.assertTrue(_matches_search_text("to jest do rzeczy i tyle", ["do rzeczy"], []))
 
     def test_quote_fragment_endpoint_returns_exact_source_when_safe(self):
         author = User.objects.create_user(username="Autor", password="x")

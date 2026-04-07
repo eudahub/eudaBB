@@ -1,5 +1,6 @@
 import secrets
 import re
+from html import escape
 from datetime import timedelta
 
 from django.db import models as django_models
@@ -337,6 +338,7 @@ _SEARCH_PHRASE_RE = re.compile(r'"([^"]+)"|(\S+)')
 _SAFE_STOP_WORDS = {
     "nie", "to", "w", "i", "sie", "ze", "na", "z", "a", "do", "o", "ale",
 }
+_SEARCH_BOUNDARY = r"(?<![0-9A-Za-z]){needle}(?![0-9A-Za-z])"
 
 
 def _parse_search_query(raw_query: str):
@@ -366,6 +368,111 @@ def _parse_search_query(raw_query: str):
         "terms": terms,
         "skipped_terms": skipped_terms,
     }
+
+
+def _build_search_pattern(needle: str):
+    return re.compile(
+        _SEARCH_BOUNDARY.format(needle=re.escape(needle)),
+        re.IGNORECASE,
+    )
+
+
+def _find_match_start(haystack: str, needle: str):
+    match = _build_search_pattern(needle).search(haystack or "")
+    return match.start() if match else -1
+
+
+def _matches_search_text(text_norm: str, phrases: list[str], terms: list[str]) -> bool:
+    for phrase in phrases:
+        if _find_match_start(text_norm, phrase) == -1:
+            return False
+    for term in terms:
+        if _find_match_start(text_norm, term) == -1:
+            return False
+    return True
+
+
+def _highlight_snippet(snippet: str, needles: list[str]) -> str:
+    escaped = escape(snippet)
+    unique_needles = []
+    seen = set()
+    for needle in needles:
+        if needle and needle not in seen:
+            unique_needles.append(needle)
+            seen.add(needle)
+    for needle in sorted(unique_needles, key=len, reverse=True):
+        pattern = _build_search_pattern(escape(needle))
+        escaped = pattern.sub(
+            lambda m: (
+                '<span style="background:#d96a00;color:#fff;padding:0 .15rem;'
+                'border-radius:2px;font-weight:bold;">'
+                f'{m.group(0)}</span>'
+            ),
+            escaped,
+        )
+    return escaped
+
+
+def _build_search_snippet(text: str, phrases: list[str], terms: list[str], df_map: dict[str, int], width: int = 220):
+    text = (text or "").strip()
+    if not text:
+        return ""
+
+    text_norm = normalize_search_text(text)
+    anchor = None
+    matched_needles = []
+
+    for phrase in phrases:
+        idx = _find_match_start(text_norm, phrase)
+        if idx != -1:
+            anchor = (idx, phrase)
+            matched_needles.append(phrase)
+            break
+
+    if anchor is None:
+        present_terms = []
+        for term in terms:
+            idx = _find_match_start(text_norm, term)
+            if idx != -1:
+                present_terms.append((df_map.get(term, 10**9), idx, term))
+        if present_terms:
+            present_terms.sort(key=lambda item: (item[0], item[1], item[2]))
+            _, idx, chosen = present_terms[0]
+            anchor = (idx, chosen)
+            matched_needles.append(chosen)
+
+    for term in terms:
+        if term != (anchor[1] if anchor else None) and _find_match_start(text_norm, term) != -1:
+            matched_needles.append(term)
+    for phrase in phrases:
+        if phrase != (anchor[1] if anchor else None) and _find_match_start(text_norm, phrase) != -1:
+            matched_needles.append(phrase)
+
+    if anchor is None:
+        snippet = text[:width]
+        if len(text) > width:
+            snippet = snippet.rstrip() + "..."
+        return _highlight_snippet(snippet, matched_needles)
+
+    pos = anchor[0]
+    start = max(0, pos - width // 2)
+    end = min(len(text), start + width)
+    start = max(0, end - width)
+
+    while start > 0 and text[start] not in " \n\t":
+        start -= 1
+    while end < len(text) and text[end - 1] not in " \n\t":
+        end += 1
+        if end >= len(text):
+            end = len(text)
+            break
+
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "... " + snippet
+    if end < len(text):
+        snippet = snippet + " ..."
+    return _highlight_snippet(snippet, matched_needles)
 
 
 @login_required
@@ -411,8 +518,31 @@ def search(request):
             for term in parsed["terms"]:
                 qs = qs.filter(content_search_author_normalized__contains=term)
 
-            paginator = Paginator(qs.order_by("-created_at", "-post_id"), getattr(settings, "POSTS_PER_PAGE", 20))
+            matched_rows = [
+                row for row in qs.order_by("-created_at", "-post_id")
+                if _matches_search_text(
+                    row.content_search_author_normalized,
+                    parsed["phrases"],
+                    parsed["terms"],
+                )
+            ]
+
+            paginator = Paginator(matched_rows, getattr(settings, "POSTS_PER_PAGE", 20))
             page = paginator.get_page(page_num)
+            if page is not None:
+                df_map = {}
+                for term in parsed["terms"]:
+                    df_map[term] = sum(
+                        1 for row in matched_rows
+                        if _find_match_start(row.content_search_author_normalized, term) != -1
+                    )
+                for row in page.object_list:
+                    row.snippet_html = _build_search_snippet(
+                        row.content_search_author,
+                        parsed["phrases"],
+                        parsed["terms"],
+                        df_map,
+                    )
 
     return render(request, "board/search.html", {
         "indexed_forums": indexed_forums,
@@ -1462,6 +1592,6 @@ def goto_post(request, post_id):
         post = Post.objects.select_related("topic").get(pk=post_id)
     except Post.DoesNotExist:
         raise Http404
-    url = redirect("topic_detail", topic_id=post.topic_id).url + f"#post-{post_id}"
+    url = f"/topic/{post.topic_id}/?page={_post_page(post)}#post-{post_id}"
     from django.http import HttpResponseRedirect
     return HttpResponseRedirect(url)
