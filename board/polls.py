@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from django.conf import settings
 
 
 _POLL_RESULT_RE = re.compile(r"^(?P<option>.+?)\s+\|\s+(?P<pct>\d+)%\s+\|\s+\[\s*(?P<votes>\d+)\s*\]\s*$")
@@ -45,3 +46,33 @@ def parse_archive_datetime(value: str):
         return datetime.fromisoformat(value).replace(tzinfo=_WARSAW)
     except ValueError:
         return None
+
+
+def get_poll_options_limit(original_count: int = 0) -> int:
+    hard_limit = max(1, getattr(settings, "POLL_OPTIONS_HARD_MAX", 64))
+    soft_limit = max(1, getattr(settings, "POLL_OPTIONS_SOFT_MAX", 32))
+    return min(hard_limit, max(int(original_count or 0), soft_limit))
+
+
+def validate_poll_option_count(option_count: int, original_count: int = 0) -> tuple[int, list[str]]:
+    option_count = int(option_count or 0)
+    original_count = int(original_count or 0)
+    hard_limit = max(1, getattr(settings, "POLL_OPTIONS_HARD_MAX", 64))
+    allowed_limit = get_poll_options_limit(original_count=original_count)
+
+    if option_count > hard_limit:
+        return allowed_limit, [
+            f"Ankieta ma {option_count} opcji, ale twardy limit to {hard_limit}."
+        ]
+
+    if option_count > allowed_limit:
+        if original_count > allowed_limit:
+            return allowed_limit, [
+                f"Ankieta miała {original_count} opcji. Możesz ją tylko zmniejszać; "
+                f"obecny limit dla tej edycji to {allowed_limit}."
+            ]
+        return allowed_limit, [
+            f"Ankieta ma {option_count} opcji, ale obecny limit to {allowed_limit}."
+        ]
+
+    return allowed_limit, []

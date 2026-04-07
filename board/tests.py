@@ -8,7 +8,7 @@ from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_referen
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
 from .forms import NewTopicForm, TOPIC_TITLE_MAX_LENGTH, validate_pm_content, validate_post_content
-from .polls import parse_poll_results_text
+from .polls import parse_poll_results_text, validate_poll_option_count
 from .bbcode_lint import repair as repair_bbcode
 from .search_index import extract_author_search_text, rebuild_post_search_index_for_posts
 from .user_rename import rename_user_and_update_quotes
@@ -463,6 +463,31 @@ class UserRenameTests(TestCase):
         self.assertEqual(parsed["options"][0]["vote_count"], 8)
         self.assertEqual(parsed["options"][1]["option_text"], "Nie")
         self.assertEqual(parsed["options"][1]["vote_count"], 24)
+
+    def test_validate_poll_option_count_uses_soft_limit(self):
+        allowed, errors = validate_poll_option_count(33)
+
+        self.assertEqual(allowed, 32)
+        self.assertTrue(errors)
+        self.assertIn("obecny limit to 32", errors[0])
+
+    def test_validate_poll_option_count_allows_large_existing_poll_to_shrink_only(self):
+        allowed, errors = validate_poll_option_count(48, original_count=48)
+
+        self.assertEqual(allowed, 48)
+        self.assertFalse(errors)
+
+        allowed, errors = validate_poll_option_count(49, original_count=48)
+        self.assertEqual(allowed, 48)
+        self.assertTrue(errors)
+        self.assertIn("Ankieta miała 48 opcji", errors[0])
+
+    def test_validate_poll_option_count_rejects_above_hard_limit(self):
+        allowed, errors = validate_poll_option_count(65)
+
+        self.assertEqual(allowed, 32)
+        self.assertTrue(errors)
+        self.assertIn("twardy limit to 64", errors[0])
 
     def test_bbcode_repair_wraps_bare_non_youtube_url(self):
         repaired, changes = repair_bbcode("Zobacz https://example.com/test oraz opis.")
