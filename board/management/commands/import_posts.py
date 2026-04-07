@@ -28,6 +28,7 @@ _POST_ID_RE = re.compile(r'(post_id=)(\d+)', re.IGNORECASE)
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 
 _WARSAW = ZoneInfo("Europe/Warsaw")
@@ -313,6 +314,21 @@ class Command(BaseCommand):
             forum.topic_count = tc
             forum.post_count  = pc
             forum.save(update_fields=["topic_count", "post_count"])
+
+        # --- Recalculate per-user post counters from imported posts ---
+        self.stdout.write("Przeliczam liczbę postów użytkowników…")
+        User.objects.update(post_count=0)
+        user_post_counts = Post.objects.exclude(author__isnull=True).values("author_id").annotate(
+            total=Count("id")
+        )
+        users_to_update = []
+        for row in user_post_counts.iterator():
+            users_to_update.append(
+                User(id=row["author_id"], post_count=row["total"])
+            )
+        if users_to_update:
+            User.objects.bulk_update(users_to_update, ["post_count"], batch_size=1000)
+        self.stdout.write(f"  Zaktualizowano liczniki dla {len(users_to_update)} użytkowników.")
 
         self.stdout.write(self.style.SUCCESS(
             f"Gotowe. Wątki: {topics_created}, Posty: {posts_created}"
