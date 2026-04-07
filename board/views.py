@@ -614,14 +614,22 @@ def _build_plain_post_snippet(text: str, width: int = 320) -> str:
 def search(request):
     raw_query = (request.GET.get("q") or "").strip()
     forum_id_raw = (request.GET.get("forum_id") or "").strip()
+    author_query_raw = (request.GET.get("author") or "").strip()
     search_mode = (request.GET.get("mode") or "posts").strip().lower()
     if search_mode not in {"posts", "topics"}:
         search_mode = "posts"
-    polls_only = (request.GET.get("has_poll") or "").strip() == "1"
+    search_filter = (request.GET.get("kind") or "all").strip().lower()
+    allowed_filters = {
+        "posts": {"all", "links", "youtube"},
+        "topics": {"all", "polls"},
+    }
+    if search_filter not in allowed_filters[search_mode]:
+        search_filter = "all"
     page_num = request.GET.get("page")
 
     indexed_forums = Forum.objects.filter(search_posts__isnull=False).distinct().order_by("title")
     selected_forum = None
+    selected_author = None
     parsed = {"phrases": [], "terms": [], "skipped_terms": []}
     page = None
     info_message = ""
@@ -642,10 +650,17 @@ def search(request):
         except (ValueError, Forum.DoesNotExist):
             info_message = "Wybrane forum nie istnieje w indeksie wyszukiwania."
 
-    if (raw_query or (search_mode == "topics" and polls_only)) and not info_message:
+    if author_query_raw and not info_message:
+        selected_author = User.objects.filter(
+            username_normalized=normalize(author_query_raw)
+        ).first()
+        if selected_author is None:
+            info_message = "Nie znaleziono użytkownika o podanym nicku."
+
+    if (raw_query or search_filter != "all" or selected_author is not None) and not info_message:
         parsed = _parse_search_query(raw_query)
         if not parsed["phrases"] and not parsed["terms"]:
-            if search_mode == "topics" and polls_only:
+            if search_filter != "all" or selected_author is not None:
                 pass
             elif parsed["skipped_terms"]:
                 info_message = (
@@ -664,7 +679,9 @@ def search(request):
                 )
                 if selected_forum is not None:
                     qs = qs.filter(forum=selected_forum)
-                if polls_only:
+                if selected_author is not None:
+                    qs = qs.filter(author=selected_author)
+                if search_filter == "polls":
                     qs = qs.filter(poll__isnull=False)
 
                 matched_topics = []
@@ -694,6 +711,12 @@ def search(request):
                 )
                 if selected_forum is not None:
                     qs = qs.filter(forum=selected_forum)
+                if selected_author is not None:
+                    qs = qs.filter(author=selected_author)
+                if search_filter == "links":
+                    qs = qs.filter(has_link=True)
+                elif search_filter == "youtube":
+                    qs = qs.filter(has_youtube=True)
 
                 for phrase in parsed["phrases"]:
                     qs = qs.filter(content_search_author_normalized__contains=phrase)
@@ -730,12 +753,14 @@ def search(request):
     return render(request, "board/search.html", {
         "indexed_forums": indexed_forums,
         "selected_forum": selected_forum,
+        "selected_author": selected_author,
+        "author_query": author_query_raw,
         "raw_query": raw_query,
         "parsed_query": parsed,
         "info_message": info_message,
         "page": page,
         "search_mode": search_mode,
-        "polls_only": polls_only,
+        "search_filter": search_filter,
         "page_query": page_query,
     })
 

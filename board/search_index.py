@@ -8,6 +8,8 @@ _TAG_RE = re.compile(r"\[/?[A-Za-z*][^\]]*\]")
 _OPEN_TAG_NAME_RE = re.compile(r"^\[(?P<name>[A-Za-z*]+)")
 _CLOSE_TAG_NAME_RE = re.compile(r"^\[/(?P<name>[A-Za-z*]+)\]")
 _SKIP_BLOCK_TAGS = {"quote", "fquote", "bible", "ai", "code"}
+_URL_TAG_RE = re.compile(r"\[url(?:=[^\]]*)?\]", re.IGNORECASE)
+_YOUTUBE_TAG_RE = re.compile(r"\[(?:youtube|yt)(?:=[^\]]*)?\]", re.IGNORECASE)
 
 
 def strip_diacritics(text: str) -> str:
@@ -57,13 +59,24 @@ def extract_author_search_text(content_bbcode: str) -> str:
     return text
 
 
+def detect_search_features(content_bbcode: str) -> tuple[bool, bool]:
+    content = content_bbcode or ""
+    return (
+        bool(_URL_TAG_RE.search(content)),
+        bool(_YOUTUBE_TAG_RE.search(content)),
+    )
+
+
 def build_post_search_payload(post: Post) -> dict:
+    has_link, has_youtube = detect_search_features(post.content_bbcode or "")
     author_only = extract_author_search_text(post.content_bbcode or "")
     return {
         "topic": post.topic,
         "forum": post.topic.forum,
         "author": post.author,
         "created_at": post.created_at,
+        "has_link": has_link,
+        "has_youtube": has_youtube,
         "content_search_author": author_only,
         "content_search_author_normalized": normalize_search_text(author_only),
     }

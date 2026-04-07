@@ -28,9 +28,18 @@
         {% endfor %}
       </select>
     </label>
-    <label style="display:flex;gap:.35rem;align-items:center;padding-bottom:.2rem;">
-      <input type="checkbox" name="has_poll" value="1"{% if polls_only %} checked{% endif %}>
-      <span>Tylko wątki z ankietami</span>
+    <label style="flex:0 1 220px;">
+      <span>Użytkownik</span>
+      <input type="text" name="author" value="{{ author_query }}" placeholder="nick autora">
+    </label>
+    <label style="flex:0 1 220px;">
+      <span>Filtr</span>
+      <select name="kind" id="search-kind">
+        <option value="all"{% if search_filter == "all" %} selected{% endif %}>Wszystkie</option>
+        <option value="links"{% if search_filter == "links" %} selected{% endif %}>Z linkami</option>
+        <option value="youtube"{% if search_filter == "youtube" %} selected{% endif %}>Z YouTube</option>
+        <option value="polls"{% if search_filter == "polls" %} selected{% endif %}>Z ankietami</option>
+      </select>
     </label>
     <button type="submit">Szukaj</button>
   </div>
@@ -96,14 +105,14 @@
     {% for row in page.object_list %}
       <div class="post-box" style="margin-bottom:.6rem;">
         <div class="post-header">
-          <span>{{ row.forum.title }} › {{ row.topic.title }}</span>
+          <span>
+            <a href="{% url 'forum_detail' row.forum.pk %}">{{ row.forum.title }}</a>
+            · {{ row.author.username|default:"[usunięty]" }}
+            · <a href="/post/{{ row.post_id }}/">{{ row.topic.title }}</a>
+          </span>
           <span>{{ row.created_at|date:"d.m.Y H:i" }}</span>
         </div>
         <div style="padding:.45rem .6rem;">
-          <div style="font-size:11px;color:#555;margin-bottom:.25rem;">
-            autor: {{ row.author.username|default:"[usunięty]" }}
-            · <a href="/post/{{ row.post_id }}/">idź do posta</a>
-          </div>
           <div>{{ row.snippet_html|safe }}</div>
         </div>
       </div>
@@ -126,4 +135,44 @@
     </nav>
   {% endif %}
 {% endif %}
+
+<script>
+(function () {
+  var modeSelect = document.querySelector('select[name="mode"]');
+  var kindSelect = document.getElementById('search-kind');
+  if (!modeSelect || !kindSelect) return;
+
+  var optionsByMode = {
+    posts: [
+      {value: 'all', label: 'Wszystkie'},
+      {value: 'links', label: 'Z linkami'},
+      {value: 'youtube', label: 'Z YouTube'}
+    ],
+    topics: [
+      {value: 'all', label: 'Wszystkie'},
+      {value: 'polls', label: 'Z ankietami'}
+    ]
+  };
+
+  function syncKindOptions() {
+    var mode = modeSelect.value === 'topics' ? 'topics' : 'posts';
+    var current = kindSelect.value;
+    var nextOptions = optionsByMode[mode];
+    kindSelect.innerHTML = '';
+    nextOptions.forEach(function (item) {
+      var opt = document.createElement('option');
+      opt.value = item.value;
+      opt.textContent = item.label;
+      if (item.value === current) opt.selected = true;
+      kindSelect.appendChild(opt);
+    });
+    if (!Array.prototype.some.call(kindSelect.options, function (opt) { return opt.value === current; })) {
+      kindSelect.value = 'all';
+    }
+  }
+
+  modeSelect.addEventListener('change', syncKindOptions);
+  syncKindOptions();
+})();
+</script>
 {% endblock %}

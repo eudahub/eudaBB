@@ -514,11 +514,103 @@ class UserRenameTests(TestCase):
 
         client = Client()
         client.force_login(reader)
-        response = client.get(reverse("search"), {"mode": "topics", "has_poll": "1"})
+        response = client.get(reverse("search"), {"mode": "topics", "kind": "polls"})
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Temat z ankietą")
         self.assertNotContains(response, "Temat bez ankiety")
+
+    def test_search_posts_mode_can_filter_only_posts_with_links(self):
+        reader = User.objects.create_user(username="CzytelnikSearch3", password="x")
+        author = User.objects.create_user(username="AutorSearch3", password="x")
+        topic = self._make_topic(author, title="Linki")
+        Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode='Zobacz [url=https://example.com]example[/url]',
+            post_order=1,
+        )
+        Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Sam tekst bez linku",
+            post_order=2,
+        )
+        rebuild_post_search_index_for_posts(
+            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "posts", "kind": "links"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "example")
+        self.assertNotContains(response, "Sam tekst bez linku")
+
+    def test_search_posts_mode_can_filter_only_posts_with_youtube(self):
+        reader = User.objects.create_user(username="CzytelnikSearch4", password="x")
+        author = User.objects.create_user(username="AutorSearch4", password="x")
+        topic = self._make_topic(author, title="YouTube")
+        Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode='[youtube=https://www.youtube.com/watch?v=OtR8UWwIDjg][/youtube]',
+            post_order=1,
+        )
+        Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Sam tekst bez filmu",
+            post_order=2,
+        )
+        rebuild_post_search_index_for_posts(
+            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "posts", "kind": "youtube"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "youtube")
+        self.assertNotContains(response, "Sam tekst bez filmu")
+
+    def test_search_posts_mode_can_filter_by_author_without_query(self):
+        reader = User.objects.create_user(username="CzytelnikSearch5", password="x")
+        author = User.objects.create_user(username="ŁukaszSearch5", password="x")
+        other = User.objects.create_user(username="InnySearch5", password="x")
+        topic = self._make_topic(author, title="Autor filter posts")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Treść autora", post_order=1)
+        Post.objects.create(topic=topic, author=other, content_bbcode="Treść innego", post_order=2)
+        rebuild_post_search_index_for_posts(
+            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "posts", "author": "lukaszsearch5"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Treść autora")
+        self.assertNotContains(response, "Treść innego")
+
+    def test_search_topics_mode_can_filter_by_author_without_query(self):
+        reader = User.objects.create_user(username="CzytelnikSearch6", password="x")
+        author = User.objects.create_user(username="ŁukaszSearch6", password="x")
+        other = User.objects.create_user(username="InnySearch6", password="x")
+        own_topic = self._make_topic(author, title="Temat autora")
+        other_topic = self._make_topic(other, title="Temat innego")
+        Post.objects.create(topic=own_topic, author=author, content_bbcode="Start", post_order=1)
+        Post.objects.create(topic=other_topic, author=other, content_bbcode="Start", post_order=1)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "topics", "author": "lukaszsearch6"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Temat autora")
+        self.assertNotContains(response, "Temat innego")
 
     def test_new_topic_form_limits_title_length_to_70(self):
         form = NewTopicForm(data={

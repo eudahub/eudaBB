@@ -465,6 +465,8 @@ class PostSearchIndex(models.Model):
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="search_posts"
     )
     created_at = models.DateTimeField()
+    has_link = models.BooleanField(default=False)
+    has_youtube = models.BooleanField(default=False)
     content_search_author = models.TextField(blank=True, default="")
     content_search_author_normalized = models.TextField(blank=True, default="")
 
@@ -474,6 +476,8 @@ class PostSearchIndex(models.Model):
             models.Index(fields=["forum", "created_at"]),
             models.Index(fields=["topic", "created_at"]),
             models.Index(fields=["author"]),
+            models.Index(fields=["has_link"]),
+            models.Index(fields=["has_youtube"]),
         ]
 
     def __str__(self):
