@@ -12,12 +12,29 @@
 
 <form method="post">
   {% csrf_token %}
-  {% for field in form %}
-    <label>{{ field.label }}{{ field }}
-      {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
-    </label>
-  {% endfor %}
+  <label>{{ form.title.label }}{{ form.title }}
+    {% if form.title.errors %}<small style="color:red;">{{ form.title.errors|join:", " }}</small>{% endif %}
+  </label>
+  <label>{{ form.content.label }}{{ form.content }}
+    {% if form.content.errors %}<small style="color:red;">{{ form.content.errors|join:", " }}</small>{% endif %}
+  </label>
+  <p id="new-topic-content-count" style="margin-top:-.2rem;font-size:11px;color:#666;">
+    0/{{ post_content_soft_limit }}
+  </p>
   <button type="submit">Utwórz wątek</button>
   <a href="{% url 'forum_detail' forum.pk %}" role="button" class="secondary outline" style="margin-left:.5rem;">Anuluj</a>
 </form>
+
+<script>
+(function() {
+  var textarea = document.getElementById('id_content');
+  var counter = document.getElementById('new-topic-content-count');
+  if (!textarea || !counter) return;
+  function update() {
+    counter.textContent = textarea.value.length + '/{{ post_content_soft_limit }}';
+  }
+  textarea.addEventListener('input', update);
+  update();
+})();
+</script>
 {% endblock %}

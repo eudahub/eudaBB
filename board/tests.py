@@ -7,6 +7,7 @@ from .models import Forum, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
+from .forms import NewTopicForm, TOPIC_TITLE_MAX_LENGTH, validate_pm_content, validate_post_content
 from .search_index import extract_author_search_text, rebuild_post_search_index_for_posts
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
@@ -362,6 +363,33 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "autor pierwszego postu: Autor8")
         self.assertContains(response, "autor ostatniego postu: Inny8")
         self.assertContains(response, "postów: 2")
+
+    def test_new_topic_form_limits_title_length_to_70(self):
+        form = NewTopicForm(data={
+            "title": "x" * (TOPIC_TITLE_MAX_LENGTH + 1),
+            "content": "Treść",
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("title", form.errors)
+
+    def test_validate_post_content_uses_character_limit(self):
+        _, _, errors = validate_post_content("x" * 20001)
+        self.assertTrue(errors)
+        self.assertIn("20001 znaków", errors[0])
+
+    def test_validate_pm_content_uses_character_limit(self):
+        _, _, errors = validate_pm_content("x" * 20001)
+        self.assertTrue(errors)
+        self.assertIn("20001 znaków", errors[0])
+
+    def test_validate_pm_content_allows_only_shrinking_large_existing_message(self):
+        _, _, errors = validate_pm_content("x" * 50001, original_size=50000)
+        self.assertTrue(errors)
+        self.assertIn("Wiadomość miała 50000 znaków", errors[0])
+
+        _, _, errors = validate_pm_content("x" * 49999, original_size=50000)
+        self.assertFalse(errors)
 
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")

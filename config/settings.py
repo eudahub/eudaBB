@@ -105,9 +105,11 @@ LOGOUT_REDIRECT_URL = "/"
 POSTS_PER_PAGE = 20
 TOPICS_PER_PAGE = 30
 
-# Post content size limits
-POST_CONTENT_HARD_MAX_BYTES = 64 * 1024   # absolute technical limit
-POST_CONTENT_SOFT_MAX_BYTES = 20_000      # admin-configurable default
+# Post / PM content size limits (characters)
+POST_CONTENT_HARD_MAX_CHARS = config("POST_CONTENT_HARD_MAX_CHARS", default=65_535, cast=int)
+POST_CONTENT_SOFT_MAX_CHARS = config("POST_CONTENT_SOFT_MAX_CHARS", default=20_000, cast=int)
+PM_CONTENT_HARD_MAX_CHARS = config("PM_CONTENT_HARD_MAX_CHARS", default=65_535, cast=int)
+PM_CONTENT_SOFT_MAX_CHARS = config("PM_CONTENT_SOFT_MAX_CHARS", default=20_000, cast=int)
 
 # Contact form — jedyny plaintext email w systemie (email admina)
 CONTACT_FORM_RECIPIENT = config("CONTACT_FORM_RECIPIENT", default="")

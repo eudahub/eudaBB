@@ -16,6 +16,9 @@
   <label>Treść (BBCode):
     <textarea name="content" id="pm-content" rows="12" required>{{ current_content }}</textarea>
   </label>
+  <p id="pm-content-count" style="margin-top:-.2rem;font-size:11px;color:#666;">
+    0/{{ pm_content_soft_limit }}
+  </p>
   <button type="submit" id="pm-btn">Zapisz zmiany</button>
   <a href="{% url 'pm_outbox' %}" style="margin-left:1rem;">Anuluj</a>
 </form>
@@ -26,6 +29,18 @@
   var form = document.getElementById('pm-edit-form');
   var btn  = document.getElementById('pm-btn');
   var compressedField = document.getElementById('pm-compressed');
+  var textarea = document.getElementById('pm-content');
+  var counter = document.getElementById('pm-content-count');
+
+  function updateCount() {
+    if (textarea && counter) {
+      counter.textContent = textarea.value.length + '/{{ pm_content_soft_limit }}';
+    }
+  }
+  if (textarea) {
+    textarea.addEventListener('input', updateCount);
+    updateCount();
+  }
   var script = document.createElement('script');
   script.src = CDN;
   script.onload = function() {

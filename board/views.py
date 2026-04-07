@@ -17,7 +17,7 @@ from django.conf import settings
 from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostSearchIndex, SiteConfig
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
-    NewTopicForm, ReplyForm, validate_post_content,
+    NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
 )
 from .email_utils import mask_email, mask_email_variants
 from .spam_utils import get_author_spam_filter, filter_forums
@@ -195,7 +195,11 @@ def new_topic(request, forum_id):
     else:
         form = NewTopicForm()
 
-    return render(request, "board/new_topic.html", {"forum": forum, "form": form})
+    return render(request, "board/new_topic.html", {
+        "forum": forum,
+        "form": form,
+        "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
+    })
 
 
 @login_required
@@ -303,6 +307,7 @@ def reply(request, topic_id):
         "quote_query": quote_query,
         "selected_quote_author": selected_quote_author,
         "quote_filter_message": quote_filter_message,
+        "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
     })
 
 
@@ -1558,9 +1563,7 @@ def pm_compose(request):
                         f"(limit: {outbox_limit}). Poczekaj aż odbiorcy je odbiorą."
                     )
                 else:
-                    # Repair + validate BBCode
-                    from .bbcode_lint import repair_and_validate
-                    repaired_content, changes, lint_errors = repair_and_validate(raw_content)
+                    repaired_content, changes, lint_errors = validate_pm_content(raw_content)
                     if lint_errors:
                         error_lines = "\n".join(f"• {e}" for e in lint_errors)
                         error = f"Błędy w kodzie BBCode:\n{error_lines}"
@@ -1594,6 +1597,7 @@ def pm_compose(request):
         "prefill_recipient": prefill_recipient,
         "prefill_subject": prefill_subject,
         "prefill_content": prefill_content,
+        "pm_content_soft_limit": getattr(settings, "PM_CONTENT_SOFT_MAX_CHARS", 20_000),
     })
 
 
@@ -1607,6 +1611,11 @@ def pm_edit(request, box_id):
         pk=box_id, owner=request.user, box_type=PrivateMessageBox.BoxType.OUTBOX,
     )
     pm = box.message
+    current_content = decompress(pm.content_compressed)
+    pm_content_limit = max(
+        len(current_content),
+        getattr(settings, "PM_CONTENT_SOFT_MAX_CHARS", 20_000),
+    )
 
     # Double-check it's still undelivered
     if pm.delivered_at is not None:
@@ -1621,8 +1630,10 @@ def pm_edit(request, box_id):
         if not subject or not raw_content:
             error = "Wypełnij wszystkie pola."
         else:
-            from .bbcode_lint import repair_and_validate
-            repaired_content, changes, lint_errors = repair_and_validate(raw_content)
+            repaired_content, changes, lint_errors = validate_pm_content(
+                raw_content,
+                original_size=len(current_content),
+            )
             if lint_errors:
                 error_lines = "\n".join(f"• {e}" for e in lint_errors)
                 error = f"Błędy w kodzie BBCode:\n{error_lines}"
@@ -1640,11 +1651,11 @@ def pm_edit(request, box_id):
                 pm.save(update_fields=["subject", "content_compressed"])
                 return redirect("pm_outbox")
 
-    current_content = decompress(pm.content_compressed)
     return render(request, "board/pm_edit.html", {
         "box": box,
         "current_content": current_content,
         "error": error,
+        "pm_content_soft_limit": pm_content_limit,
     })
 
 

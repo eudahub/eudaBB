@@ -36,6 +36,9 @@
                 style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;
                        line-height:1.4;border:0;resize:vertical;padding:.35rem .45rem;">{{ form.content.value|default_if_none:"" }}</textarea>
     </div>
+    <div id="reply-content-count" style="margin-top:.25rem;font-size:11px;color:#666;">
+      0/{{ post_content_soft_limit }}
+    </div>
     <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:nowrap;">
         <button type="button" onclick="doPreview()" style="width:auto;flex:0 0 auto;">Podgląd</button>
@@ -211,6 +214,7 @@
 (function(){
   var textarea = document.getElementById('reply-content');
   var lineNumbers = document.getElementById('reply-line-numbers');
+  var contentCount = document.getElementById('reply-content-count');
 
   function updateLineNumbers() {
     var lines = textarea.value.split('\n').length;
@@ -226,6 +230,9 @@
   window.syncReplyEditorChrome = function() {
     updateLineNumbers();
     syncLineNumberScroll();
+    if (contentCount) {
+      contentCount.textContent = textarea.value.length + '/{{ post_content_soft_limit }}';
+    }
   };
 
   window.appendReplyQuote = function(quoteText) {
@@ -255,9 +262,9 @@
     sessionStorage.removeItem(quoteKey);
   }
 
-  textarea.addEventListener('input', updateLineNumbers);
+  textarea.addEventListener('input', window.syncReplyEditorChrome);
   textarea.addEventListener('scroll', syncLineNumberScroll);
-  textarea.addEventListener('change', updateLineNumbers);
+  textarea.addEventListener('change', window.syncReplyEditorChrome);
   window.syncReplyEditorChrome();
 })();
 

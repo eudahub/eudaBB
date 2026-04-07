@@ -6,6 +6,8 @@ from .username_utils import normalize
 from .email_utils import mask_email, mask_email_variants
 from .auth_utils import prehash_password
 
+TOPIC_TITLE_MAX_LENGTH = 70
+
 
 class RegisterForm(UserCreationForm):
     email = forms.EmailField(required=True)
@@ -107,7 +109,7 @@ def validate_post_content(content: str, original_size: int = 0) -> tuple[str, li
     """Repair and validate post content.
 
     Returns (repaired_content, auto_changes, errors).
-    original_size — byte length of the existing post being edited (0 for new posts).
+    original_size — character length of the existing post being edited (0 for new posts).
     """
     from .bbcode_lint import repair_and_validate
     from .quote_validation import validate_enriched_quotes
@@ -119,26 +121,26 @@ def validate_post_content(content: str, original_size: int = 0) -> tuple[str, li
 
     content = repaired
 
-    hard = getattr(settings, "POST_CONTENT_HARD_MAX_BYTES", 64 * 1024)
-    soft = getattr(settings, "POST_CONTENT_SOFT_MAX_BYTES", 20_000)
+    hard = getattr(settings, "POST_CONTENT_HARD_MAX_CHARS", 65_535)
+    soft = getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000)
 
-    new_size = len(content.encode("utf-8"))
+    new_size = len(content)
 
     if new_size > hard:
         return content, changes, [
-            f"Treść za długa: {new_size} B (twardy limit: {hard // 1024} kB)."
+            f"Treść za długa: {new_size} znaków (twardy limit: {hard})."
         ]
 
     allowed = max(original_size, soft)
     if new_size > allowed:
         if original_size > soft:
             return content, changes, [
-                f"Treść za długa: {new_size} B. Post miał {original_size} B — "
-                f"przy edycji można tylko zmniejszyć (max {original_size} B)."
+                f"Treść za długa: {new_size} znaków. Post miał {original_size} znaków — "
+                f"przy edycji można tylko zmniejszyć (max {original_size})."
             ]
         else:
             return content, changes, [
-                f"Treść za długa: {new_size} B (limit: {soft} B = {soft // 1000} kB)."
+                f"Treść za długa: {new_size} znaków (limit: {soft})."
             ]
 
     quote_errors = validate_enriched_quotes(content)
@@ -164,8 +166,38 @@ def _validate_post_content(content: str, original_size: int = 0) -> str:
     return repaired
 
 
+def validate_pm_content(content: str, original_size: int = 0) -> tuple[str, list[str], list[str]]:
+    from .bbcode_lint import repair_and_validate
+
+    repaired, changes, errors = repair_and_validate(content)
+    if errors:
+        return repaired, changes, [str(e) for e in errors]
+
+    hard = getattr(settings, "PM_CONTENT_HARD_MAX_CHARS", 65_535)
+    soft = getattr(settings, "PM_CONTENT_SOFT_MAX_CHARS", 20_000)
+    new_size = len(repaired)
+
+    if new_size > hard:
+        return repaired, changes, [
+            f"Treść za długa: {new_size} znaków (twardy limit: {hard})."
+        ]
+
+    allowed = max(original_size, soft)
+    if new_size > allowed:
+        if original_size > soft:
+            return repaired, changes, [
+                f"Treść za długa: {new_size} znaków. Wiadomość miała {original_size} znaków — "
+                f"przy edycji można tylko zmniejszyć (max {original_size})."
+            ]
+        return repaired, changes, [
+            f"Treść za długa: {new_size} znaków (limit: {soft})."
+        ]
+
+    return repaired, changes, []
+
+
 class NewTopicForm(forms.Form):
-    title = forms.CharField(max_length=255, label="Temat")
+    title = forms.CharField(max_length=TOPIC_TITLE_MAX_LENGTH, label="Temat")
     content = forms.CharField(widget=forms.Textarea(attrs={"rows": 10}), label="Treść (BBCode)")
 
     def clean_content(self):
