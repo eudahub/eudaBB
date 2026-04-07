@@ -512,6 +512,36 @@ class Poll(models.Model):
     def __str__(self):
         return f"Poll topic={self.topic_id}"
 
+    def _has_votes(self):
+        if self.total_votes:
+            return True
+        if not self.pk:
+            return False
+        return self.votes.exists()
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = Poll.objects.get(pk=self.pk)
+            if previous._has_votes():
+                protected_fields = [
+                    "topic_id",
+                    "question",
+                    "allow_vote_change",
+                    "allow_multiple_choice",
+                    "is_archived_import",
+                ]
+                for field_name in protected_fields:
+                    if getattr(previous, field_name) != getattr(self, field_name):
+                        raise ValidationError(
+                            "Po oddaniu pierwszego głosu nie można już zmieniać pytania ani typu ankiety."
+                        )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self._has_votes():
+            raise ValidationError("Po oddaniu pierwszego głosu nie można usunąć ankiety.")
+        return super().delete(*args, **kwargs)
+
 
 class PollOption(models.Model):
     """One option inside a poll."""
@@ -530,6 +560,25 @@ class PollOption(models.Model):
 
     def __str__(self):
         return f"PollOption poll={self.poll_id} #{self.sort_order}"
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = PollOption.objects.select_related("poll").get(pk=self.pk)
+            if previous.poll._has_votes():
+                protected_fields = ["poll_id", "option_text", "sort_order"]
+                for field_name in protected_fields:
+                    if getattr(previous, field_name) != getattr(self, field_name):
+                        raise ValidationError(
+                            "Po oddaniu pierwszego głosu nie można już zmieniać odpowiedzi ankiety."
+                        )
+        elif self.poll._has_votes():
+            raise ValidationError("Po oddaniu pierwszego głosu nie można już dodawać odpowiedzi ankiety.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.poll._has_votes():
+            raise ValidationError("Po oddaniu pierwszego głosu nie można usunąć odpowiedzi ankiety.")
+        return super().delete(*args, **kwargs)
 
 
 class PollVote(models.Model):

@@ -798,6 +798,56 @@ class UserRenameTests(TestCase):
         self.assertNotContains(response, "Wyniki będą widoczne po oddaniu głosu")
         self.assertContains(response, "X Twój głos")
 
+    def test_poll_question_cannot_change_after_first_vote(self):
+        author = User.objects.create_user(username="AutorPollLock1", password="x")
+        topic = self._make_topic(author, title="Blokada ankiety")
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=False,
+            is_archived_import=False,
+            total_votes=1,
+        )
+        option = PollOption.objects.create(poll=poll, option_text="Tak", vote_count=1, sort_order=1)
+        PollVote.objects.create(poll=poll, user=author, option=option)
+
+        poll.question = "Czy jednak nie?"
+        with self.assertRaises(ValidationError):
+            poll.save()
+
+    def test_poll_option_cannot_change_after_first_vote(self):
+        author = User.objects.create_user(username="AutorPollLock2", password="x")
+        topic = self._make_topic(author, title="Blokada odpowiedzi")
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=False,
+            is_archived_import=False,
+            total_votes=1,
+        )
+        option = PollOption.objects.create(poll=poll, option_text="Tak", vote_count=1, sort_order=1)
+        PollVote.objects.create(poll=poll, user=author, option=option)
+
+        option.option_text = "Nie"
+        with self.assertRaises(ValidationError):
+            option.save()
+
+    def test_poll_option_cannot_be_deleted_after_first_vote(self):
+        author = User.objects.create_user(username="AutorPollLock3", password="x")
+        topic = self._make_topic(author, title="Blokada kasowania")
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=False,
+            is_archived_import=False,
+            total_votes=1,
+        )
+        option = PollOption.objects.create(poll=poll, option_text="Tak", vote_count=1, sort_order=1)
+        PollVote.objects.create(poll=poll, user=author, option=option)
+
+        with self.assertRaises(ValidationError):
+            option.delete()
+
     def test_topic_detail_scales_poll_bars_to_highest_option(self):
         author = User.objects.create_user(username="AutorPollScale", password="x")
         reader = User.objects.create_user(username="CzytelnikPollScale", password="x")
