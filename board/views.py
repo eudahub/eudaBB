@@ -985,6 +985,20 @@ def new_topics(request):
     })
 
 
+def unanswered_topics(request):
+    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    topics = (
+        Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
+        .filter(forum__archive_level__lte=max_forum_level, reply_count=0)
+        .order_by("-created_at", "-pk")
+    )
+    page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
+
+    return render(request, "board/unanswered_topics.html", {
+        "page": page,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------

@@ -168,6 +168,7 @@
         <span>{{ user.username }}</span>
         <a href="{% url 'new_posts' %}">Nowe posty</a>
         <a href="{% url 'new_topics' %}">Nowe wątki</a>
+        <a href="{% url 'unanswered_topics' %}">Bez odpowiedzi</a>
         <a href="{% url 'search' %}">Szukaj</a>
         <a href="{% url 'pm_inbox' %}">PM{% if pm_unread %} <strong>({{ pm_unread }})</strong>{% endif %}</a>
         {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
@@ -177,6 +178,7 @@
       {% else %}
         <a href="{% url 'new_posts' %}">Nowe posty</a>
         <a href="{% url 'new_topics' %}">Nowe wątki</a>
+        <a href="{% url 'unanswered_topics' %}">Bez odpowiedzi</a>
         <a href="{% url 'login' %}">Zaloguj</a>
         <a href="{% url 'register' %}">Rejestracja</a>
         {% if site_config.show_switch_link %}<span style="color:#c00;font-weight:bold;font-size:10px;">[popup]</span>{% endif %}

@@ -464,6 +464,32 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "autor ostatniego postu: Inny8")
         self.assertContains(response, "postów: 2")
 
+    def test_unanswered_topics_view_lists_only_topics_without_replies(self):
+        author = User.objects.create_user(username="AutorUnanswered", password="x")
+        unanswered = self._make_topic(author, title="Bez odpowiedzi")
+        answered = self._make_topic(author, title="Z odpowiedzią")
+
+        unanswered_first = Post.objects.create(topic=unanswered, author=author, content_bbcode="Start", post_order=1)
+        answered_first = Post.objects.create(topic=answered, author=author, content_bbcode="Start", post_order=1)
+        answered_reply = Post.objects.create(topic=answered, author=author, content_bbcode="Odpowiedź", post_order=2)
+
+        unanswered.last_post = unanswered_first
+        unanswered.last_post_at = unanswered_first.created_at
+        unanswered.reply_count = 0
+        unanswered.save(update_fields=["last_post", "last_post_at", "reply_count"])
+
+        answered.last_post = answered_reply
+        answered.last_post_at = answered_reply.created_at
+        answered.reply_count = 1
+        answered.save(update_fields=["last_post", "last_post_at", "reply_count"])
+
+        response = self.client.get(reverse("unanswered_topics"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Bez odpowiedzi")
+        self.assertNotContains(response, "Z odpowiedzią")
+        self.assertContains(response, "postów: 1")
+
     def test_search_topics_mode_matches_title_and_marks_poll_topics(self):
         reader = User.objects.create_user(username="CzytelnikSearch1", password="x")
         author = User.objects.create_user(username="AutorSearch1", password="x")

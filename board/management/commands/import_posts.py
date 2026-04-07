@@ -200,6 +200,7 @@ class Command(BaseCommand):
                     topic_type   = TOPIC_TYPE_MAP.get(
                         first["topic_type"] or "", Topic.TopicType.NORMAL
                     )
+                    first_dt = parse_pl_date(first["created_at"])
 
                     topic = Topic.objects.create(
                         forum=forum,
@@ -209,6 +210,9 @@ class Command(BaseCommand):
                         topic_type=topic_type,
                         view_count=first["view_count"] or 0,
                     )
+                    if first_dt:
+                        topic.created_at = first_dt
+                        topic.save(update_fields=["created_at"])
                     topic_map[archive_topic_id] = topic
                     topics_created += 1
                 else:
