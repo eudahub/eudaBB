@@ -1152,6 +1152,18 @@ def unread_topics(request):
     })
 
 
+@login_required
+def mark_all_topics_read(request):
+    if request.method != "POST":
+        return redirect("unread_topics")
+
+    request.user.mark_all_read_at = timezone.now()
+    request.user.save(update_fields=["mark_all_read_at"])
+    TopicReadState.objects.filter(user=request.user).delete()
+    messages.success(request, "Wszystkie wątki oznaczono jako przeczytane.")
+    return redirect("unread_topics")
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------

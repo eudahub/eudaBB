@@ -4,6 +4,11 @@
 {% block content %}
 <h2>Nieprzeczytane wątki</h2>
 
+<form method="post" action="{% url 'mark_all_topics_read' %}" style="margin-bottom:.6rem;">
+  {% csrf_token %}
+  <button type="submit">Oznacz wszystko jako przeczytane</button>
+</form>
+
 {% if page %}
   <p style="font-size:11px;color:#555;">
     Wątków na tej stronie: {{ page.object_list|length }}. Łącznie: {{ page.paginator.count }}.

@@ -534,6 +534,27 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Nieprzeczytany długi wątek")
         self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
 
+    def test_mark_all_topics_read_sets_user_baseline_and_clears_states(self):
+        author = User.objects.create_user(username="AutorMarkRead", password="x")
+        reader = User.objects.create_user(username="CzytelnikMarkRead", password="x")
+        topic = self._make_topic(author, title="Do oznaczenia")
+        last_post = Post.objects.create(topic=topic, author=author, content_bbcode="Start", post_order=1)
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.reply_count = 0
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+        TopicReadState.objects.create(user=reader, topic=topic, last_read_post_order=0)
+        before = reader.mark_all_read_at
+
+        client = Client()
+        client.force_login(reader)
+        response = client.post(reverse("mark_all_topics_read"))
+
+        self.assertEqual(response.status_code, 302)
+        reader.refresh_from_db()
+        self.assertGreaterEqual(reader.mark_all_read_at, before)
+        self.assertFalse(TopicReadState.objects.filter(user=reader).exists())
+
     def test_topic_detail_shows_topic_participants_with_post_counts(self):
         author = User.objects.create_user(username="AutorParticipants", password="x")
         other = User.objects.create_user(username="InnyParticipants", password="x")
