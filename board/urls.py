@@ -21,6 +21,7 @@ urlpatterns = [
     path("kontakt/", views.contact, name="contact"),
     path("nowe-posty/", views.new_posts, name="new_posts"),
     path("nowe-watki/", views.new_topics, name="new_topics"),
+    path("nieprzeczytane/", views.unread_topics, name="unread_topics"),
     path("tematy-bez-odpowiedzi/", views.unanswered_topics, name="unanswered_topics"),
     path("szukaj/", views.search, name="search"),
     path("post/<int:post_id>/like-toggle/", views.toggle_post_like, name="toggle_post_like"),

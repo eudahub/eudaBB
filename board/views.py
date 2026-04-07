@@ -15,7 +15,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant, TopicReadState
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
@@ -115,6 +115,60 @@ def _get_or_build_topic_participants(topic: Topic):
     )
 
 
+def _update_topic_read_state(user, topic: Topic, page) -> None:
+    if not getattr(user, "is_authenticated", False):
+        return
+    if getattr(user, "is_root", False):
+        return
+    object_list = list(page.object_list) if page is not None else []
+    if not object_list:
+        return
+    max_read_order = max(post.post_order for post in object_list)
+    state, created = TopicReadState.objects.get_or_create(
+        user=user,
+        topic=topic,
+        defaults={
+            "last_read_post_order": max_read_order,
+            "last_read_at": timezone.now(),
+        },
+    )
+    if not created and max_read_order > state.last_read_post_order:
+        state.last_read_post_order = max_read_order
+        state.last_read_at = timezone.now()
+        state.save(update_fields=["last_read_post_order", "last_read_at"])
+
+
+def _build_unread_topic_url(user, topic: Topic, read_state, posts_per_page: int) -> str:
+    last_post = topic.last_post
+    if last_post is None:
+        return reverse("topic_detail", args=[topic.pk])
+
+    first_unread_post = None
+    if read_state is not None and read_state.last_read_post_order:
+        first_unread_post = (
+            topic.posts.filter(post_order__gt=read_state.last_read_post_order)
+            .order_by("post_order")
+            .only("pk", "post_order")
+            .first()
+        )
+    else:
+        baseline = getattr(user, "mark_all_read_at", None)
+        if baseline is not None:
+            first_unread_post = (
+                topic.posts.filter(created_at__gt=baseline)
+                .order_by("post_order")
+                .only("pk", "post_order")
+                .first()
+            )
+
+    if first_unread_post is None:
+        page_num = ((last_post.post_order - 1) // posts_per_page) + 1
+        return f'{reverse("topic_detail", args=[topic.pk])}?page={page_num}#post-{last_post.pk}'
+
+    page_num = ((first_unread_post.post_order - 1) // posts_per_page) + 1
+    return f'{reverse("topic_detail", args=[topic.pk])}?page={page_num}#post-{first_unread_post.pk}'
+
+
 def _get_global_pinned_topic_posts(exclude_topic=None):
     qs = (
         Post.objects.select_related("author", "topic", "topic__forum")
@@ -211,6 +265,7 @@ def topic_detail(request, topic_id):
     posts_qs = topic.posts.select_related("author", "updated_by")
     paginator = Paginator(posts_qs, getattr(settings, "POSTS_PER_PAGE", 20))
     page = paginator.get_page(request.GET.get("page"))
+    _update_topic_read_state(request.user, topic, page)
 
     # Zbiór ID postów do ukrycia (spam) — template pokazuje placeholder zamiast treści
     spam_q = get_author_spam_filter(request.user)
@@ -1055,6 +1110,44 @@ def unanswered_topics(request):
     page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
 
     return render(request, "board/unanswered_topics.html", {
+        "page": page,
+    })
+
+
+@login_required
+def unread_topics(request):
+    max_forum_level = getattr(request.user, "archive_access", 0)
+    posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+    topics = list(
+        Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
+        .filter(forum__archive_level__lte=max_forum_level)
+        .exclude(last_post__isnull=True)
+        .order_by("-last_post_at", "-pk")
+    )
+    read_state_map = {
+        state.topic_id: state
+        for state in TopicReadState.objects.filter(
+            user=request.user,
+            topic_id__in=[topic.pk for topic in topics],
+        )
+    }
+    unread = []
+    baseline = request.user.mark_all_read_at
+    for topic in topics:
+        state = read_state_map.get(topic.pk)
+        last_post = topic.last_post
+        if last_post is None:
+            continue
+        if state is not None:
+            if state.last_read_post_order >= last_post.post_order:
+                continue
+        elif topic.last_post_at and topic.last_post_at <= baseline:
+            continue
+        topic.unread_url = _build_unread_topic_url(request.user, topic, state, posts_per_page)
+        unread.append(topic)
+
+    page = Paginator(unread, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
+    return render(request, "board/unread_topics.html", {
         "page": page,
     })
 

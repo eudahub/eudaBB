@@ -3,7 +3,7 @@ from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post, TopicParticipant
+from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post, TopicParticipant, TopicReadState
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
@@ -489,6 +489,50 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Bez odpowiedzi")
         self.assertNotContains(response, "Z odpowiedzią")
         self.assertContains(response, "postów: 1")
+
+    def test_topic_detail_marks_current_page_as_read(self):
+        author = User.objects.create_user(username="AutorRead", password="x")
+        reader = User.objects.create_user(username="CzytelnikRead", password="x")
+        topic = self._make_topic(author, title="Czytanie")
+        for order in range(1, 26):
+            post = Post.objects.create(topic=topic, author=author, content_bbcode=f"Post {order}", post_order=order)
+            if order == 25:
+                topic.last_post = post
+                topic.last_post_at = post.created_at
+        topic.reply_count = 24
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("topic_detail", args=[topic.pk]), {"page": 2})
+
+        self.assertEqual(response.status_code, 200)
+        state = TopicReadState.objects.get(user=reader, topic=topic)
+        self.assertEqual(state.last_read_post_order, 25)
+
+    def test_unread_topics_view_links_to_first_unread_page(self):
+        author = User.objects.create_user(username="AutorUnread", password="x")
+        reader = User.objects.create_user(username="CzytelnikUnread", password="x")
+        topic = self._make_topic(author, title="Nieprzeczytany długi wątek")
+        last_post = None
+        first_unread = None
+        for order in range(1, 26):
+            last_post = Post.objects.create(topic=topic, author=author, content_bbcode=f"Post {order}", post_order=order)
+            if order == 21:
+                first_unread = last_post
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.reply_count = 24
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+        TopicReadState.objects.create(user=reader, topic=topic, last_read_post_order=20)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("unread_topics"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nieprzeczytany długi wątek")
+        self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
 
     def test_topic_detail_shows_topic_participants_with_post_counts(self):
         author = User.objects.create_user(username="AutorParticipants", password="x")

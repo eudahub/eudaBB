@@ -71,6 +71,10 @@ class User(AbstractUser):
         default=0,
         help_text="Max archive_level user can see: 0=normal, 1=soft darkweb, 2=hard darkweb (admin-granted)",
     )
+    mark_all_read_at = models.DateTimeField(
+        default=timezone.now,
+        help_text="Global baseline: everything older than this is treated as read.",
+    )
     is_root = models.BooleanField(
         default=False,
         help_text="Superadmin: manages users and forum structure. Cannot post, has no email, no password reset.",
@@ -634,6 +638,30 @@ class TopicParticipant(models.Model):
 
     def __str__(self):
         return f"TopicParticipant topic={self.topic_id} user={self.user_id} posts={self.post_count}"
+
+
+class TopicReadState(models.Model):
+    """Per-user read progress for one topic."""
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="topic_read_states"
+    )
+    topic = models.ForeignKey(
+        Topic, on_delete=models.CASCADE, related_name="read_states"
+    )
+    last_read_post_order = models.PositiveIntegerField(default=0)
+    last_read_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "forum_topic_read_states"
+        unique_together = [("user", "topic")]
+        indexes = [
+            models.Index(fields=["user", "last_read_at"]),
+            models.Index(fields=["topic"]),
+        ]
+
+    def __str__(self):
+        return f"TopicReadState user={self.user_id} topic={self.topic_id} order={self.last_read_post_order}"
 
 
 class PostLike(models.Model):

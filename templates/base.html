@@ -167,6 +167,7 @@
       {% if user.is_authenticated %}
         <span>{{ user.username }}</span>
         <a href="{% url 'new_posts' %}">Nowe posty</a>
+        <a href="{% url 'unread_topics' %}">Nieprzeczytane</a>
         <a href="{% url 'new_topics' %}">Nowe wątki</a>
         <a href="{% url 'unanswered_topics' %}">Bez odpowiedzi</a>
         <a href="{% url 'search' %}">Szukaj</a>
