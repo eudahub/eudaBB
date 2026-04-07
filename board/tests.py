@@ -323,6 +323,21 @@ class UserRenameTests(TestCase):
         self.assertFalse(_matches_search_text("do rzeczywistego", ["do rzeczy"], []))
         self.assertTrue(_matches_search_text("to jest do rzeczy i tyle", ["do rzeczy"], []))
 
+    def test_matches_search_text_requires_word_boundaries_for_term(self):
+        self.assertFalse(_matches_search_text("zalobe", [], ["obe"]))
+        self.assertTrue(_matches_search_text("to jest zalobe", [], ["zalobe"]))
+
+    def test_build_search_snippet_highlights_without_diacritics(self):
+        snippet = _build_search_snippet(
+            "To była żałobę po kimś ważnym.",
+            [],
+            ["zalobe"],
+            {"zalobe": 10},
+            width=40,
+        )
+        self.assertIn("żałobę", snippet)
+        self.assertIn("background:#d96a00", snippet)
+
     def test_quote_fragment_endpoint_returns_exact_source_when_safe(self):
         author = User.objects.create_user(username="Autor", password="x")
         reader = User.objects.create_user(username="Czytelnik", password="x")

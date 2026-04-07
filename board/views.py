@@ -27,7 +27,7 @@ from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
 from .quote_refs import rebuild_quote_references_for_post
 from .quote_selection import extract_exact_quote_fragment, normalize_selected_text
-from .search_index import normalize_search_text
+from .search_index import normalize_search_text, strip_diacritics
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@ _SEARCH_PHRASE_RE = re.compile(r'"([^"]+)"|(\S+)')
 _SAFE_STOP_WORDS = {
     "nie", "to", "w", "i", "sie", "ze", "na", "z", "a", "do", "o", "ale",
 }
-_SEARCH_BOUNDARY = r"(?<![0-9A-Za-z]){needle}(?![0-9A-Za-z])"
+_SEARCH_BOUNDARY = r"(?<!\w){needle}(?!\w)"
 
 
 def _parse_search_query(raw_query: str):
@@ -392,25 +392,66 @@ def _matches_search_text(text_norm: str, phrases: list[str], terms: list[str]) -
     return True
 
 
-def _highlight_snippet(snippet: str, needles: list[str]) -> str:
-    escaped = escape(snippet)
-    unique_needles = []
+def _normalize_for_match(text: str) -> str:
+    return strip_diacritics((text or "").lower())
+
+
+def _find_highlight_spans(snippet: str, needles: list[str]):
+    if not snippet:
+        return []
+
+    normalized_chars = []
+    original_spans = []
+    for idx, char in enumerate(snippet):
+        normalized = strip_diacritics(char.lower())
+        if not normalized:
+            continue
+        for item in normalized:
+            normalized_chars.append(item)
+            original_spans.append((idx, idx + 1))
+
+    normalized_snippet = "".join(normalized_chars)
+    spans = []
     seen = set()
-    for needle in needles:
-        if needle and needle not in seen:
-            unique_needles.append(needle)
-            seen.add(needle)
-    for needle in sorted(unique_needles, key=len, reverse=True):
-        pattern = _build_search_pattern(escape(needle))
-        escaped = pattern.sub(
-            lambda m: (
-                '<span style="background:#d96a00;color:#fff;padding:0 .15rem;'
-                'border-radius:2px;font-weight:bold;">'
-                f'{m.group(0)}</span>'
-            ),
-            escaped,
+    for needle in sorted({n for n in needles if n}, key=len, reverse=True):
+        for match in _build_search_pattern(needle).finditer(normalized_snippet):
+            start_norm, end_norm = match.span()
+            start_orig = original_spans[start_norm][0]
+            end_orig = original_spans[end_norm - 1][1]
+            if (start_orig, end_orig) in seen:
+                continue
+            seen.add((start_orig, end_orig))
+            spans.append((start_orig, end_orig))
+
+    spans.sort()
+    merged = []
+    for start, end in spans:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+            continue
+        merged[-1][1] = max(merged[-1][1], end)
+    return [(start, end) for start, end in merged]
+
+
+def _highlight_snippet(snippet: str, needles: list[str]) -> str:
+    spans = _find_highlight_spans(snippet, needles)
+    if not spans:
+        return escape(snippet)
+
+    parts = []
+    pos = 0
+    for start, end in spans:
+        if start > pos:
+            parts.append(escape(snippet[pos:start]))
+        parts.append(
+            '<span style="background:#d96a00;color:#fff;padding:0 .15rem;'
+            'border-radius:2px;font-weight:bold;">'
+            f'{escape(snippet[start:end])}</span>'
         )
-    return escaped
+        pos = end
+    if pos < len(snippet):
+        parts.append(escape(snippet[pos:]))
+    return "".join(parts)
 
 
 def _build_search_snippet(text: str, phrases: list[str], terms: list[str], df_map: dict[str, int], width: int = 220):
@@ -418,7 +459,7 @@ def _build_search_snippet(text: str, phrases: list[str], terms: list[str], df_ma
     if not text:
         return ""
 
-    text_norm = normalize_search_text(text)
+    text_norm = _normalize_for_match(text)
     anchor = None
     matched_needles = []
 
