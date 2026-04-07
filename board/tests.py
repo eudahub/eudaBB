@@ -3,7 +3,7 @@ from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Forum, Poll, PollOption, Section, Topic, User, Post
+from .models import Forum, Poll, PollOption, PostLike, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
@@ -174,6 +174,104 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Cytuj")
         self.assertContains(response, f'data-post-id="{post.pk}"')
         self.assertContains(response, 'data-post-content="1"')
+
+    def test_topic_detail_renders_like_button_for_other_users_post(self):
+        author = User.objects.create_user(username="AutorLike1", password="x")
+        reader = User.objects.create_user(username="CzytelnikLike1", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="Treść", post_order=1)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("topic_detail", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("toggle_post_like", args=[post.pk]))
+        self.assertContains(response, "Polubienia: 0")
+
+    def test_toggle_post_like_adds_like_and_updates_counters(self):
+        author = User.objects.create_user(username="AutorLike2", password="x")
+        reader = User.objects.create_user(username="CzytelnikLike2", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="Treść", post_order=1)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.post(
+            reverse("toggle_post_like", args=[post.pk]),
+            {"next": reverse("topic_detail", args=[topic.pk])},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(PostLike.objects.filter(post=post, user=reader).exists())
+        post.refresh_from_db()
+        author.refresh_from_db()
+        reader.refresh_from_db()
+        self.assertEqual(post.like_count, 1)
+        self.assertEqual(author.likes_received_count, 1)
+        self.assertEqual(reader.likes_given_count, 1)
+
+    def test_toggle_post_like_removes_existing_like(self):
+        author = User.objects.create_user(username="AutorLike3", password="x")
+        reader = User.objects.create_user(username="CzytelnikLike3", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="Treść", post_order=1)
+        PostLike.objects.create(post=post, user=reader)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.post(
+            reverse("toggle_post_like", args=[post.pk]),
+            {"next": reverse("topic_detail", args=[topic.pk])},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PostLike.objects.filter(post=post, user=reader).exists())
+        post.refresh_from_db()
+        author.refresh_from_db()
+        reader.refresh_from_db()
+        self.assertEqual(post.like_count, 0)
+        self.assertEqual(author.likes_received_count, 0)
+        self.assertEqual(reader.likes_given_count, 0)
+
+    def test_toggle_post_like_rejects_own_post(self):
+        author = User.objects.create_user(username="AutorLike4", password="x")
+        topic = self._make_topic(author)
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="Treść", post_order=1)
+
+        client = Client()
+        client.force_login(author)
+        response = client.post(
+            reverse("toggle_post_like", args=[post.pk]),
+            {"next": reverse("topic_detail", args=[topic.pk])},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PostLike.objects.filter(post=post, user=author).exists())
+        post.refresh_from_db()
+        self.assertEqual(post.like_count, 0)
+
+    def test_user_likes_views_show_received_and_given(self):
+        author = User.objects.create_user(username="AutorLike5", password="x")
+        giver = User.objects.create_user(username="CzytelnikLike5", password="x")
+        topic = self._make_topic(author, title="Temat polubień")
+        post = Post.objects.create(topic=topic, author=author, content_bbcode="Treść", post_order=1)
+        PostLike.objects.create(post=post, user=giver)
+
+        received = self.client.get(reverse("user_likes_received", args=[author.pk]))
+        self.assertEqual(received.status_code, 200)
+        self.assertContains(received, "Polubienia otrzymane")
+        self.assertContains(received, giver.username)
+        self.assertContains(received, topic.title)
+
+        given = self.client.get(reverse("user_likes_given", args=[giver.pk]))
+        self.assertEqual(given.status_code, 200)
+        self.assertContains(given, "Polubienia dane")
+        self.assertContains(given, author.username)
+        self.assertContains(given, topic.title)
 
     def test_reply_view_renders_quote_picker_and_recent_post_buttons(self):
         author = User.objects.create_user(username="Autor", password="x")

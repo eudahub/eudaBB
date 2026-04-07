@@ -41,6 +41,8 @@ class User(AbstractUser):
     location = models.CharField(max_length=100, blank=True, default="")
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True, validators=[validate_avatar])
     post_count = models.PositiveIntegerField(default=0)
+    likes_given_count = models.PositiveIntegerField(default=0)
+    likes_received_count = models.PositiveIntegerField(default=0)
     rank = models.CharField(max_length=64, blank=True, default="")
     is_ghost = models.BooleanField(
         default=False,
@@ -398,6 +400,7 @@ class Post(models.Model):
 
     # Sequential position within topic — used for pagination and quote references
     post_order = models.PositiveIntegerField(default=0)
+    like_count = models.PositiveIntegerField(default=0)
 
     # Set during import when the post has unbalanced [quote]/[/quote] tags
     # (quote_status=4 in sfiniabb.db). Content is displayed verbatim, not parsed.
@@ -556,6 +559,29 @@ class PollVote(models.Model):
         return f"PollVote poll={self.poll_id} user={self.user_id} option={self.option_id}"
 
 
+class PostLike(models.Model):
+    """One like per user per post."""
+
+    post = models.ForeignKey(
+        Post, on_delete=models.CASCADE, related_name="likes"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="given_post_likes"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "forum_post_likes"
+        unique_together = [("post", "user")]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["post", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"PostLike post={self.post_id} user={self.user_id}"
+
+
 class SiteConfig(models.Model):
     """Singleton table (always pk=1) — site-wide toggles configurable by root."""
 
@@ -592,3 +618,33 @@ def _sync_post_search_index(sender, instance, raw, **kwargs):
         return
     from .search_index import update_post_search_index
     update_post_search_index(instance)
+
+
+@receiver(post_save, sender=PostLike)
+def _increment_like_counters(sender, instance, created, **kwargs):
+    if not created:
+        return
+    Post.objects.filter(pk=instance.post_id).update(
+        like_count=models.F("like_count") + 1
+    )
+    User.objects.filter(pk=instance.user_id).update(
+        likes_given_count=models.F("likes_given_count") + 1
+    )
+    if instance.post.author_id:
+        User.objects.filter(pk=instance.post.author_id).update(
+            likes_received_count=models.F("likes_received_count") + 1
+        )
+
+
+@receiver(models.signals.post_delete, sender=PostLike)
+def _decrement_like_counters(sender, instance, **kwargs):
+    Post.objects.filter(pk=instance.post_id, like_count__gt=0).update(
+        like_count=models.F("like_count") - 1
+    )
+    User.objects.filter(pk=instance.user_id, likes_given_count__gt=0).update(
+        likes_given_count=models.F("likes_given_count") - 1
+    )
+    if instance.post.author_id:
+        User.objects.filter(pk=instance.post.author_id, likes_received_count__gt=0).update(
+            likes_received_count=models.F("likes_received_count") - 1
+        )

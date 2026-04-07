@@ -14,7 +14,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostSearchIndex, SiteConfig
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
@@ -153,6 +153,15 @@ def topic_detail(request, topic_id):
         request.user.is_authenticated
         and _is_moderator(request.user, topic.forum)
     )
+    liked_post_ids = set()
+    if request.user.is_authenticated:
+        liked_post_ids = set(
+            PostLike.objects.filter(
+                user=request.user,
+                post__topic=topic,
+                post__in=page.object_list,
+            ).values_list("post_id", flat=True)
+        )
 
     return render(request, "board/topic_detail.html", {
         "topic": topic,
@@ -162,6 +171,7 @@ def topic_detail(request, topic_id):
         "visible_post_ids": visible_post_ids,
         "is_moderator": is_mod,
         "dangerous_days": getattr(settings, "IP_BAN_DANGEROUS_DAYS", 90),
+        "liked_post_ids": liked_post_ids,
     })
 
 
@@ -1723,6 +1733,76 @@ def pm_delete(request, box_id):
     if not pm.boxes.exists():
         pm.delete()
     return redirect(redirect_url)
+
+
+@login_required
+def toggle_post_like(request, post_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+
+    post = get_object_or_404(
+        Post.objects.select_related("author", "topic"),
+        pk=post_id,
+    )
+    next_url = request.POST.get("next") or f"/topic/{post.topic_id}/"
+    scroll_to = (request.POST.get("scroll_to") or "").strip()
+    if scroll_to.isdigit():
+        joiner = "&" if "?" in next_url else "?"
+        next_url = f"{next_url}{joiner}scroll_to={scroll_to}"
+
+    if post.author_id == request.user.pk:
+        messages.error(request, "Nie możesz polubić własnego posta.")
+        return redirect(next_url)
+
+    like = PostLike.objects.filter(post=post, user=request.user).first()
+    if like is not None:
+        like.delete()
+        messages.success(request, "Wycofano polubienie.")
+        return redirect(next_url)
+
+    PostLike.objects.create(post=post, user=request.user)
+    messages.success(request, "Dodano polubienie.")
+    return redirect(next_url)
+
+
+def user_likes_received(request, user_id):
+    target_user = get_object_or_404(User, pk=user_id)
+    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    likes = (
+        PostLike.objects
+        .select_related("user", "post", "post__topic", "post__topic__forum")
+        .filter(
+            post__author=target_user,
+            post__topic__forum__archive_level__lte=max_forum_level,
+        )
+        .order_by("-created_at", "-pk")
+    )
+    page = Paginator(likes, getattr(settings, "POSTS_PER_PAGE", 20)).get_page(request.GET.get("page"))
+    return render(request, "board/user_likes.html", {
+        "target_user": target_user,
+        "page": page,
+        "mode": "received",
+    })
+
+
+def user_likes_given(request, user_id):
+    target_user = get_object_or_404(User, pk=user_id)
+    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    likes = (
+        PostLike.objects
+        .select_related("post", "post__author", "post__topic", "post__topic__forum")
+        .filter(
+            user=target_user,
+            post__topic__forum__archive_level__lte=max_forum_level,
+        )
+        .order_by("-created_at", "-pk")
+    )
+    page = Paginator(likes, getattr(settings, "POSTS_PER_PAGE", 20)).get_page(request.GET.get("page"))
+    return render(request, "board/user_likes.html", {
+        "target_user": target_user,
+        "page": page,
+        "mode": "given",
+    })
 
 
 # ---------------------------------------------------------------------------

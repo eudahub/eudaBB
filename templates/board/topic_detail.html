@@ -68,6 +68,8 @@
             <br><img src="{{ post.author.avatar.url }}" alt="" style="max-width:80px; max-height:80px; display:block; margin:.3rem 0;">
           {% endif %}
           <br><small>Postów: {{ post.author.post_count }}</small>
+          <br><small><a href="{% url 'user_likes_received' post.author.pk %}">Otrzymał: {{ post.author.likes_received_count }}</a></small>
+          <br><small><a href="{% url 'user_likes_given' post.author.pk %}">Dał: {{ post.author.likes_given_count }}</a></small>
           {% if post.author.rank %}<br><small>{{ post.author.rank }}</small>{% endif %}
           {% if post.author.location %}<br><small>{{ post.author.location }}</small>{% endif %}
         {% endif %}
@@ -85,6 +87,23 @@
           <hr>
           <small>{{ post.author.signature }}</small>
         {% endif %}
+        <div style="margin-top:.45rem;display:flex;justify-content:flex-end;align-items:center;gap:.35rem;">
+          <small>Polubienia: {{ post.like_count }}</small>
+          {% if user.is_authenticated and post.author_id != user.pk %}
+            <form method="post" action="{% url 'toggle_post_like' post.pk %}" style="display:inline;">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <input type="hidden" name="scroll_to" value="">
+              {% if post.pk in liked_post_ids %}
+                <button type="submit" class="bbsrc-btn" title="Wycofaj polubienie"
+                        onclick="this.form.elements.scroll_to.value = window.scrollY;">&#128078;</button>
+              {% else %}
+                <button type="submit" class="bbsrc-btn" title="Polub post"
+                        onclick="this.form.elements.scroll_to.value = window.scrollY;">&#128077;</button>
+              {% endif %}
+            </form>
+          {% endif %}
+        </div>
         {% if is_moderator and post.author_ip %}
           <div style="text-align:right; margin-top:.4rem;">
             {% if post.ip_flagged %}
@@ -165,6 +184,20 @@
   <p><a href="{% url 'login' %}">Zaloguj się</a>, aby odpowiedzieć.</p>
 {% endif %}
 <script>
+{% if request.GET.scroll_to %}
+window.addEventListener('load', function () {
+  var target = parseInt('{{ request.GET.scroll_to|escapejs }}', 10);
+  if (!isNaN(target)) {
+    window.scrollTo(0, target);
+    if (window.history && window.history.replaceState) {
+      var url = new URL(window.location.href);
+      url.searchParams.delete('scroll_to');
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    }
+  }
+});
+{% endif %}
+
 function normalizeQuotedSelection(text) {
   return (text || '')
     .replace(/\r\n/g, '\n')
