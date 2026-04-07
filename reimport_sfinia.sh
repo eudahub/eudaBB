@@ -67,9 +67,6 @@ python manage.py import_posts "${ARCHIVE_DB}"
 echo "==> Import ankiet"
 python manage.py import_polls "${ARCHIVE_DB}"
 
-echo "==> Budowa indeksu wyszukiwania"
-python manage.py build_search_index
-
 echo "==> Tworzenie konta root"
 python manage.py create_root
 

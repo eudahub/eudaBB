@@ -14,7 +14,7 @@ Forum visibility:
 
 from django.db.models import Q
 
-from .models import User
+from .models import IgnoredUser, User
 
 
 def get_user_spam_class(user) -> int:
@@ -33,19 +33,33 @@ def get_author_spam_filter(user) -> Q:
     """
     spam_class = get_user_spam_class(user)
 
+    ignored_ids = get_ignored_user_ids(user)
+    hidden_q = Q()
+    if ignored_ids:
+        hidden_q |= Q(author_id__in=ignored_ids)
+
     if spam_class >= User.SpamClass.WEB:
-        # WEB users see everyone
-        return Q()
+        # WEB users see everyone except explicitly ignored users
+        return ~hidden_q if hidden_q else Q()
 
     if spam_class == User.SpamClass.GRAY:
         # GRAY users see their own class but not WEB
-        return ~Q(author__spam_class=User.SpamClass.WEB)
+        hidden_q |= Q(author__spam_class=User.SpamClass.WEB)
+        return ~hidden_q if hidden_q else Q()
 
     # NORMAL or anonymous — check personal settings (default: hide both classes)
     hidden = _get_hidden_classes_for_normal(user)
     if hidden:
-        return ~Q(author__spam_class__in=hidden)
-    return Q()
+        hidden_q |= Q(author__spam_class__in=hidden)
+    return ~hidden_q if hidden_q else Q()
+
+
+def get_ignored_user_ids(user) -> set[int]:
+    if not getattr(user, "is_authenticated", False):
+        return set()
+    return set(
+        IgnoredUser.objects.filter(owner=user).values_list("ignored_user_id", flat=True)
+    )
 
 
 def _get_hidden_classes_for_normal(user) -> list:

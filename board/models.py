@@ -99,6 +99,35 @@ class User(AbstractUser):
         ]
 
 
+class IgnoredUser(models.Model):
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="ignored_users_rel"
+    )
+    ignored_user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="ignored_by_users_rel"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "forum_ignored_users"
+        unique_together = [("owner", "ignored_user")]
+        indexes = [
+            models.Index(fields=["owner"]),
+            models.Index(fields=["ignored_user"]),
+        ]
+
+    def clean(self):
+        if self.owner_id and self.owner_id == self.ignored_user_id:
+            raise ValidationError("Nie można ignorować samego siebie.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"IgnoredUser owner={self.owner_id} ignored={self.ignored_user_id}"
+
+
 class PrivateMessage(models.Model):
     """A PM stored once; delivery tracked via PrivateMessageBox entries."""
     sender    = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="sent_pms")

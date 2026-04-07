@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from django.db import models as django_models
 from django.db import transaction
 from django.shortcuts import render, get_object_or_404, redirect
+from django.urls import reverse
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -16,13 +17,13 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant, TopicReadState
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant, TopicReadState, IgnoredUser
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
 )
 from .email_utils import mask_email, mask_email_variants
-from .spam_utils import get_author_spam_filter, filter_forums
+from .spam_utils import get_author_spam_filter, filter_forums, get_ignored_user_ids
 from .middleware import invalidate_blocked_ips_cache
 from .auth_utils import prehash_password
 from .username_utils import normalize
@@ -316,6 +317,7 @@ def topic_detail(request, topic_id):
         )
     else:
         visible_post_ids = None  # None = pokaż wszystkie
+    ignored_author_ids = get_ignored_user_ids(request.user)
 
     poll = getattr(topic, "poll", None)
     poll_now = timezone.now()
@@ -382,6 +384,7 @@ def topic_detail(request, topic_id):
         "poll_user_vote_option_ids": poll_user_vote_option_ids,
         "poll_max_option_votes": poll_max_option_votes,
         "topic_participants": topic_participants,
+        "ignored_author_ids": ignored_author_ids,
     })
 
 
@@ -458,6 +461,28 @@ def vote_poll(request, topic_id):
 
     messages.success(request, "Głos zapisany.")
     return redirect("topic_detail", topic_id=topic.pk)
+
+
+@login_required
+def toggle_ignore_user(request, user_id):
+    if request.method != "POST":
+        return redirect(request.POST.get("next") or reverse("index"))
+
+    target = get_object_or_404(User, pk=user_id)
+    next_url = request.POST.get("next") or reverse("index")
+
+    if target.pk == request.user.pk:
+        messages.error(request, "Nie można ignorować samego siebie.")
+        return redirect(next_url)
+
+    ignored = IgnoredUser.objects.filter(owner=request.user, ignored_user=target)
+    if ignored.exists():
+        ignored.delete()
+        messages.success(request, f"Przestałeś ignorować użytkownika {target.username}.")
+    else:
+        IgnoredUser.objects.create(owner=request.user, ignored_user=target)
+        messages.success(request, f"Ignorujesz użytkownika {target.username}.")
+    return redirect(next_url)
 
 
 # ---------------------------------------------------------------------------
@@ -1057,6 +1082,7 @@ def search(request):
                     Topic.objects
                     .select_related("forum", "author", "last_post", "last_post__author", "poll")
                     .filter(forum__archive_level__lte=max_forum_level)
+                    .filter(get_author_spam_filter(request.user))
                 )
                 if selected_forum is not None:
                     qs = qs.filter(forum=selected_forum)
@@ -1098,6 +1124,7 @@ def search(request):
                     PostSearchIndex.objects
                     .select_related("post", "author", "topic", "forum")
                     .filter(forum__archive_level__lte=max_forum_level)
+                    .filter(get_author_spam_filter(request.user))
                 )
                 if selected_forum is not None:
                     qs = qs.filter(forum=selected_forum)
@@ -1166,6 +1193,7 @@ def new_posts(request):
     posts = (
         Post.objects.select_related("author", "topic", "topic__forum")
         .filter(topic__forum__archive_level__lte=max_forum_level)
+        .filter(get_author_spam_filter(request.user))
         .order_by("-created_at", "-pk")
     )
     page = Paginator(posts, getattr(settings, "POSTS_PER_PAGE", 20)).get_page(request.GET.get("page"))
@@ -1186,6 +1214,7 @@ def new_topics(request):
     topics = (
         Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
         .filter(forum__archive_level__lte=max_forum_level)
+        .filter(get_author_spam_filter(request.user))
         .order_by("-created_at", "-pk")
     )
     page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
@@ -1213,6 +1242,7 @@ def my_topics(request):
         .filter(
             user=request.user,
             topic__forum__archive_level__lte=request.user.archive_access,
+            topic__author_id__in=get_ignored_user_ids(request.user) if False else [],
         )
         .order_by("-last_post_at", "-topic_id")
     )
