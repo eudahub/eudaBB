@@ -304,6 +304,65 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Ala ma kota")
         self.assertNotContains(response, "Pies ma budę")
 
+    def test_new_posts_view_orders_latest_first(self):
+        author = User.objects.create_user(username="Autor6", password="x")
+        topic = self._make_topic(author, title="Nowe posty")
+        older = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Starszy post",
+            post_order=1,
+        )
+        newer = Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode="Nowszy post",
+            post_order=2,
+        )
+
+        response = self.client.get(reverse("new_posts"))
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertLess(content.find("Nowszy post"), content.find("Starszy post"))
+        self.assertContains(response, f'<a href="/post/{newer.pk}/">{topic.title}</a>', html=False)
+        self.assertContains(response, f'<a href="/post/{older.pk}/">{topic.title}</a>', html=False)
+
+    def test_new_posts_view_snippet_skips_quote_like_blocks(self):
+        author = User.objects.create_user(username="Autor7", password="x")
+        topic = self._make_topic(author, title="Nowe posty 2")
+        Post.objects.create(
+            topic=topic,
+            author=author,
+            content_bbcode='Własny tekst [quote="X"]ukryj[/quote] dalej',
+            post_order=1,
+        )
+
+        response = self.client.get(reverse("new_posts"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Własny tekst dalej")
+        self.assertNotContains(response, "ukryj")
+
+    def test_new_topics_view_shows_topic_metadata(self):
+        author = User.objects.create_user(username="Autor8", password="x")
+        other = User.objects.create_user(username="Inny8", password="x")
+        topic = self._make_topic(author, title="Świeży wątek")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Start", post_order=1)
+        last_post = Post.objects.create(topic=topic, author=other, content_bbcode="Odpowiedź", post_order=2)
+        topic.reply_count = 1
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
+
+        response = self.client.get(reverse("new_topics"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Świeży wątek")
+        self.assertContains(response, "autor pierwszego postu: Autor8")
+        self.assertContains(response, "autor ostatniego postu: Inny8")
+        self.assertContains(response, "postów: 2")
+
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")
         self.assertEqual(fragment, "def")

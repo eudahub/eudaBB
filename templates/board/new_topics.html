@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Nowe wątki{% endblock %}
+
+{% block content %}
+<h2>Nowe wątki</h2>
+
+{% if page %}
+  <p style="font-size:11px;color:#555;">
+    Wątków na tej stronie: {{ page.object_list|length }}. Łącznie: {{ page.paginator.count }}.
+  </p>
+
+  {% include "board/_pagination.html" with page=page %}
+
+  {% for topic in page.object_list %}
+    <div class="post-box" style="margin-bottom:.6rem;">
+      <div class="post-header">
+        <span>{{ topic.forum.title }}</span>
+        <span>{{ topic.created_at|date:"d.m.Y H:i" }}</span>
+      </div>
+      <div style="padding:.45rem .6rem;">
+        <div style="font-size:11px;color:#555;margin-bottom:.25rem;">
+          <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a>
+        </div>
+        <div style="font-size:11px;color:#555;">
+          autor pierwszego postu: {{ topic.author.username|default:"[usunięty]" }}
+          · <a href="/post/{{ topic.last_post_id }}/">autor ostatniego postu: {{ topic.last_post.author.username|default:"[usunięty]" }}</a>
+          · postów: {{ topic.reply_count|add:1 }}
+        </div>
+      </div>
+    </div>
+  {% empty %}
+    <p><em>Brak wątków.</em></p>
+  {% endfor %}
+
+  {% include "board/_pagination.html" with page=page %}
+{% endif %}
+{% endblock %}

@@ -27,7 +27,7 @@ from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
 from .quote_refs import rebuild_quote_references_for_post
 from .quote_selection import extract_exact_quote_fragment, normalize_selected_text
-from .search_index import normalize_search_text, strip_diacritics
+from .search_index import extract_author_search_text, normalize_search_text, strip_diacritics
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +580,18 @@ def _build_search_snippet(text: str, phrases: list[str], terms: list[str], df_ma
     return _highlight_snippet(snippet, matched_needles)
 
 
+def _build_plain_post_snippet(text: str, width: int = 320) -> str:
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    if not text:
+        return ""
+    if len(text) <= width:
+        return escape(text)
+    cut = text[:width]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return escape(cut.rstrip() + " ...")
+
+
 @login_required
 def search(request):
     raw_query = (request.GET.get("q") or "").strip()
@@ -662,6 +674,40 @@ def search(request):
         "raw_query": raw_query,
         "parsed_query": parsed,
         "info_message": info_message,
+        "page": page,
+    })
+
+
+def new_posts(request):
+    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    posts = (
+        Post.objects.select_related("author", "topic", "topic__forum")
+        .filter(topic__forum__archive_level__lte=max_forum_level)
+        .order_by("-created_at", "-pk")
+    )
+    page = Paginator(posts, getattr(settings, "POSTS_PER_PAGE", 20)).get_page(request.GET.get("page"))
+
+    for post in page.object_list:
+        post.snippet_html = _build_plain_post_snippet(
+            extract_author_search_text(post.content_bbcode),
+            width=min(500, max(180, getattr(settings, "SEARCH_SNIPPET_CHARS", 800))),
+        )
+
+    return render(request, "board/new_posts.html", {
+        "page": page,
+    })
+
+
+def new_topics(request):
+    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    topics = (
+        Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
+        .filter(forum__archive_level__lte=max_forum_level)
+        .order_by("-created_at", "-pk")
+    )
+    page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
+
+    return render(request, "board/new_topics.html", {
         "page": page,
     })
 
