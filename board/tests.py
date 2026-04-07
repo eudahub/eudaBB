@@ -272,6 +272,38 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Treść przypięta")
         self.assertContains(response, f'data-post-id="{pinned_post.pk}"', html=False)
 
+    def test_reply_view_filters_quote_picker_by_author(self):
+        author = User.objects.create_user(username="Autor4", password="x")
+        other = User.objects.create_user(username="Inny4", password="x")
+        reader = User.objects.create_user(username="Czytelnik4", password="x")
+        topic = self._make_topic(author, title="Filtrowanie")
+        post_a = Post.objects.create(topic=topic, author=author, content_bbcode="Treść autora", post_order=1)
+        Post.objects.create(topic=topic, author=other, content_bbcode="Treść innego", post_order=2)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("reply", args=[topic.pk]), {"quote_author": author.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Treść autora")
+        self.assertNotContains(response, "Treść innego")
+        self.assertContains(response, f'data-post-id="{post_a.pk}"', html=False)
+
+    def test_reply_view_filters_quote_picker_by_text(self):
+        author = User.objects.create_user(username="Autor5", password="x")
+        reader = User.objects.create_user(username="Czytelnik5", password="x")
+        topic = self._make_topic(author, title="Filtrowanie tekstu")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Ala ma kota", post_order=1)
+        Post.objects.create(topic=topic, author=author, content_bbcode="Pies ma budę", post_order=2)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("reply", args=[topic.pk]), {"quote_q": "kota"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ala ma kota")
+        self.assertNotContains(response, "Pies ma budę")
+
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")
         self.assertEqual(fragment, "def")

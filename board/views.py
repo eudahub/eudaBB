@@ -231,10 +231,54 @@ def reply(request, topic_id):
         form = ReplyForm()
 
     posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+    quote_query = (request.GET.get("quote_q") or "").strip()
+    quote_author_raw = (request.GET.get("quote_author") or "").strip()
+    quote_filter_message = ""
+    quote_authors = User.objects.filter(posts__topic=topic).distinct().order_by("username")
+    selected_quote_author = None
+
     recent_posts_qs = (
         topic.posts.select_related("author")
         .order_by("-post_order")
     )
+
+    if quote_author_raw:
+        try:
+            selected_quote_author = quote_authors.get(pk=int(quote_author_raw))
+        except (ValueError, User.DoesNotExist):
+            quote_filter_message = "Wybrany autor nie należy do tego wątku."
+        else:
+            recent_posts_qs = recent_posts_qs.filter(author=selected_quote_author)
+
+    if quote_query and not quote_filter_message:
+        parsed_quote = _parse_search_query(quote_query)
+        if not parsed_quote["phrases"] and not parsed_quote["terms"]:
+            if parsed_quote["skipped_terms"]:
+                quote_filter_message = (
+                    "W filtrze pominięto wyłącznie słowa zbyt częste: "
+                    + ", ".join(parsed_quote["skipped_terms"])
+                )
+                recent_posts_qs = recent_posts_qs.none()
+            else:
+                quote_filter_message = "Podaj tekst do szukania w wątku."
+        else:
+            search_rows = PostSearchIndex.objects.filter(topic=topic)
+            if selected_quote_author is not None:
+                search_rows = search_rows.filter(author=selected_quote_author)
+            for phrase in parsed_quote["phrases"]:
+                search_rows = search_rows.filter(content_search_author_normalized__contains=phrase)
+            for term in parsed_quote["terms"]:
+                search_rows = search_rows.filter(content_search_author_normalized__contains=term)
+            matched_post_ids = [
+                row.post_id for row in search_rows.only("post_id", "content_search_author_normalized")
+                if _matches_search_text(
+                    row.content_search_author_normalized,
+                    parsed_quote["phrases"],
+                    parsed_quote["terms"],
+                )
+            ]
+            recent_posts_qs = recent_posts_qs.filter(pk__in=matched_post_ids)
+
     recent_posts_page = Paginator(recent_posts_qs, posts_per_page).get_page(
         request.GET.get("quotes_page")
     )
@@ -255,6 +299,10 @@ def reply(request, topic_id):
         "form": form,
         "recent_posts_page": recent_posts_page,
         "pinned_topic_posts": pinned_topic_posts,
+        "quote_authors": quote_authors,
+        "quote_query": quote_query,
+        "selected_quote_author": selected_quote_author,
+        "quote_filter_message": quote_filter_message,
     })
 
 

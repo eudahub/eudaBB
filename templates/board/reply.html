@@ -78,6 +78,38 @@
 
 {# Recent posts - scrollable #}
 <strong style="font-size:11px;color:#555;">Ostatnie posty w wątku:</strong>
+<form method="get" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end;margin-top:.35rem;">
+  <div>
+    <label for="quote_q" style="display:block;font-size:11px;color:#555;">Szukaj w wątku</label>
+    <input
+      type="text"
+      name="quote_q"
+      id="quote_q"
+      value="{{ quote_query }}"
+      style="min-width:18rem;"
+    >
+  </div>
+  <div>
+    <label for="quote_author" style="display:block;font-size:11px;color:#555;">Autor</label>
+    <select name="quote_author" id="quote_author">
+      <option value="">Wszyscy</option>
+      {% for author in quote_authors %}
+        <option value="{{ author.pk }}"{% if selected_quote_author and selected_quote_author.pk == author.pk %} selected{% endif %}>
+          {{ author.username }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="display:flex;gap:.35rem;">
+    <button type="submit">Filtruj</button>
+    {% if quote_query or selected_quote_author %}
+      <a href="{% url 'reply' topic.pk %}" style="align-self:center;">Wyczyść</a>
+    {% endif %}
+  </div>
+</form>
+{% if quote_filter_message %}
+  <p style="margin:.35rem 0 0 0;font-size:11px;color:#7a1f1f;">{{ quote_filter_message }}</p>
+{% endif %}
 <div id="recent-posts-panel"
      style="max-height:320px;overflow-y:scroll;border:1px solid #BC8F8F;
             margin-top:.3rem;font-size:11px;line-height:1.5;">
@@ -105,7 +137,7 @@
 {% if recent_posts_page.paginator.num_pages > 1 %}
   <div style="display:flex;gap:.8rem;align-items:center;justify-content:center;margin-top:.45rem;font-size:11px;">
     {% if recent_posts_page.has_previous %}
-      <a href="?quotes_page={{ recent_posts_page.previous_page_number }}">Nowsze</a>
+      <a href="?quotes_page={{ recent_posts_page.previous_page_number }}{% if quote_query %}&quote_q={{ quote_query|urlencode }}{% endif %}{% if selected_quote_author %}&quote_author={{ selected_quote_author.pk }}{% endif %}">Nowsze</a>
     {% else %}
       <span style="color:#999;">Nowsze</span>
     {% endif %}
@@ -113,7 +145,7 @@
       Strona {{ recent_posts_page.number }} / {{ recent_posts_page.paginator.num_pages }}
     </span>
     {% if recent_posts_page.has_next %}
-      <a href="?quotes_page={{ recent_posts_page.next_page_number }}">Starsze</a>
+      <a href="?quotes_page={{ recent_posts_page.next_page_number }}{% if quote_query %}&quote_q={{ quote_query|urlencode }}{% endif %}{% if selected_quote_author %}&quote_author={{ selected_quote_author.pk }}{% endif %}">Starsze</a>
     {% else %}
       <span style="color:#999;">Starsze</span>
     {% endif %}
