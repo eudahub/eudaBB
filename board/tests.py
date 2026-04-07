@@ -3,11 +3,12 @@ from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Forum, Section, Topic, User, Post
+from .models import Forum, Poll, PollOption, Section, Topic, User, Post
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
 from .forms import NewTopicForm, TOPIC_TITLE_MAX_LENGTH, validate_pm_content, validate_post_content
+from .polls import parse_poll_results_text
 from .search_index import extract_author_search_text, rebuild_post_search_index_for_posts
 from .user_rename import rename_user_and_update_quotes
 from .username_utils import normalize
@@ -364,6 +365,62 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "autor ostatniego postu: Inny8")
         self.assertContains(response, "postów: 2")
 
+    def test_search_topics_mode_matches_title_and_marks_poll_topics(self):
+        reader = User.objects.create_user(username="CzytelnikSearch1", password="x")
+        author = User.objects.create_user(username="AutorSearch1", password="x")
+        matching = self._make_topic(author, title="Czy załoga Apollo 11 widziała coś?")
+        other = self._make_topic(author, title="Zwykły temat bez matcha")
+        last_post = Post.objects.create(topic=matching, author=author, content_bbcode="Start", post_order=1)
+        matching.last_post = last_post
+        matching.last_post_at = last_post.created_at
+        matching.save(update_fields=["last_post", "last_post_at"])
+        Poll.objects.create(
+            topic=matching,
+            question="Pytanie?",
+            is_closed=True,
+            is_archived_import=True,
+            total_votes=0,
+        )
+        Post.objects.create(topic=other, author=author, content_bbcode="Start 2", post_order=1)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "topics", "q": "apollo 11"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Czy załoga Apollo 11 widziała coś?")
+        self.assertNotContains(response, "Zwykły temat bez matcha")
+        self.assertContains(response, "ankieta")
+
+    def test_search_topics_mode_can_filter_only_poll_topics_without_query(self):
+        reader = User.objects.create_user(username="CzytelnikSearch2", password="x")
+        author = User.objects.create_user(username="AutorSearch2", password="x")
+        with_poll = self._make_topic(author, title="Temat z ankietą")
+        without_poll = self._make_topic(author, title="Temat bez ankiety")
+        with_poll_last = Post.objects.create(topic=with_poll, author=author, content_bbcode="Start", post_order=1)
+        without_poll_last = Post.objects.create(topic=without_poll, author=author, content_bbcode="Start", post_order=1)
+        with_poll.last_post = with_poll_last
+        with_poll.last_post_at = with_poll_last.created_at
+        with_poll.save(update_fields=["last_post", "last_post_at"])
+        without_poll.last_post = without_poll_last
+        without_poll.last_post_at = without_poll_last.created_at
+        without_poll.save(update_fields=["last_post", "last_post_at"])
+        Poll.objects.create(
+            topic=with_poll,
+            question="Pytanie?",
+            is_closed=True,
+            is_archived_import=True,
+            total_votes=0,
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "topics", "has_poll": "1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Temat z ankietą")
+        self.assertNotContains(response, "Temat bez ankiety")
+
     def test_new_topic_form_limits_title_length_to_70(self):
         form = NewTopicForm(data={
             "title": "x" * (TOPIC_TITLE_MAX_LENGTH + 1),
@@ -390,6 +447,65 @@ class UserRenameTests(TestCase):
 
         _, _, errors = validate_pm_content("x" * 49999, original_size=50000)
         self.assertFalse(errors)
+
+    def test_parse_poll_results_text(self):
+        parsed = parse_poll_results_text(
+            "Pytanie?\n"
+            "Tak | 25% | [ 8 ]\n"
+            "Nie | 75% | [ 24 ]\n"
+            "Wszystkich Głosów : 32"
+        )
+
+        self.assertEqual(parsed["question"], "Pytanie?")
+        self.assertEqual(parsed["total_votes"], 32)
+        self.assertEqual(parsed["options"][0]["option_text"], "Tak")
+        self.assertEqual(parsed["options"][0]["vote_count"], 8)
+        self.assertEqual(parsed["options"][1]["option_text"], "Nie")
+        self.assertEqual(parsed["options"][1]["vote_count"], 24)
+
+    def test_archived_poll_models_store_results(self):
+        author = User.objects.create_user(username="Autor9", password="x")
+        topic = self._make_topic(author, title="Ankieta")
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Pytanie?",
+            is_closed=True,
+            is_archived_import=True,
+            total_votes=32,
+            imported_results_text="raw",
+        )
+        PollOption.objects.create(poll=poll, option_text="Tak", vote_count=8, sort_order=1)
+        PollOption.objects.create(poll=poll, option_text="Nie", vote_count=24, sort_order=2)
+
+        self.assertEqual(topic.poll.question, "Pytanie?")
+        self.assertEqual(topic.poll.options.count(), 2)
+        self.assertEqual(topic.poll.options.order_by("sort_order").first().option_text, "Tak")
+
+    def test_topic_detail_renders_archived_poll_results(self):
+        author = User.objects.create_user(username="Autor10", password="x")
+        reader = User.objects.create_user(username="Czytelnik10", password="x")
+        topic = self._make_topic(author, title="Ankieta render")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Treść posta", post_order=1)
+        poll = Poll.objects.create(
+            topic=topic,
+            question="Czy tak?",
+            is_closed=True,
+            is_archived_import=True,
+            total_votes=10,
+        )
+        PollOption.objects.create(poll=poll, option_text="Tak", vote_count=7, sort_order=1)
+        PollOption.objects.create(poll=poll, option_text="Nie", vote_count=3, sort_order=2)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("topic_detail", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ankieta")
+        self.assertContains(response, "Czy tak?")
+        self.assertContains(response, "Tak")
+        self.assertContains(response, "Nie")
+        self.assertContains(response, "Łącznie głosów: 10")
 
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")

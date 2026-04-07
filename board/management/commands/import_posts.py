@@ -201,6 +201,7 @@ class Command(BaseCommand):
 
                     topic = Topic.objects.create(
                         forum=forum,
+                        archive_topic_id=archive_topic_id,
                         title=first["topic_title"],
                         author=topic_author,
                         topic_type=topic_type,
@@ -228,6 +229,7 @@ class Command(BaseCommand):
                     dt = parse_pl_date(row["created_at"])
                     post_objects.append(Post(
                         topic=topic,
+                        archive_post_id=row["post_id"],
                         author=author,
                         subject=row["subject"] or "",
                         content_bbcode=content_bbcode,

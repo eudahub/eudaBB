@@ -9,6 +9,7 @@ ADMIN_DB="${ARCHIVER_DIR}/sfinia_users_admin.db"
 REAL_DB="${ARCHIVER_DIR}/sfinia_users_real.db"
 IMPORT_DB="${ARCHIVER_DIR}/sfinia_import.db"
 ARCHIVE_DB="${ARCHIVER_DIR}/sfiniabb.db"
+AVATARS_DIR="${ARCHIVER_DIR}/admin_avatars"
 
 RUNSERVER_BIND="${1:-127.0.0.1:8000}"
 
@@ -47,7 +48,12 @@ python manage.py build_import_db \
   "${IMPORT_DB}"
 
 echo "==> Import userów"
-python manage.py import_from_sfinia "${IMPORT_DB}"
+if [[ -d "${AVATARS_DIR}" ]]; then
+  python manage.py import_from_sfinia "${IMPORT_DB}" --avatars-dir "${AVATARS_DIR}"
+else
+  echo "Uwaga: brak katalogu awatarów ${AVATARS_DIR}, import bez awatarów." >&2
+  python manage.py import_from_sfinia "${IMPORT_DB}"
+fi
 
 echo "==> Import spam_class"
 python manage.py import_spam_classes "${REAL_DB}"
@@ -58,8 +64,14 @@ python manage.py import_forums "${ARCHIVE_DB}"
 echo "==> Import postów"
 python manage.py import_posts "${ARCHIVE_DB}"
 
+echo "==> Import ankiet"
+python manage.py import_polls "${ARCHIVE_DB}"
+
+echo "==> Budowa indeksu wyszukiwania"
+python manage.py build_search_index
+
 echo "==> Tworzenie konta root"
 python manage.py create_root
 
 echo "==> Start serwera: ${RUNSERVER_BIND}"
-python manage.py runserver "${RUNSERVER_BIND}"
+#python manage.py runserver "${RUNSERVER_BIND}"

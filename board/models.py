@@ -290,6 +290,9 @@ class Topic(models.Model):
         ANNOUNCEMENT = 2, "Announcement"
 
     forum = models.ForeignKey(Forum, on_delete=models.CASCADE, related_name="topics")
+    archive_topic_id = models.PositiveIntegerField(
+        null=True, blank=True, db_index=True
+    )
     title = models.CharField(max_length=255)
     author = models.ForeignKey(
         User, on_delete=models.SET_NULL,
@@ -362,6 +365,9 @@ class TorExitNode(models.Model):
 class Post(models.Model):
     """A single post within a topic."""
     topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="posts")
+    archive_post_id = models.PositiveIntegerField(
+        null=True, blank=True, db_index=True
+    )
     author = models.ForeignKey(
         User, on_delete=models.SET_NULL,
         null=True, related_name="posts",
@@ -469,6 +475,85 @@ class PostSearchIndex(models.Model):
 
     def __str__(self):
         return f"PostSearch post={self.post_id}"
+
+
+class Poll(models.Model):
+    """Thread poll, both imported archival polls and native future polls."""
+
+    topic = models.OneToOneField(
+        Topic, on_delete=models.CASCADE, related_name="poll"
+    )
+    question = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    is_closed = models.BooleanField(default=False)
+    allow_vote_change = models.BooleanField(default=False)
+    allow_multiple_choice = models.BooleanField(default=False)
+    is_archived_import = models.BooleanField(default=False)
+    total_votes = models.PositiveIntegerField(default=0)
+    source_visibility = models.IntegerField(default=0)
+    imported_results_text = models.TextField(blank=True, default="")
+    imported_fetched_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "forum_polls"
+        indexes = [
+            models.Index(fields=["is_closed", "ends_at"]),
+            models.Index(fields=["is_archived_import"]),
+        ]
+
+    def __str__(self):
+        return f"Poll topic={self.topic_id}"
+
+
+class PollOption(models.Model):
+    """One option inside a poll."""
+
+    poll = models.ForeignKey(
+        Poll, on_delete=models.CASCADE, related_name="options"
+    )
+    option_text = models.TextField()
+    vote_count = models.PositiveIntegerField(default=0)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "forum_poll_options"
+        ordering = ["sort_order", "id"]
+        unique_together = [("poll", "sort_order")]
+
+    def __str__(self):
+        return f"PollOption poll={self.poll_id} #{self.sort_order}"
+
+
+class PollVote(models.Model):
+    """Per-user vote record for native polls.
+
+    Imported archival polls do not populate this table because the archive does
+    not contain per-user voting data.
+    """
+
+    poll = models.ForeignKey(
+        Poll, on_delete=models.CASCADE, related_name="votes"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="poll_votes"
+    )
+    option = models.ForeignKey(
+        PollOption, on_delete=models.CASCADE, related_name="votes"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "forum_poll_votes"
+        indexes = [
+            models.Index(fields=["poll", "user"]),
+            models.Index(fields=["option"]),
+        ]
+        unique_together = [("poll", "user", "option")]
+
+    def __str__(self):
+        return f"PollVote poll={self.poll_id} user={self.user_id} option={self.option_id}"
 
 
 class SiteConfig(models.Model):

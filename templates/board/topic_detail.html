@@ -12,6 +12,36 @@
 <h2>{{ topic.title }}</h2>
 {% if topic.is_locked %}<p class="locked-notice">🔒 Wątek zamknięty — odpowiadanie wyłączone.</p>{% endif %}
 
+{% if topic.poll %}
+  <div class="post-box" style="margin-bottom:.7rem;">
+    <div class="post-header">
+      <span>Ankieta</span>
+      <span>{% if topic.poll.is_closed %}zamknięta{% else %}otwarta{% endif %}</span>
+    </div>
+    <div style="padding:.55rem .7rem;">
+      <div style="font-weight:bold;margin-bottom:.45rem;">{{ topic.poll.question }}</div>
+      {% for option in topic.poll.options.all %}
+        <div style="margin-bottom:.45rem;">
+          <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:11px;">
+            <span>{{ option.option_text }}</span>
+            <span>
+              {% widthratio option.vote_count topic.poll.total_votes|default:1 100 as option_pct %}
+              {{ option.vote_count }} gł.
+              {% if topic.poll.total_votes %}· {{ option_pct }}%{% endif %}
+            </span>
+          </div>
+          <div style="height:10px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.15rem;">
+            <div style="height:100%;background:#800000;width:{% if topic.poll.total_votes %}{% widthratio option.vote_count topic.poll.total_votes 100 %}{% else %}0{% endif %}%;"></div>
+          </div>
+        </div>
+      {% endfor %}
+      <div style="font-size:11px;color:#555;margin-top:.35rem;">
+        Łącznie głosów: {{ topic.poll.total_votes }}
+      </div>
+    </div>
+  </div>
+{% endif %}
+
 {% include "board/_pagination.html" %}
 
 {% for post in page.object_list %}

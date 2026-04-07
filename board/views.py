@@ -125,7 +125,10 @@ def forum_detail(request, forum_id):
 
 def topic_detail(request, topic_id):
     """Post list for a single topic, paginated. Increments view counter."""
-    topic = get_object_or_404(Topic, pk=topic_id)
+    topic = get_object_or_404(
+        Topic.objects.select_related("poll").prefetch_related("poll__options"),
+        pk=topic_id,
+    )
 
     # Increment view counter (simple version — no dedup)
     Topic.objects.filter(pk=topic_id).update(view_count=topic.view_count + 1)
@@ -601,6 +604,10 @@ def _build_plain_post_snippet(text: str, width: int = 320) -> str:
 def search(request):
     raw_query = (request.GET.get("q") or "").strip()
     forum_id_raw = (request.GET.get("forum_id") or "").strip()
+    search_mode = (request.GET.get("mode") or "posts").strip().lower()
+    if search_mode not in {"posts", "topics"}:
+        search_mode = "posts"
+    polls_only = (request.GET.get("has_poll") or "").strip() == "1"
     page_num = request.GET.get("page")
 
     indexed_forums = Forum.objects.filter(search_posts__isnull=False).distinct().order_by("title")
@@ -615,63 +622,100 @@ def search(request):
     except Exception:
         pass
 
+    pagination_query = request.GET.copy()
+    pagination_query.pop("page", None)
+    page_query = pagination_query.urlencode()
+
     if forum_id_raw:
         try:
             selected_forum = indexed_forums.get(pk=int(forum_id_raw))
         except (ValueError, Forum.DoesNotExist):
             info_message = "Wybrane forum nie istnieje w indeksie wyszukiwania."
 
-    if raw_query and not info_message:
+    if (raw_query or (search_mode == "topics" and polls_only)) and not info_message:
         parsed = _parse_search_query(raw_query)
         if not parsed["phrases"] and not parsed["terms"]:
-            if parsed["skipped_terms"]:
+            if search_mode == "topics" and polls_only:
+                pass
+            elif parsed["skipped_terms"]:
                 info_message = (
                     "Zapytanie składa się wyłącznie ze słów pomijanych: "
                     + ", ".join(parsed["skipped_terms"])
                 )
             else:
                 info_message = "Podaj szukany tekst."
-        else:
+        if not info_message:
             max_forum_level = getattr(request.user, "archive_access", 0)
-            qs = (
-                PostSearchIndex.objects
-                .select_related("post", "author", "topic", "forum")
-                .filter(forum__archive_level__lte=max_forum_level)
-            )
-            if selected_forum is not None:
-                qs = qs.filter(forum=selected_forum)
-
-            for phrase in parsed["phrases"]:
-                qs = qs.filter(content_search_author_normalized__contains=phrase)
-            for term in parsed["terms"]:
-                qs = qs.filter(content_search_author_normalized__contains=term)
-
-            matched_rows = [
-                row for row in qs.order_by("-created_at", "-post_id")
-                if _matches_search_text(
-                    row.content_search_author_normalized,
-                    parsed["phrases"],
-                    parsed["terms"],
+            if search_mode == "topics":
+                qs = (
+                    Topic.objects
+                    .select_related("forum", "author", "last_post", "last_post__author", "poll")
+                    .filter(forum__archive_level__lte=max_forum_level)
                 )
-            ]
+                if selected_forum is not None:
+                    qs = qs.filter(forum=selected_forum)
+                if polls_only:
+                    qs = qs.filter(poll__isnull=False)
 
-            paginator = Paginator(matched_rows, getattr(settings, "POSTS_PER_PAGE", 20))
-            page = paginator.get_page(page_num)
-            if page is not None:
-                df_map = {}
-                for term in parsed["terms"]:
-                    df_map[term] = sum(
-                        1 for row in matched_rows
-                        if _find_match_start(row.content_search_author_normalized, term) != -1
+                matched_topics = []
+                for topic in qs.order_by("-created_at", "-pk"):
+                    title_normalized = normalize_search_text(topic.title)
+                    if parsed["phrases"] or parsed["terms"]:
+                        if not _matches_search_text(
+                            title_normalized,
+                            parsed["phrases"],
+                            parsed["terms"],
+                        ):
+                            continue
+                    topic.title_html = _highlight_snippet(
+                        topic.title,
+                        parsed["phrases"] + parsed["terms"],
                     )
-                for row in page.object_list:
-                    row.snippet_html = _build_search_snippet(
-                        row.content_search_author,
+                    topic.has_poll = getattr(topic, "poll", None) is not None
+                    matched_topics.append(topic)
+
+                paginator = Paginator(matched_topics, getattr(settings, "TOPICS_PER_PAGE", 30))
+                page = paginator.get_page(page_num)
+            else:
+                qs = (
+                    PostSearchIndex.objects
+                    .select_related("post", "author", "topic", "forum")
+                    .filter(forum__archive_level__lte=max_forum_level)
+                )
+                if selected_forum is not None:
+                    qs = qs.filter(forum=selected_forum)
+
+                for phrase in parsed["phrases"]:
+                    qs = qs.filter(content_search_author_normalized__contains=phrase)
+                for term in parsed["terms"]:
+                    qs = qs.filter(content_search_author_normalized__contains=term)
+
+                matched_rows = [
+                    row for row in qs.order_by("-created_at", "-post_id")
+                    if _matches_search_text(
+                        row.content_search_author_normalized,
                         parsed["phrases"],
                         parsed["terms"],
-                        df_map,
-                        width=snippet_width,
                     )
+                ]
+
+                paginator = Paginator(matched_rows, getattr(settings, "POSTS_PER_PAGE", 20))
+                page = paginator.get_page(page_num)
+                if page is not None:
+                    df_map = {}
+                    for term in parsed["terms"]:
+                        df_map[term] = sum(
+                            1 for row in matched_rows
+                            if _find_match_start(row.content_search_author_normalized, term) != -1
+                        )
+                    for row in page.object_list:
+                        row.snippet_html = _build_search_snippet(
+                            row.content_search_author,
+                            parsed["phrases"],
+                            parsed["terms"],
+                            df_map,
+                            width=snippet_width,
+                        )
 
     return render(request, "board/search.html", {
         "indexed_forums": indexed_forums,
@@ -680,6 +724,9 @@ def search(request):
         "parsed_query": parsed,
         "info_message": info_message,
         "page": page,
+        "search_mode": search_mode,
+        "polls_only": polls_only,
+        "page_query": page_query,
     })
 
 
