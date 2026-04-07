@@ -14,7 +14,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostSearchIndex
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostSearchIndex, SiteConfig
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content,
@@ -527,6 +527,12 @@ def search(request):
     parsed = {"phrases": [], "terms": [], "skipped_terms": []}
     page = None
     info_message = ""
+    snippet_width = max(80, getattr(settings, "SEARCH_SNIPPET_CHARS", 800))
+
+    try:
+        snippet_width = max(80, SiteConfig.get().search_snippet_chars)
+    except Exception:
+        pass
 
     if forum_id_raw:
         try:
@@ -583,7 +589,7 @@ def search(request):
                         parsed["phrases"],
                         parsed["terms"],
                         df_map,
-                        width=max(80, getattr(settings, "SEARCH_SNIPPET_CHARS", 220)),
+                        width=snippet_width,
                     )
 
     return render(request, "board/search.html", {
@@ -1615,6 +1621,14 @@ def root_config(request):
         else:
             cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
             cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
+            try:
+                cfg.search_snippet_chars = max(
+                    80,
+                    int(request.POST.get("search_snippet_chars", cfg.search_snippet_chars)),
+                )
+            except (TypeError, ValueError):
+                messages.error(request, "Długość snippetu musi być liczbą całkowitą.")
+                return redirect("root_config")
             cfg.save()
         return redirect("root_config")
 

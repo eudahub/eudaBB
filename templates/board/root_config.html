@@ -30,6 +30,22 @@
       </label>
     </fieldset>
 
+    <fieldset style="margin-top:.8rem;">
+      <legend>Wyszukiwanie</legend>
+      <label for="search_snippet_chars">Długość snippetu wyników</label>
+      <input
+        type="number"
+        name="search_snippet_chars"
+        id="search_snippet_chars"
+        min="80"
+        step="10"
+        value="{{ cfg.search_snippet_chars }}"
+      >
+      <p style="font-size:11px;color:#555;margin:.3rem 0 0 0;">
+        Liczba znaków pokazywana wokół najlepszego trafienia w wynikach wyszukiwania.
+      </p>
+    </fieldset>
+
     <div style="margin-top:1rem;display:flex;gap:.5rem;">
       <button type="submit">Zapisz</button>
       <a href="/">Anuluj</a>

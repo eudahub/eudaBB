@@ -487,6 +487,7 @@ class SiteConfig(models.Model):
 
     # Show "Przełącz" link in nav (lets you quickly switch accounts — test use only)
     show_switch_link = models.BooleanField(default=False)
+    search_snippet_chars = models.PositiveIntegerField(default=800)
 
     class Meta:
         db_table = "forum_siteconfig"
