@@ -1,3 +1,5 @@
+import time
+
 from django.core.management.base import BaseCommand, CommandError
 
 from board.models import Forum, Post
@@ -19,6 +21,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        started = time.monotonic()
         posts = Post.objects.select_related("topic", "topic__forum", "author").order_by("pk")
         forum_id = options.get("forum_id")
         forum_title = (options.get("forum_title") or "").strip()
@@ -49,6 +52,10 @@ class Command(BaseCommand):
             self.stdout.write("Buduję indeks wyszukiwania dla wszystkich forów…")
 
         total = rebuild_post_search_index_for_posts(posts)
+        elapsed = time.monotonic() - started
         self.stdout.write(self.style.SUCCESS(
             f"Gotowe. Zbudowano rekordów indeksu: {total}"
         ))
+        self.stdout.write(
+            f"Czas: {elapsed:.1f} s ({elapsed / 60:.2f} min)"
+        )

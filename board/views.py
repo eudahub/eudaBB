@@ -238,10 +238,24 @@ def reply(request, topic_id):
     recent_posts_page = Paginator(recent_posts_qs, posts_per_page).get_page(
         request.GET.get("quotes_page")
     )
+    pinned_topic_posts = (
+        Post.objects.select_related("author", "topic")
+        .filter(
+            topic__forum=topic.forum,
+            post_order=1,
+            topic__topic_type__in=[
+                Topic.TopicType.STICKY,
+                Topic.TopicType.ANNOUNCEMENT,
+            ],
+        )
+        .exclude(topic=topic)
+        .order_by("-topic__topic_type", "-topic__last_post_at", "topic_id")[:12]
+    )
     return render(request, "board/reply.html", {
         "topic": topic,
         "form": form,
         "recent_posts_page": recent_posts_page,
+        "pinned_topic_posts": pinned_topic_posts,
     })
 
 

@@ -232,6 +232,38 @@ class UserRenameTests(TestCase):
         self.assertContains(response_page_2, "?quotes_page=1")
         self.assertContains(response_page_2, "Treść 1")
 
+    def test_reply_view_renders_pinned_topic_first_posts(self):
+        author = User.objects.create_user(username="Autor3", password="x")
+        reader = User.objects.create_user(username="Czytelnik3", password="x")
+        topic = self._make_topic(author, title="Bieżący temat")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Treść bieżąca", post_order=1)
+
+        sticky_topic = Topic.objects.create(
+            forum=self.forum,
+            title="Regulamin",
+            author=author,
+            topic_type=Topic.TopicType.STICKY,
+        )
+        pinned_post = Post.objects.create(
+            topic=sticky_topic,
+            author=author,
+            content_bbcode="Treść przypięta",
+            post_order=1,
+        )
+        sticky_topic.last_post = pinned_post
+        sticky_topic.last_post_at = pinned_post.created_at
+        sticky_topic.save(update_fields=["last_post", "last_post_at"])
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("reply", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Przypięte:")
+        self.assertContains(response, "Regulamin")
+        self.assertContains(response, "Treść przypięta")
+        self.assertContains(response, f'data-post-id="{pinned_post.pk}"', html=False)
+
     def test_extract_exact_quote_fragment_for_plain_text(self):
         fragment = extract_exact_quote_fragment("abc def ghi", "def")
         self.assertEqual(fragment, "def")

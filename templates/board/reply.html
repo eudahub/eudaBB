@@ -120,6 +120,35 @@
   </div>
 {% endif %}
 
+{% if pinned_topic_posts %}
+  <div style="margin-top:1rem;">
+    <strong style="font-size:11px;color:#555;">Przypięte:</strong>
+    <div
+      id="pinned-posts-panel"
+      style="max-height:280px;overflow-y:auto;border:1px solid #BC8F8F;
+             margin-top:.3rem;font-size:11px;line-height:1.5;background:#fffaf8;"
+    >
+      {% for post in pinned_topic_posts %}
+        <div data-quote-post="1"
+             data-post-id="{{ post.pk }}"
+             data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
+             data-bbcode="{{ post.content_bbcode|escape }}"
+             style="padding:.3rem .5rem;border-bottom:1px solid #e0d0d0;
+                    {% if forloop.last %}border-bottom:none;{% endif %}">
+          <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+            <span style="color:#800000;font-weight:bold;">{{ post.topic.title }}</span>
+            <span style="color:#666;">· {{ post.author.username|default:"[usunięty]" }}</span>
+            <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
+            <button type="button" class="recent-quote-btn" data-keep-selection="1" onclick="quoteRecentPost(this)"
+                    style="margin-left:auto;">Cytuj</button>
+          </div>
+          <div style="margin-top:.2rem;" data-post-content="1">{{ post|post_content }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
 <script>
 // Load draft from quick reply
 (function(){
