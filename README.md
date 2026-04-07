@@ -153,6 +153,67 @@ python manage.py rebuild_quote_refs
 - When a selection includes a nested quote, the system tries to preserve the nested `[quote ... post_id=...]`; if the selection cuts through it, it may build a shortened version using `(...)`.
 - Regular `quote` requires `post_id` and is validated on submit. `fquote` remains for outside sources.
 
+## Search — stop-word candidates
+
+Based on `content_user` analysis from `sfiniabb.db`:
+- the main metric is `df` (`document frequency`), meaning in how many posts a token appears
+- analysis normalization:
+  - case-insensitive
+  - diacritic-insensitive
+  - no stemming
+- stop-words should apply only to plain `AND` tokens, not to quoted phrases
+
+### Safe starter list
+
+- `nie`
+- `to`
+- `w`
+- `i`
+- `sie`
+- `ze`
+- `na`
+- `z`
+- `a`
+- `do`
+- `o`
+- `ale`
+
+### Test list
+
+- `co`
+- `jak`
+- `tak`
+- `bo`
+- `tym`
+- `tego`
+- `ma`
+- `czy`
+- `od`
+- `po`
+- `ja`
+- `sa`
+- `za`
+- `dla`
+- `juz`
+- `sobie`
+- `byc`
+- `jesli`
+- `tu`
+
+### Keep for now
+
+- `jest`
+- `tylko`
+- `moze`
+- `mozna`
+- `bardzo`
+- `albo`
+
+Notes:
+- artifacts such as `b`, `http`, `www`, `pl` should not become stop-words; they should be handled by better tokenization / cleanup
+- if the user searches for a single stop-word such as `do`, the system may skip it and show a short notice
+- if the user searches for a phrase such as `"do rzeczy"`, then `do` must stay inside the phrase
+
 ## Production (nginx + gunicorn)
 
 ```bash

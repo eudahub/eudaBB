@@ -153,6 +153,67 @@ python manage.py rebuild_quote_refs
 - Przy selekcji obejmującej cytat w cytacie system stara się zachować zagnieżdżony `[quote ... post_id=...]`; jeśli zaznaczenie przecina taki cytat, może zbudować jego skróconą wersję z `(...)`.
 - Zwykły `quote` ma obowiązkowy `post_id` i jest walidowany przy zapisie. `fquote` zostaje do cytatów zewnętrznych.
 
+## Wyszukiwarka — kandydaci na stop-words
+
+Na bazie analizy `content_user` z `sfiniabb.db`:
+- liczymy przede wszystkim `df` (`document frequency`), czyli w ilu postach występuje słowo
+- normalizacja do analizy:
+  - bez rozróżniania wielkości liter
+  - bez rozróżniania diakrytyków
+  - bez stemmingu
+- stop-words stosujemy tylko do zwykłych tokenów `AND`, nie do fraz w cudzysłowie
+
+### Bezpieczna lista startowa
+
+- `nie`
+- `to`
+- `w`
+- `i`
+- `sie`
+- `ze`
+- `na`
+- `z`
+- `a`
+- `do`
+- `o`
+- `ale`
+
+### Lista do testów
+
+- `co`
+- `jak`
+- `tak`
+- `bo`
+- `tym`
+- `tego`
+- `ma`
+- `czy`
+- `od`
+- `po`
+- `ja`
+- `sa`
+- `za`
+- `dla`
+- `juz`
+- `sobie`
+- `byc`
+- `jesli`
+- `tu`
+
+### Na razie nie pomijać
+
+- `jest`
+- `tylko`
+- `moze`
+- `mozna`
+- `bardzo`
+- `albo`
+
+Uwagi:
+- artefakty typu `b`, `http`, `www`, `pl` nie powinny trafiać do stop-words; to problem tokenizacji / czyszczenia danych
+- jeśli user wpisze samo słowo pomijane, np. `do`, system może je pominąć i pokazać krótką informację
+- jeśli user wpisze frazę, np. `"do rzeczy"`, to słowo `do` nie może być usunięte z frazy
+
 ## Produkcja (nginx + gunicorn)
 
 ```bash
