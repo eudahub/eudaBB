@@ -41,6 +41,14 @@
         <option value="polls"{% if search_filter == "polls" %} selected{% endif %}>Z ankietami</option>
       </select>
     </label>
+    <label style="flex:0 1 220px;">
+      <span>Od</span>
+      <input type="datetime-local" name="date_from" value="{{ date_from_raw }}">
+    </label>
+    <label style="flex:0 1 220px;">
+      <span>Do</span>
+      <input type="datetime-local" name="date_to" value="{{ date_to_raw }}">
+    </label>
     <button type="submit">Szukaj</button>
   </div>
   <p style="margin-top:.4rem;font-size:11px;color:#555;">

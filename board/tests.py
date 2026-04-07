@@ -1,7 +1,10 @@
+from datetime import timedelta
+
 from django.core.exceptions import ValidationError
 from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post, TopicParticipant, TopicReadState
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
@@ -794,6 +797,52 @@ class UserRenameTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "youtube")
         self.assertNotContains(response, "Sam tekst bez filmu")
+
+    def test_search_posts_mode_can_filter_by_datetime_range_without_query(self):
+        reader = User.objects.create_user(username="CzytelnikSearchDate1", password="x")
+        author = User.objects.create_user(username="AutorSearchDate1", password="x")
+        topic = self._make_topic(author, title="Daty postów")
+        older = Post.objects.create(topic=topic, author=author, content_bbcode="Starszy post", post_order=1)
+        newer = Post.objects.create(topic=topic, author=author, content_bbcode="Nowszy post", post_order=2)
+        old_dt = timezone.now() - timedelta(days=10)
+        new_dt = timezone.now() - timedelta(days=1)
+        Post.objects.filter(pk=older.pk).update(created_at=old_dt)
+        Post.objects.filter(pk=newer.pk).update(created_at=new_dt)
+        rebuild_post_search_index_for_posts(
+            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+        )
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {
+            "mode": "posts",
+            "date_from": (timezone.now() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M"),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nowszy post")
+        self.assertNotContains(response, "Starszy post")
+
+    def test_search_topics_mode_can_filter_by_datetime_range_without_query(self):
+        reader = User.objects.create_user(username="CzytelnikSearchDate2", password="x")
+        author = User.objects.create_user(username="AutorSearchDate2", password="x")
+        older = self._make_topic(author, title="Starszy temat")
+        newer = self._make_topic(author, title="Nowszy temat")
+        old_dt = timezone.now() - timedelta(days=10)
+        new_dt = timezone.now() - timedelta(days=1)
+        Topic.objects.filter(pk=older.pk).update(created_at=old_dt)
+        Topic.objects.filter(pk=newer.pk).update(created_at=new_dt)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {
+            "mode": "topics",
+            "date_from": (timezone.now() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M"),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nowszy temat")
+        self.assertNotContains(response, "Starszy temat")
 
     def test_search_posts_mode_can_filter_by_author_without_query(self):
         reader = User.objects.create_user(username="CzytelnikSearch5", password="x")

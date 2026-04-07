@@ -1,7 +1,7 @@
 import secrets
 import re
 from html import escape
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.db import models as django_models
 from django.db import transaction
@@ -13,6 +13,7 @@ from django.http import HttpResponseForbidden
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.conf import settings
 
 from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant, TopicReadState
@@ -951,11 +952,35 @@ def _build_plain_post_snippet(text: str, width: int = 320) -> str:
     return escape(cut.rstrip() + " ...")
 
 
+def _parse_search_bound(value: str, *, is_end: bool):
+    value = (value or "").strip()
+    if not value:
+        return None
+
+    dt = parse_datetime(value)
+    if dt is not None:
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
+
+    only_date = parse_date(value)
+    if only_date is None:
+        return None
+
+    bound_time = time.max if is_end else time.min
+    return timezone.make_aware(
+        datetime.combine(only_date, bound_time),
+        timezone.get_current_timezone(),
+    )
+
+
 @login_required
 def search(request):
     raw_query = (request.GET.get("q") or "").strip()
     forum_id_raw = (request.GET.get("forum_id") or "").strip()
     author_query_raw = (request.GET.get("author") or "").strip()
+    date_from_raw = (request.GET.get("date_from") or "").strip()
+    date_to_raw = (request.GET.get("date_to") or "").strip()
     search_mode = (request.GET.get("mode") or "posts").strip().lower()
     if search_mode not in {"posts", "topics"}:
         search_mode = "posts"
@@ -975,6 +1000,8 @@ def search(request):
     page = None
     info_message = ""
     snippet_width = max(80, getattr(settings, "SEARCH_SNIPPET_CHARS", 800))
+    date_from = None
+    date_to = None
 
     try:
         snippet_width = max(80, SiteConfig.get().search_snippet_chars)
@@ -998,10 +1025,23 @@ def search(request):
         if selected_author is None:
             info_message = "Nie znaleziono użytkownika o podanym nicku."
 
-    if (raw_query or search_filter != "all" or selected_author is not None) and not info_message:
+    if not info_message and date_from_raw:
+        date_from = _parse_search_bound(date_from_raw, is_end=False)
+        if date_from is None:
+            info_message = "Nieprawidłowa data początkowa."
+
+    if not info_message and date_to_raw:
+        date_to = _parse_search_bound(date_to_raw, is_end=True)
+        if date_to is None:
+            info_message = "Nieprawidłowa data końcowa."
+
+    if not info_message and date_from and date_to and date_from > date_to:
+        info_message = "Data początkowa nie może być późniejsza niż końcowa."
+
+    if (raw_query or search_filter != "all" or selected_author is not None or date_from or date_to) and not info_message:
         parsed = _parse_search_query(raw_query)
         if not parsed["phrases"] and not parsed["terms"]:
-            if search_filter != "all" or selected_author is not None:
+            if search_filter != "all" or selected_author is not None or date_from or date_to:
                 pass
             elif parsed["skipped_terms"]:
                 info_message = (
@@ -1022,6 +1062,10 @@ def search(request):
                     qs = qs.filter(forum=selected_forum)
                 if selected_author is not None:
                     qs = qs.filter(author=selected_author)
+                if date_from is not None:
+                    qs = qs.filter(created_at__gte=date_from)
+                if date_to is not None:
+                    qs = qs.filter(created_at__lte=date_to)
                 if search_filter == "polls":
                     qs = qs.filter(poll__isnull=False)
 
@@ -1059,6 +1103,10 @@ def search(request):
                     qs = qs.filter(forum=selected_forum)
                 if selected_author is not None:
                     qs = qs.filter(author=selected_author)
+                if date_from is not None:
+                    qs = qs.filter(created_at__gte=date_from)
+                if date_to is not None:
+                    qs = qs.filter(created_at__lte=date_to)
                 if search_filter == "links":
                     qs = qs.filter(has_link=True)
                 elif search_filter == "youtube":
@@ -1101,6 +1149,8 @@ def search(request):
         "selected_forum": selected_forum,
         "selected_author": selected_author,
         "author_query": author_query_raw,
+        "date_from_raw": date_from_raw,
+        "date_to_raw": date_to_raw,
         "raw_query": raw_query,
         "parsed_query": parsed,
         "info_message": info_message,
