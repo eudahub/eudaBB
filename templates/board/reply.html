@@ -121,12 +121,20 @@
 {% endif %}
 
 {% if pinned_topic_posts %}
-  <div style="margin-top:1rem;">
-    <strong style="font-size:11px;color:#555;">Przypięte:</strong>
+  <div style="margin-top:1rem;margin-bottom:1.4rem;">
+    <button
+      type="button"
+      id="toggle-pinned-posts"
+      aria-expanded="false"
+      style="font-size:11px;padding:.2rem .5rem;"
+    >
+      Przypięte
+    </button>
     <div
       id="pinned-posts-panel"
-      style="max-height:280px;overflow-y:auto;border:1px solid #BC8F8F;
-             margin-top:.3rem;font-size:11px;line-height:1.5;background:#fffaf8;"
+      style="display:none;max-height:280px;overflow-y:auto;border:1px solid #BC8F8F;
+             margin-top:.3rem;font-size:11px;line-height:1.5;background:#fffaf8;
+             padding-bottom:.4rem;"
     >
       {% for post in pinned_topic_posts %}
         <div data-quote-post="1"
@@ -137,6 +145,7 @@
                     {% if forloop.last %}border-bottom:none;{% endif %}">
           <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
             <span style="color:#800000;font-weight:bold;">{{ post.topic.title }}</span>
+            <span style="color:#666;">· {{ post.topic.forum.title }}</span>
             <span style="color:#666;">· {{ post.author.username|default:"[usunięty]" }}</span>
             <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
             <button type="button" class="recent-quote-btn" data-keep-selection="1" onclick="quoteRecentPost(this)"
@@ -336,9 +345,7 @@ function setQuotePickerMode(active) {
     node.removeAttribute('data-quote-prev-display');
   });
   document.getElementById('quote-picker-banner').style.display = active ? 'block' : 'none';
-  var panel = document.getElementById('recent-posts-panel');
-  panel.style.maxHeight = active ? '72vh' : '320px';
-  panel.style.fontSize = active ? '12px' : '11px';
+  updateQuotePanelsLayout(active);
   if (active) {
     document.getElementById('quote-picker-banner').scrollIntoView({behavior: 'smooth', block: 'nearest'});
   } else {
@@ -395,6 +402,33 @@ document.querySelectorAll('.recent-quote-btn, #quote-picker-confirm').forEach(fu
     e.preventDefault();
   });
 });
+
+function updateQuotePanelsLayout(active) {
+  var recentPanel = document.getElementById('recent-posts-panel');
+  var pinnedPanel = document.getElementById('pinned-posts-panel');
+  if (!recentPanel) return;
+  var pinnedOpen = !!(pinnedPanel && pinnedPanel.style.display !== 'none');
+  if (active) {
+    recentPanel.style.maxHeight = pinnedOpen ? '48vh' : '72vh';
+    recentPanel.style.fontSize = '12px';
+    return;
+  }
+  recentPanel.style.maxHeight = pinnedOpen ? '220px' : '320px';
+  recentPanel.style.fontSize = '11px';
+}
+
+(function() {
+  var toggle = document.getElementById('toggle-pinned-posts');
+  var panel = document.getElementById('pinned-posts-panel');
+  if (!toggle || !panel) return;
+
+  toggle.addEventListener('click', function() {
+    var open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+    updateQuotePanelsLayout(quotePickerState.active);
+  });
+})();
 
 // Preview (AJAX)
 function doPreview() {

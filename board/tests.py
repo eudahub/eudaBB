@@ -232,14 +232,20 @@ class UserRenameTests(TestCase):
         self.assertContains(response_page_2, "?quotes_page=1")
         self.assertContains(response_page_2, "Treść 1")
 
-    def test_reply_view_renders_pinned_topic_first_posts(self):
+    def test_reply_view_renders_global_pinned_topic_first_posts(self):
         author = User.objects.create_user(username="Autor3", password="x")
         reader = User.objects.create_user(username="Czytelnik3", password="x")
         topic = self._make_topic(author, title="Bieżący temat")
         Post.objects.create(topic=topic, author=author, content_bbcode="Treść bieżąca", post_order=1)
 
+        other_forum = Forum.objects.create(
+            section=self.section,
+            title="Ogłoszenia",
+            description="",
+            order=2,
+        )
         sticky_topic = Topic.objects.create(
-            forum=self.forum,
+            forum=other_forum,
             title="Regulamin",
             author=author,
             topic_type=Topic.TopicType.STICKY,
@@ -259,8 +265,9 @@ class UserRenameTests(TestCase):
         response = client.get(reverse("reply", args=[topic.pk]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Przypięte:")
+        self.assertContains(response, 'id="toggle-pinned-posts"', html=False)
         self.assertContains(response, "Regulamin")
+        self.assertContains(response, "Ogłoszenia")
         self.assertContains(response, "Treść przypięta")
         self.assertContains(response, f'data-post-id="{pinned_post.pk}"', html=False)
 

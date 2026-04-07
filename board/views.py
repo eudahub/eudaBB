@@ -241,7 +241,6 @@ def reply(request, topic_id):
     pinned_topic_posts = (
         Post.objects.select_related("author", "topic")
         .filter(
-            topic__forum=topic.forum,
             post_order=1,
             topic__topic_type__in=[
                 Topic.TopicType.STICKY,
@@ -249,7 +248,7 @@ def reply(request, topic_id):
             ],
         )
         .exclude(topic=topic)
-        .order_by("-topic__topic_type", "-topic__last_post_at", "topic_id")[:12]
+        .order_by("-topic__topic_type", "-topic__last_post_at", "topic_id")[:55]
     )
     return render(request, "board/reply.html", {
         "topic": topic,
