@@ -34,6 +34,7 @@ from django.utils import timezone
 _WARSAW = ZoneInfo("Europe/Warsaw")
 
 from board.models import Forum, Post, Topic, User
+from board.bbcode_lint import repair as repair_bbcode
 from board.management.commands.update_forum_counts import compute_recursive_counts
 from board.quote_refs import rebuild_quote_references_for_posts
 from board.search_index import rebuild_post_search_index_for_posts
@@ -177,7 +178,7 @@ class Command(BaseCommand):
             f"Zmapowano {len(forum_map)}/{len(archive_forums)} forów po tytułach."
         )
 
-        posts_created = topics_created = skipped_forum = 0
+        posts_created = topics_created = skipped_forum = repaired_posts = 0
         sfinia_to_django = {}  # sfinia post_id (int) → django post_id (int)
         imported_post_ids = []
 
@@ -224,6 +225,10 @@ class Command(BaseCommand):
                     # is NULL there, so content is used and broken_tags is set True.
                     content_quotes = row["content_quotes"] if "content_quotes" in keys else None
                     content_bbcode = content_quotes or row["content"] or ""
+                    repaired_content, repair_changes = repair_bbcode(content_bbcode)
+                    if repair_changes:
+                        content_bbcode = repaired_content
+                        repaired_posts += 1
                     broken_tags = (
                         "quote_status" in keys and row["quote_status"] == 4
                     )
@@ -332,5 +337,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f"Gotowe. Wątki: {topics_created}, Posty: {posts_created}"
+            + (f", Naprawione BBCode/linki: {repaired_posts}" if repaired_posts else "")
             + (f", Pominięte (brak forum): {skipped_forum}" if skipped_forum else "")
         ))

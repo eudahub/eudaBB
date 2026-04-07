@@ -1,5 +1,116 @@
 # TODO — eudaBB
 
+## Nawigacja aktywności / "Więcej"
+
+Docelowo po lewej u góry rozwijane menu typu `Więcej`, używane częściej niż chodzenie po samych forach.
+
+### Priorytetowe pozycje
+
+1. `Nowe posty`
+- globalna lista postów posortowana od najnowszych
+- nie ograniczać do ostatniego logowania
+- paginacja po kilka razy po 20
+- wynik powinien pokazywać:
+  - autora
+  - temat
+  - forum
+  - datę
+  - snippet / fragment treści
+  - link do konkretnego posta
+- dostępne także dla niezalogowanych
+- to jest pierwszy etap do wdrożenia
+
+2. `Nieprzeczytane posty`
+- podobne do `Nowe posty`, ale per user
+- wymaga osobnej tabeli stanu czytania
+- docelowo ma być od razu widać w `Nowe posty`, które posty / wątki user już czytał:
+  - czy był na ostatniej stronie wątku
+  - i czy od tego czasu pojawiło się coś nowego
+- w pierwszym stadium można tego jeszcze nie rozróżniać
+- po dodaniu tabel per-user da się z tego od ręki zrobić osobny widok `Nieprzeczytane posty`
+
+3. `Twoje posty`
+- wątki, w których user napisał choć raz
+- nie bool, tylko licznik udziału usera w wątku
+- licznik ma się poprawnie zmieniać także po usuwaniu postów
+
+4. `Tematy bez odpowiedzi`
+- globalne
+- mogą być dostępne także dla niezalogowanych
+
+### Pozycje mniej ważne / opcjonalne
+
+- `Aktywne tematy`
+  - przy modelu `Nowe posty` robi się bardzo podobne lub zbędne
+  - można pominąć
+- `Szukaj`
+  - to tylko duplikacja linku
+- `Użytkownicy`
+  - też tylko skrót / duplikacja
+- `Zespół administracyjny`
+  - przydatne, ale nie priorytet
+- `Thanks list`
+  - ważne dopiero razem z systemem podziękowań
+
+### Model danych pod czytanie / nieprzeczytane
+
+- osobna tabela per `(user, topic)`
+- najlepiej trzymać:
+  - `last_read_post_order`
+  - opcjonalnie `last_read_at`
+- `Nieprzeczytane` = `topic.last_post.post_order > last_read_post_order`
+- ten sam model później zasili oznaczenia w `Nowe posty`
+
+### Założenia startowe dla "Nieprzeczytane"
+
+- po imporcie ze starego forum wszyscy użytkownicy mają wszystko oznaczone jako przeczytane
+- nowo zarejestrowany user też startuje ze stanem „wszystko przeczytane”
+- tak samo user aktywowany z ducha (`ghost`) startuje ze stanem „wszystko przeczytane”
+- dopiero posty / wątki powstałe później stają się nieprzeczytane
+- potrzebny przycisk:
+  - `Oznacz wszystko jako przeczytane`
+- to podejście jest dobre wydajnościowo, bo:
+  - nie trzeba na starcie tworzyć ogromnej tabeli `user × topic`
+  - wystarczy globalny znacznik „read baseline” dla usera + późniejsze wpisy różnicowe
+
+### Odcinanie "Nieprzeczytanych" — sensowne, ale nie agresywne
+
+- nie traktować `nieprzeczytanych` jako „od początku świata”
+- zastosować dwa miękkie ograniczenia jednocześnie:
+  - po dacie
+  - po liczbie wyników
+- proponowany model:
+  - tylko z ostatnich `N` dni, np. `30` albo `60`
+  - i jednocześnie maksymalnie `K` najnowszych postów, np. `500` albo `1000`
+- jeśli limit liczby zadziała:
+  - pokazać komunikat typu `pokazano najnowsze 500 nieprzeczytanych postów`
+- `Nowe posty` mogą pozostać szersze i mniej obcinane
+- `Nieprzeczytane` mają być listą praktyczną do nadrobienia, a nie pełnym archiwum zaległości
+
+### Wariant implementacyjny do rozważenia
+
+- zamiast od razu trzymać pełną tabelę dla wszystkich tematów:
+  - `user.forum_mark_all_read_at` albo podobny globalny znacznik
+  - osobna tabela per `(user, topic)` tylko tam, gdzie user ma stan odbiegający od globalnego baseline
+- dla pierwszej wersji może jednak wystarczyć prostszy model:
+  - tabela per `(user, topic)` tworzona leniwie dopiero przy wejściu do wątku
+
+## Tag `spoiler`
+
+- dodać znacznik BBCode `spoiler`
+- cel:
+  - ukrywać odpowiedź / puentę / rozwiązanie do kliknięcia
+- render:
+  - treść domyślnie ukryta
+  - JavaScript odkrywa po kliknięciu
+- ważne rozróżnienie względem ankiety:
+  - ankieta po oddaniu głosu albo po upływie czasu pozostaje odkryta / rozstrzygnięta
+  - `spoiler` **nie pamięta swojego stanu**
+- czyli:
+  - po ponownym wejściu na post `spoiler` znowu ma być zakryty
+  - to celowe, dla wygody czytania i świadomego odkrywania
+- stan ma być tylko chwilowy po stronie przeglądarki, bez zapisu do bazy
+
 ## Prywatne wiadomości (PM) — szyfrowanie E2E
 
 Do zrobienia gdy dojdziemy do modelu PM:
@@ -168,7 +279,35 @@ Poza zwykłym trybem „cały post” dodać także bardziej precyzyjne warianty
 - wynikami są tylko posty, które zawierają pasujący blok code
 - tryb code ma być osobny i nie mieszać się ze zwykłymi `quote`
 
-6. **Tylko cytaty jako obiekty**
+6. **Tylko posty z YouTube**
+- wynikami są tylko posty zawierające osadzony `[youtube=...]`
+- przyda się osobny indeks / flaga `has_youtube`
+- później można dodać też wyszukiwanie po samym ID filmu albo URL
+
+7. **Tylko posty z linkami**
+- wynikami są tylko posty zawierające linki `[url]...[/url]`
+- dotyczy też linków, które podczas importu zostały znormalizowane z gołych URL-i do BBCode
+- przyda się osobny indeks / flaga `has_links`
+- później można rozważyć także wyszukiwanie po domenie
+
+#### Rozróżnienie: `code` blokowe vs `code` inline
+
+- `Code` ma być znacznikiem specjalnym bloku, podobnie jak:
+  - `Bible`
+  - `AI`
+  - `fquote`
+- ale równolegle warto mieć też drugi wariant jednolinijkowy / inline:
+  - do krótkich fragmentów kodu
+  - do wpisania dosłownego kodu emotikony, żeby nie zamieniał się na GIF
+  - przyjęta nazwa znacznika: `icode`
+- wyszukiwarka ma traktować je różnie:
+  - **szukać** w inline `icode`
+  - **nie szukać** w blokach specjalnych typu blokowe `code`, `Bible`, `AI`, `fquote`
+- czyli w trybie zwykłego wyszukiwania „tekst autora”:
+  - inline `icode` należy do normalnej treści autora
+  - blokowe `code` należy do bloków wyłączanych z indeksu `author_only`
+
+8. **Tylko cytaty jako obiekty**
 - zamiast szukać po całych postach, szukamy po tabeli cytatów / indeksie cytowań
 - wynik może być:
   - post + podgląd konkretnego cytatu
@@ -193,6 +332,16 @@ Poza zwykłym trybem „cały post” dodać także bardziej precyzyjne warianty
   - opcjonalnie `source_post_id`
 - dla `Bible` i `fquote` taka tabela może być głównym źródłem wyszukiwania
 - dla trybu „tylko własny tekst autora” potrzebny osobny indeks treści bez cytatów
+
+#### Filtry UI wyszukiwarki
+
+- obecny checkbox `Tylko wątki z ankietami` docelowo zamienić na jedno `combo` / filtr typu:
+  - wszystkie
+  - z ankietami
+  - z YouTube
+  - z linkami
+  - kolejne typy specjalne
+- to samo podejście można potem spiąć z trybami postów i wątków, zamiast mnożyć osobne checkboxy
 
 #### Decyzja architektoniczna: rozszerzamy `forum_quote_refs`, nie tworzymy drugiej tabeli
 
@@ -360,6 +509,72 @@ Zasada:
 To nie musi być idealnie „małe”:
 - jeśli tabela postów ma ~700 MB, dopuszczalne jest nawet kilkaset MB albo podobny rząd wielkości
   dla indeksów i cache wyszukiwania, o ile realnie daje to szybkie odpowiedzi i nie niszczy prostoty systemu
+
+### Decyzja architektoniczna: osobna tabela wyszukiwania dla postów
+
+- nie próbować wyszukiwać bezpośrednio po `Post.content_bbcode`
+- nie dokładać wielkich zduplikowanych pól wyszukiwawczych bezpośrednio do tabeli `posts`
+- zrobić osobną tabelę indeksową, np. `post_search_index`, powiązaną `1:1` z postem
+
+Co ma trzymać:
+- `post_id`
+- treść przygotowaną do wyszukiwania, nawet jeśli będzie duża
+- wariant bez cytatów i bez bloków specjalnych
+- `search_vector` i ewentualne pomocnicze pola do snippetów/rankingu
+
+Założenie praktyczne:
+- jeśli `posts` zajmuje ~700 MB, to podobny rząd wielkości dla warstwy wyszukiwania jest akceptowalny
+- ważniejsze jest:
+  - szybkie wyszukiwanie
+  - prostota logiki
+  - możliwość niezależnego rebuildu indeksu
+  - brak zależności od renderu HTML
+
+Dlaczego osobna tabela zamiast pól w `Post`:
+- tabela `posts` zostaje źródłem prawdy
+- indeks wyszukiwania można przebudować bez dotykania głównej logiki forum
+- łatwiej eksperymentować z różnymi wariantami treści do szukania
+- główna tabela postów nie puchnie od kolejnych pomocniczych pól
+
+Pierwszy wariant treści do rozważenia:
+- `content_search_author`
+  - tekst autora bez:
+    - `[quote]`
+    - `[fquote]`
+    - `[Bible]`
+    - `[AI]`
+    - `[code]`
+- opcjonalnie później:
+  - `content_search_full`
+  - osobne indeksy bloków w drugiej tabeli
+
+### Lifecycle indeksu wyszukiwania
+
+Potrzebne są dwie ścieżki utrzymania indeksu:
+
+1. **Pełny rebuild po imporcie**
+- osobny skrypt / management command budujący bazę wyszukiwania po zaimportowaniu postów
+- np.:
+  - przejście po wszystkich postach
+  - wyliczenie treści do szukania
+  - zapis do `post_search_index`
+  - budowa / odświeżenie `search_vector`
+- ta ścieżka ma być zoptymalizowana pod duży batch, nie pod pojedyncze zapisy
+
+2. **Szybkie aktualizacje online**
+- po dodaniu nowego posta:
+  - utworzyć rekord indeksu
+- po edycji posta:
+  - przeliczyć tylko rekord tego posta
+- po usunięciu posta:
+  - usunąć rekord indeksu
+
+Założenie:
+- pełny rebuild jest narzędziem administracyjnym / importowym
+- codzienna praca forum wymaga szybkich aktualizacji przy CRUD postów
+- logika aktualizacji indeksu ma być wspólna, tylko tryb uruchomienia inny:
+  - batch po imporcie
+  - pojedynczy update przy zwykłym użyciu forum
 
 ### Wydajność i indeksy
 
