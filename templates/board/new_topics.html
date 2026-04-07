@@ -19,7 +19,8 @@
       </div>
       <div style="padding:.45rem .6rem;">
         <div style="font-size:11px;color:#555;margin-bottom:.25rem;">
-          <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a>
+          <a href="{{ topic.unread_url }}">{{ topic.title }}</a>
+          {% if topic.has_unread %}<strong style="color:#800000;"> [nowe]</strong>{% endif %}
         </div>
         <div style="font-size:11px;color:#555;">
           autor pierwszego postu: {{ topic.author.username|default:"[usunięty]" }}

@@ -510,6 +510,31 @@ class UserRenameTests(TestCase):
         state = TopicReadState.objects.get(user=reader, topic=topic)
         self.assertEqual(state.last_read_post_order, 25)
 
+    def test_forum_detail_marks_unread_topics_and_links_to_first_unread(self):
+        author = User.objects.create_user(username="AutorForumUnread", password="x")
+        reader = User.objects.create_user(username="CzytelnikForumUnread", password="x")
+        topic = self._make_topic(author, title="Forum nieprzeczytane")
+        first_unread = None
+        last_post = None
+        for order in range(1, 26):
+            last_post = Post.objects.create(topic=topic, author=author, content_bbcode=f"Post {order}", post_order=order)
+            if order == 21:
+                first_unread = last_post
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.reply_count = 24
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+        TopicReadState.objects.create(user=reader, topic=topic, last_read_post_order=20)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("forum_detail", args=[self.forum.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Forum nieprzeczytane")
+        self.assertContains(response, "[nowe]")
+        self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
+
     def test_unread_topics_view_links_to_first_unread_page(self):
         author = User.objects.create_user(username="AutorUnread", password="x")
         reader = User.objects.create_user(username="CzytelnikUnread", password="x")
@@ -532,6 +557,31 @@ class UserRenameTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Nieprzeczytany długi wątek")
+        self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
+
+    def test_new_topics_marks_unread_topics_and_links_to_first_unread(self):
+        author = User.objects.create_user(username="AutorNewTopicsUnread", password="x")
+        reader = User.objects.create_user(username="CzytelnikNewTopicsUnread", password="x")
+        topic = self._make_topic(author, title="Nowy nieprzeczytany wątek")
+        first_unread = None
+        last_post = None
+        for order in range(1, 26):
+            last_post = Post.objects.create(topic=topic, author=author, content_bbcode=f"Post {order}", post_order=order)
+            if order == 21:
+                first_unread = last_post
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.reply_count = 24
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+        TopicReadState.objects.create(user=reader, topic=topic, last_read_post_order=20)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("new_topics"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nowy nieprzeczytany wątek")
+        self.assertContains(response, "[nowe]")
         self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
 
     def test_mark_all_topics_read_sets_user_baseline_and_clears_states(self):

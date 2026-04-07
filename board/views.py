@@ -169,6 +169,41 @@ def _build_unread_topic_url(user, topic: Topic, read_state, posts_per_page: int)
     return f'{reverse("topic_detail", args=[topic.pk])}?page={page_num}#post-{first_unread_post.pk}'
 
 
+def _annotate_topics_with_unread_state(user, topics, posts_per_page: int):
+    topics = list(topics)
+    if not getattr(user, "is_authenticated", False):
+        for topic in topics:
+            topic.has_unread = False
+            topic.unread_url = reverse("topic_detail", args=[topic.pk])
+        return topics
+
+    topic_ids = [topic.pk for topic in topics]
+    read_state_map = {
+        state.topic_id: state
+        for state in TopicReadState.objects.filter(
+            user=user,
+            topic_id__in=topic_ids,
+        )
+    }
+    baseline = user.mark_all_read_at
+
+    for topic in topics:
+        state = read_state_map.get(topic.pk)
+        last_post = topic.last_post
+        has_unread = False
+        if last_post is not None:
+            if state is not None:
+                has_unread = state.last_read_post_order < last_post.post_order
+            elif topic.last_post_at and topic.last_post_at > baseline:
+                has_unread = True
+        topic.has_unread = has_unread
+        if has_unread:
+            topic.unread_url = _build_unread_topic_url(user, topic, state, posts_per_page)
+        else:
+            topic.unread_url = reverse("topic_detail", args=[topic.pk])
+    return topics
+
+
 def _get_global_pinned_topic_posts(exclude_topic=None):
     qs = (
         Post.objects.select_related("author", "topic", "topic__forum")
@@ -248,6 +283,11 @@ def forum_detail(request, forum_id):
     )
     paginator = Paginator(topics_qs, getattr(settings, "TOPICS_PER_PAGE", 30))
     page = paginator.get_page(request.GET.get("page"))
+    _annotate_topics_with_unread_state(
+        request.user,
+        page.object_list,
+        getattr(settings, "POSTS_PER_PAGE", 20),
+    )
     return render(request, "board/forum_detail.html", {"forum": forum, "page": page})
 
 
@@ -1094,6 +1134,11 @@ def new_topics(request):
         .order_by("-created_at", "-pk")
     )
     page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
+    _annotate_topics_with_unread_state(
+        request.user,
+        page.object_list,
+        getattr(settings, "POSTS_PER_PAGE", 20),
+    )
 
     return render(request, "board/new_topics.html", {
         "page": page,
@@ -1143,6 +1188,7 @@ def unread_topics(request):
                 continue
         elif topic.last_post_at and topic.last_post_at <= baseline:
             continue
+        topic.has_unread = True
         topic.unread_url = _build_unread_topic_url(request.user, topic, state, posts_per_page)
         unread.append(topic)
 
