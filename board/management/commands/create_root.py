@@ -4,7 +4,8 @@ Create the root superadmin account.
 Usage:
     python manage.py create_root
 
-Prompts for a password interactively (not echoed).
+Uses ROOT_PASSWORD from .env / environment when available, otherwise prompts
+for a password interactively (not echoed).
 Root has no email, no email_hash, no password reset, cannot post.
 Only one root account can exist (enforced by DB constraint).
 """
@@ -12,6 +13,7 @@ Only one root account can exist (enforced by DB constraint).
 import getpass
 
 from django.core.management.base import BaseCommand, CommandError
+from decouple import config
 
 from board.models import User
 from board.auth_utils import prehash_password
@@ -30,12 +32,18 @@ class Command(BaseCommand):
                 "Remove or rename it first."
             )
 
-        password = getpass.getpass("Password for root: ")
+        env_password = config("ROOT_PASSWORD", default="")
+        password = env_password
+        if password:
+            self.stdout.write("Using ROOT_PASSWORD from environment/.env.")
+        else:
+            password = getpass.getpass("Password for root: ")
         if not password:
             raise CommandError("Password cannot be empty.")
-        confirm = getpass.getpass("Confirm password: ")
-        if password != confirm:
-            raise CommandError("Passwords do not match.")
+        if not env_password:
+            confirm = getpass.getpass("Confirm password: ")
+            if password != confirm:
+                raise CommandError("Passwords do not match.")
 
         root = User(
             username="root",
