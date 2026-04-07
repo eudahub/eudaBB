@@ -248,95 +248,14 @@ Example direct thread URL:
 http://127.0.0.1:8000/topic/7784/?page=1
 ```
 
-## Quoting in the full editor
+## Feature documentation
 
-- In thread view each post has a `Quote` button; without a selection it uses the whole post, and with a selection it tries to recover the closest exact BBCode fragment.
-- In the full editor, the `quote` toolbar button does not insert an empty `[quote][/quote]`.
-- Its role is mainly to teach the workflow: a normal forum quote should come from choosing an existing post, not from manually typing quote tags.
-- Clicking `quote` switches the page into quote-picking mode using the recent-post list below the editor:
-  - the editor is temporarily hidden,
-  - the recent-post list is expanded,
-  - a large instruction banner with `OK` / `Cancel` is shown.
-- In practice, quoting through the per-post `Quote` buttons is the most convenient path:
-  - select a fragment from one of the posts and press `OK`,
-  - or press the per-post `Quote` button in the recent-post list.
-- The `quote` toolbar button exists mainly so users discover this workflow; the actual quote is built from post actions, not from an empty manual tag.
-- The resulting quote is appended to the end of the editor without leaving the page, so multiple quotes can be added one after another.
-- When a selection includes a nested quote, the system tries to preserve the nested `[quote ... post_id=...]`; if the selection cuts through it, it may build a shortened version using `(...)`.
-- Regular `quote` requires `post_id` and is validated on submit. `fquote` remains for outside sources.
+Detailed feature docs now live under `docs/`:
 
-## `spoiler` tag
-
-- The `spoiler` BBCode tag is already supported.
-- It works in two forms:
-  - `[spoiler]content[/spoiler]`
-  - `[spoiler=Label]content[/spoiler]`
-- Rendering uses HTML `<details><summary>...</summary>...</details>`, so the content is hidden by default and revealed on click.
-- Unlike polls, `spoiler` does not remember its state:
-  - after reopening the post it is hidden again
-  - this is intentional
-- The revealed/hidden state is not stored in the database or user profile; it exists only temporarily in the browser.
-
-## Search — stop-word candidates
-
-Based on `content_user` analysis from `sfiniabb.db`:
-- the main metric is `df` (`document frequency`), meaning in how many posts a token appears
-- analysis normalization:
-  - case-insensitive
-  - diacritic-insensitive
-  - no stemming
-- stop-words should apply only to plain `AND` tokens, not to quoted phrases
-
-### Safe starter list
-
-- `nie`
-- `to`
-- `w`
-- `i`
-- `sie`
-- `ze`
-- `na`
-- `z`
-- `a`
-- `do`
-- `o`
-- `ale`
-
-### Test list
-
-- `co`
-- `jak`
-- `tak`
-- `bo`
-- `tym`
-- `tego`
-- `ma`
-- `czy`
-- `od`
-- `po`
-- `ja`
-- `sa`
-- `za`
-- `dla`
-- `juz`
-- `sobie`
-- `byc`
-- `jesli`
-- `tu`
-
-### Keep for now
-
-- `jest`
-- `tylko`
-- `moze`
-- `mozna`
-- `bardzo`
-- `albo`
-
-Notes:
-- artifacts such as `b`, `http`, `www`, `pl` should not become stop-words; they should be handled by better tokenization / cleanup
-- if the user searches for a single stop-word such as `do`, the system may skip it and show a short notice
-- if the user searches for a phrase such as `"do rzeczy"`, then `do` must stay inside the phrase
+- [Activity and global lists](docs/aktywnosc.md)
+- [Quoting and full editor](docs/cytowanie-i-edytor.md)
+- [Search](docs/wyszukiwarka.md)
+- [Polls](docs/ankiety.md)
 
 ## Production (nginx + gunicorn)
 
@@ -356,12 +275,19 @@ python manage.py collectstatic
 - [x] Hierarchy: Section → Forum → Thread → Post
 - [x] Registration and login
 - [x] Creating threads and replies
-- [x] BBCode → HTML (render cache in `content_html`)
+- [x] BBCode → HTML
 - [x] Thread and post pagination
 - [x] Cached counters (posts, threads, last post)
 - [x] Admin panel
 - [x] Sticky / Announcement (via admin)
 - [x] Thread locking (via admin)
+- [x] Quote workflow with selection and `quote` validation
+- [x] Full reply editor and full new-topic editor
+- [x] `spoiler`
+- [x] Post and topic search
+- [x] Polls: archived import, creation, voting
+- [x] `New posts` and `New topics`
+- [x] Post likes
 
 ## Troubleshooting
 
@@ -373,21 +299,8 @@ Set `DB_USER` in `.env` to your system username (the one you used with `createus
 
 ## To be extended (next steps)
 
-- [ ] Quotes (`[quote]`)
-- [ ] Quotes and `post_id` integrity
-  - A post should reference its author via `User.id` / FK, not a textual username.
-  - That keeps username changes fast as long as the new name does not collide after normalization.
-  - Renaming a user must still update author names embedded in quotes and nested quotes.
-  - Working assumption: if a quote contains `post_id=...`, the quoted username is expected to be correct and can be updated.
-  - The same applies to user deletion: quotes and nested quotes pointing at that user's posts must be handled.
-- [ ] Quote validation with `post_id`
-  - A user must not be able to submit an arbitrary invalid `post_id` in a quote.
-  - `post_id` must point to an existing post.
-  - The quoted text must match the content of the post referenced by `post_id`.
 - [ ] Post editing
 - [ ] User profile
 - [ ] Moderation (deleting/moving threads)
-- [ ] Polls
-- [ ] Search
 - [ ] Notifications
 - [ ] Avatars

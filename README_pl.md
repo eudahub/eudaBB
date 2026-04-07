@@ -248,95 +248,14 @@ Po starcie serwera możesz wejść np. na:
 http://127.0.0.1:8000/topic/7784/?page=1
 ```
 
-## Cytowanie w pełnym edytorze
+## Dokumentacja funkcji
 
-- W widoku wątku przy każdym poście jest przycisk `Cytuj`; bez selekcji bierze cały post, a z selekcją próbuje odtworzyć możliwie dokładny fragment BBCode.
-- W pełnym edytorze przycisk `quote` nie wstawia pustego `[quote][/quote]`.
-- Jego rola jest pomocnicza: ma użytkownikowi podpowiedzieć, że zwykły forumowy cytat robi się przez wybór posta do cytowania, a nie przez ręczne pisanie tagów.
-- Po kliknięciu `quote` uruchamia się tryb wyboru cytatu z listy ostatnich postów pod edytorem:
-  - edytor jest chwilowo ukrywany,
-  - lista postów dostaje więcej miejsca,
-  - pojawia się duży komunikat z przyciskami `OK` / `Anuluj`.
-- W praktyce najwygodniejsze jest cytowanie przyciskami `Cytuj` przy postach:
-  - zaznaczyć fragment jednego z postów i nacisnąć `OK`,
-  - albo użyć przycisku `Cytuj` przy konkretnym poście na liście.
-- Przycisk `quote` istnieje głównie po to, żeby user wpadł na ten sposób pracy; samo właściwe cytowanie dzieje się przy postach, nie przez ręczne wstawianie pustego taga.
-- Cytat jest dopisywany na końcu pola edycyjnego bez opuszczania pełnego edytora, więc można dodać kilka cytatów z różnych postów jeden po drugim.
-- Przy selekcji obejmującej cytat w cytacie system stara się zachować zagnieżdżony `[quote ... post_id=...]`; jeśli zaznaczenie przecina taki cytat, może zbudować jego skróconą wersję z `(...)`.
-- Zwykły `quote` ma obowiązkowy `post_id` i jest walidowany przy zapisie. `fquote` zostaje do cytatów zewnętrznych.
+Szczegóły wdrożonych funkcji są wyniesione do osobnych plików:
 
-## Tag `spoiler`
-
-- BBCode `spoiler` jest już obsługiwane.
-- Działa w dwóch wariantach:
-  - `[spoiler]treść[/spoiler]`
-  - `[spoiler=Etykieta]treść[/spoiler]`
-- Render opiera się o HTML `<details><summary>...</summary>...</details>`, więc treść jest domyślnie zakryta i odkrywa się po kliknięciu.
-- W odróżnieniu od ankiety `spoiler` nie pamięta stanu:
-  - po ponownym wejściu na post znowu jest zamknięty
-  - to jest zachowanie celowe
-- Stan odkrycia nie jest zapisywany do bazy ani do profilu usera; działa tylko chwilowo po stronie przeglądarki.
-
-## Wyszukiwarka — kandydaci na stop-words
-
-Na bazie analizy `content_user` z `sfiniabb.db`:
-- liczymy przede wszystkim `df` (`document frequency`), czyli w ilu postach występuje słowo
-- normalizacja do analizy:
-  - bez rozróżniania wielkości liter
-  - bez rozróżniania diakrytyków
-  - bez stemmingu
-- stop-words stosujemy tylko do zwykłych tokenów `AND`, nie do fraz w cudzysłowie
-
-### Bezpieczna lista startowa
-
-- `nie`
-- `to`
-- `w`
-- `i`
-- `sie`
-- `ze`
-- `na`
-- `z`
-- `a`
-- `do`
-- `o`
-- `ale`
-
-### Lista do testów
-
-- `co`
-- `jak`
-- `tak`
-- `bo`
-- `tym`
-- `tego`
-- `ma`
-- `czy`
-- `od`
-- `po`
-- `ja`
-- `sa`
-- `za`
-- `dla`
-- `juz`
-- `sobie`
-- `byc`
-- `jesli`
-- `tu`
-
-### Na razie nie pomijać
-
-- `jest`
-- `tylko`
-- `moze`
-- `mozna`
-- `bardzo`
-- `albo`
-
-Uwagi:
-- artefakty typu `b`, `http`, `www`, `pl` nie powinny trafiać do stop-words; to problem tokenizacji / czyszczenia danych
-- jeśli user wpisze samo słowo pomijane, np. `do`, system może je pominąć i pokazać krótką informację
-- jeśli user wpisze frazę, np. `"do rzeczy"`, to słowo `do` nie może być usunięte z frazy
+- [Aktywność i listy globalne](docs/aktywnosc.md)
+- [Cytowanie i pełny edytor](docs/cytowanie-i-edytor.md)
+- [Wyszukiwarka](docs/wyszukiwarka.md)
+- [Ankiety](docs/ankiety.md)
 
 ## Produkcja (nginx + gunicorn)
 
@@ -356,12 +275,19 @@ python manage.py collectstatic
 - [x] Hierarchia: Sekcja → Forum → Wątek → Post
 - [x] Rejestracja i logowanie
 - [x] Tworzenie wątków i odpowiedzi
-- [x] BBCode → HTML (render cache w `content_html`)
+- [x] BBCode → HTML
 - [x] Paginacja wątków i postów
 - [x] Cached countery (posty, wątki, ostatni post)
 - [x] Panel admina
 - [x] Sticky / Announcement (przez admina)
 - [x] Blokowanie wątków (przez admina)
+- [x] Cytowanie z selekcją i walidacja `quote`
+- [x] Pełny edytor odpowiedzi i nowego wątku
+- [x] `spoiler`
+- [x] Wyszukiwarka postów i wątków
+- [x] Ankiety: import archiwalny, tworzenie i głosowanie
+- [x] `Nowe posty` i `Nowe wątki`
+- [x] Polubienia postów
 
 ## Rozwiązywanie problemów
 
@@ -373,21 +299,8 @@ Ustaw `DB_USER` w `.env` na swoją nazwę użytkownika systemowego (tę, której
 
 ## Do rozbudowania (kolejne kroki)
 
-- [ ] Cytowania (`[quote]`)
-- [ ] Cytowania i integralność `post_id`
-  - Post powinien wskazywać autora przez `User.id` / FK, nie przez tekstowy nick.
-  - Dzięki temu zmiana nazwy usera na niekolidującą po normalizacji może być szybka i lokalna.
-  - Przy zmianie nazwy usera trzeba jednak poprawiać nazwę autora w cytatach i podcytatach opartych o nazwę usera.
-  - Założenie robocze: jeśli cytat ma `post_id=...`, to nazwa usera w cytacie powinna być poprawna i możliwa do zaktualizowania.
-  - To samo dotyczy usuwania usera: trzeba obsłużyć cytaty i podcytaty odwołujące się do jego postów.
-- [ ] Walidacja cytatów z `post_id`
-  - User nie może wpisać dowolnego błędnego `post_id` do cytatu.
-  - `post_id` musi wskazywać istniejący post.
-  - Treść cytatu musi zgadzać się z treścią posta wskazanego przez `post_id`.
 - [ ] Edycja postów
 - [ ] Profil użytkownika
 - [ ] Moderacja (usuwanie/przenoszenie wątków)
-- [ ] Ankiety (Poll)
-- [ ] Wyszukiwanie
 - [ ] Powiadomienia
 - [ ] Avatary
