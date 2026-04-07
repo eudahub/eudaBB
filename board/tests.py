@@ -266,6 +266,7 @@ class UserRenameTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="toggle-pinned-posts"', html=False)
+        self.assertContains(response, 'class="toggle-pinned-post"', html=False)
         self.assertContains(response, "Regulamin")
         self.assertContains(response, "Ogłoszenia")
         self.assertContains(response, "Treść przypięta")

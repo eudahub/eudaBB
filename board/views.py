@@ -248,7 +248,7 @@ def reply(request, topic_id):
             ],
         )
         .exclude(topic=topic)
-        .order_by("-topic__topic_type", "-topic__last_post_at", "topic_id")[:55]
+        .order_by("topic__forum__title", "-topic__topic_type", "topic__title", "topic_id")[:55]
     )
     return render(request, "board/reply.html", {
         "topic": topic,

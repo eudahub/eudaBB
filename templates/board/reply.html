@@ -144,14 +144,30 @@
              style="padding:.3rem .5rem;border-bottom:1px solid #e0d0d0;
                     {% if forloop.last %}border-bottom:none;{% endif %}">
           <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
-            <span style="color:#800000;font-weight:bold;">{{ post.topic.title }}</span>
+            <button
+              type="button"
+              class="toggle-pinned-post"
+              aria-expanded="false"
+              style="padding:0 .35rem;min-width:1.6rem;line-height:1.2;"
+            >+</button>
+            <button
+              type="button"
+              class="toggle-pinned-post"
+              aria-expanded="false"
+              style="border:0;background:transparent;padding:0;color:#800000;font-weight:bold;text-align:left;cursor:pointer;"
+            >{{ post.topic.title }}</button>
             <span style="color:#666;">· {{ post.topic.forum.title }}</span>
             <span style="color:#666;">· {{ post.author.username|default:"[usunięty]" }}</span>
             <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
-            <button type="button" class="recent-quote-btn" data-keep-selection="1" onclick="quoteRecentPost(this)"
-                    style="margin-left:auto;">Cytuj</button>
           </div>
-          <div style="margin-top:.2rem;" data-post-content="1">{{ post|post_content }}</div>
+          <div
+            class="pinned-post-body"
+            style="display:none;margin-top:.3rem;padding-left:2rem;"
+          >
+            <button type="button" class="recent-quote-btn" data-keep-selection="1" onclick="quoteRecentPost(this)"
+                    style="margin-bottom:.3rem;">Cytuj</button>
+            <div data-post-content="1">{{ post|post_content }}</div>
+          </div>
         </div>
       {% endfor %}
     </div>
@@ -429,6 +445,23 @@ function updateQuotePanelsLayout(active) {
     updateQuotePanelsLayout(quotePickerState.active);
   });
 })();
+
+document.querySelectorAll('.toggle-pinned-post').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var item = btn.closest('[data-quote-post="1"]');
+    if (!item) return;
+    var body = item.querySelector('.pinned-post-body');
+    if (!body) return;
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    item.querySelectorAll('.toggle-pinned-post').forEach(function(control) {
+      control.setAttribute('aria-expanded', open ? 'false' : 'true');
+      if (control.textContent === '+' || control.textContent === '−') {
+        control.textContent = open ? '+' : '−';
+      }
+    });
+  });
+});
 
 // Preview (AJAX)
 function doPreview() {
