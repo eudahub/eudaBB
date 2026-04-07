@@ -3,7 +3,7 @@ from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post
+from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post, TopicParticipant
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
@@ -489,6 +489,22 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "Bez odpowiedzi")
         self.assertNotContains(response, "Z odpowiedzią")
         self.assertContains(response, "postów: 1")
+
+    def test_topic_detail_shows_topic_participants_with_post_counts(self):
+        author = User.objects.create_user(username="AutorParticipants", password="x")
+        other = User.objects.create_user(username="InnyParticipants", password="x")
+        topic = self._make_topic(author, title="Uczestnicy")
+        Post.objects.create(topic=topic, author=author, content_bbcode="Start", post_order=1)
+        Post.objects.create(topic=topic, author=author, content_bbcode="Drugi", post_order=2)
+        Post.objects.create(topic=topic, author=other, content_bbcode="Trzeci", post_order=3)
+
+        response = self.client.get(reverse("topic_detail", args=[topic.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Uczestnicy:")
+        self.assertContains(response, "AutorParticipants (2)")
+        self.assertContains(response, "InnyParticipants (1)")
+        self.assertTrue(TopicParticipant.objects.filter(topic=topic, user=author, post_count=2).exists())
 
     def test_search_topics_mode_matches_title_and_marks_poll_topics(self):
         reader = User.objects.create_user(username="CzytelnikSearch1", password="x")

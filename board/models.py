@@ -612,6 +612,30 @@ class PollVote(models.Model):
         return f"PollVote poll={self.poll_id} user={self.user_id} option={self.option_id}"
 
 
+class TopicParticipant(models.Model):
+    """Per-topic participation counters for one user."""
+
+    topic = models.ForeignKey(
+        Topic, on_delete=models.CASCADE, related_name="participants"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="topic_participations"
+    )
+    post_count = models.PositiveIntegerField(default=0)
+    last_post_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "forum_topic_participants"
+        unique_together = [("topic", "user")]
+        indexes = [
+            models.Index(fields=["topic", "post_count"]),
+            models.Index(fields=["user"]),
+        ]
+
+    def __str__(self):
+        return f"TopicParticipant topic={self.topic_id} user={self.user_id} posts={self.post_count}"
+
+
 class PostLike(models.Model):
     """One like per user per post."""
 

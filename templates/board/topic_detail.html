@@ -11,6 +11,15 @@
 
 <h2>{{ topic.title }}</h2>
 {% if topic.is_locked %}<p class="locked-notice">🔒 Wątek zamknięty — odpowiadanie wyłączone.</p>{% endif %}
+{% if topic_participants %}
+  <p style="font-size:11px;color:#555;margin-top:-.1rem;margin-bottom:.5rem;">
+    Uczestnicy:
+    {% for participant in topic_participants %}
+      {% if not forloop.first %} · {% endif %}
+      {{ participant.user.username|default:"[usunięty]" }} ({{ participant.post_count }})
+    {% endfor %}
+  </p>
+{% endif %}
 
 {% if topic.poll %}
   <div class="post-box" style="margin-bottom:.7rem;">

@@ -15,7 +15,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote
+from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
@@ -57,6 +57,62 @@ def _increment_user_post_count(user) -> None:
     if user and user.is_authenticated:
         user.post_count += 1
         user.save(update_fields=["post_count"])
+
+
+def _increment_topic_participant(topic: Topic, author, post: Post) -> None:
+    if not author or not getattr(author, "pk", None):
+        return
+    participant, created = TopicParticipant.objects.get_or_create(
+        topic=topic,
+        user=author,
+        defaults={
+            "post_count": 1,
+            "last_post_at": post.created_at,
+        },
+    )
+    if not created:
+        participant.post_count += 1
+        if participant.last_post_at is None or post.created_at > participant.last_post_at:
+            participant.last_post_at = post.created_at
+        participant.save(update_fields=["post_count", "last_post_at"])
+
+
+def _get_or_build_topic_participants(topic: Topic):
+    participants = list(
+        topic.participants.select_related("user").order_by("-post_count", "user__username", "pk")
+    )
+    if participants:
+        return participants
+
+    rows = list(
+        topic.posts.filter(author__isnull=False)
+        .values("author_id")
+        .annotate(
+            post_count=django_models.Count("id"),
+            last_post_at=django_models.Max("created_at"),
+        )
+        .order_by("-post_count", "author_id")
+    )
+    if not rows:
+        return []
+
+    user_map = {
+        user.pk: user
+        for user in User.objects.filter(pk__in=[row["author_id"] for row in rows])
+    }
+    TopicParticipant.objects.bulk_create([
+        TopicParticipant(
+            topic=topic,
+            user_id=row["author_id"],
+            post_count=row["post_count"],
+            last_post_at=row["last_post_at"],
+        )
+        for row in rows
+        if row["author_id"] in user_map
+    ], ignore_conflicts=True)
+    return list(
+        topic.participants.select_related("user").order_by("-post_count", "user__username", "pk")
+    )
 
 
 def _get_global_pinned_topic_posts(exclude_topic=None):
@@ -212,6 +268,7 @@ def topic_detail(request, topic_id):
                 post__in=page.object_list,
             ).values_list("post_id", flat=True)
         )
+    topic_participants = _get_or_build_topic_participants(topic)
 
     return render(request, "board/topic_detail.html", {
         "topic": topic,
@@ -228,6 +285,7 @@ def topic_detail(request, topic_id):
         "poll_can_change_vote": poll_can_change_vote,
         "poll_user_vote_option_ids": poll_user_vote_option_ids,
         "poll_max_option_votes": poll_max_option_votes,
+        "topic_participants": topic_participants,
     })
 
 
@@ -335,6 +393,7 @@ def new_topic(request, forum_id):
             _update_topic_stats(topic, post)
             _update_forum_stats(forum, post)
             _increment_user_post_count(request.user)
+            _increment_topic_participant(topic, request.user, post)
             poll_data = form.cleaned_data.get("poll_data")
             if poll_data:
                 poll = Poll.objects.create(
@@ -410,6 +469,7 @@ def reply(request, topic_id):
             _update_topic_stats(topic, post)
             _update_forum_stats(topic.forum, post)
             _increment_user_post_count(request.user)
+            _increment_topic_participant(topic, request.user, post)
 
             # Redirect to the last page so user sees their post
             posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)

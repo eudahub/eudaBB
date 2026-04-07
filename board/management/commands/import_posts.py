@@ -28,12 +28,12 @@ _POST_ID_RE = re.compile(r'(post_id=)(\d+)', re.IGNORECASE)
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Max
 from django.utils import timezone
 
 _WARSAW = ZoneInfo("Europe/Warsaw")
 
-from board.models import Forum, Post, Topic, User
+from board.models import Forum, Post, Topic, User, TopicParticipant
 from board.bbcode_lint import repair as repair_bbcode
 from board.management.commands.update_forum_counts import compute_recursive_counts
 from board.quote_refs import rebuild_quote_references_for_posts
@@ -181,6 +181,7 @@ class Command(BaseCommand):
         posts_created = topics_created = skipped_forum = repaired_posts = 0
         sfinia_to_django = {}  # sfinia post_id (int) → django post_id (int)
         imported_post_ids = []
+        imported_topic_ids = []
 
         # --- Group by topic_id (rows already sorted by topic_id, post_order) ---
         with transaction.atomic():
@@ -215,6 +216,7 @@ class Command(BaseCommand):
                         topic.save(update_fields=["created_at"])
                     topic_map[archive_topic_id] = topic
                     topics_created += 1
+                    imported_topic_ids.append(topic.pk)
                 else:
                     topic = topic_map[archive_topic_id]   # shouldn't happen (one group per id)
 
@@ -306,6 +308,26 @@ class Command(BaseCommand):
                 Post.objects.filter(pk__in=imported_post_ids).select_related("topic", "topic__forum", "author")
             )
             self.stdout.write(f"  Zindeksowano wyszukiwanie dla {indexed_search} postów.")
+
+            if imported_topic_ids:
+                self.stdout.write("Buduję uczestników wątków…")
+                TopicParticipant.objects.filter(topic_id__in=imported_topic_ids).delete()
+                participant_rows = (
+                    Post.objects.filter(topic_id__in=imported_topic_ids, author__isnull=False)
+                    .values("topic_id", "author_id")
+                    .annotate(post_count=Count("id"), last_post_at=Max("created_at"))
+                    .order_by()
+                )
+                TopicParticipant.objects.bulk_create([
+                    TopicParticipant(
+                        topic_id=row["topic_id"],
+                        user_id=row["author_id"],
+                        post_count=row["post_count"],
+                        last_post_at=row["last_post_at"],
+                    )
+                    for row in participant_rows
+                ], batch_size=1000)
+                self.stdout.write("  Zbudowano uczestników wątków.")
 
         # --- Set topic.last_post FK ---
         self.stdout.write("Ustawiam last_post na wątkach…")
