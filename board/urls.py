@@ -9,6 +9,7 @@ urlpatterns = [
     path("forum/<int:forum_id>/", views.forum_detail, name="forum_detail"),
     path("topic/<int:topic_id>/", views.topic_detail, name="topic_detail"),
     path("forum/<int:forum_id>/new/", views.new_topic, name="new_topic"),
+    path("forum/<int:forum_id>/new/preview/", views.preview_new_topic, name="preview_new_topic"),
     path("topic/<int:topic_id>/reply/", views.reply, name="reply"),
     path("topic/<int:topic_id>/preview/", views.preview_post, name="preview_post"),
     path("post/<int:post_id>/quote-fragment/", views.quote_fragment, name="quote_fragment"),

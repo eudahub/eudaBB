@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load bbcode_tags %}
 {% block title %}Nowy wątek — {{ forum.title }}{% endblock %}
 
 {% block content %}
@@ -10,45 +11,170 @@
 
 <h2>Nowy wątek w: {{ forum.title }}</h2>
 
-<form method="post">
+<form method="post" id="new-topic-form">
   {% csrf_token %}
+
   <label>{{ form.title.label }}{{ form.title }}
     {% if form.title.errors %}<small style="color:red;">{{ form.title.errors|join:", " }}</small>{% endif %}
   </label>
-  <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
-    <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
-    <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
-    <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
-    <button type="button" class="bb-btn" data-open="[spoiler]" data-close="[/spoiler]" data-prompt="Krótki opis spoilera (opcjonalnie):" data-open-template="[spoiler={value}]">spoiler</button>
-    <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
-    <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
-    <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
+
+  <div id="new-topic-editor-panel">
+    <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
+      <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
+      <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
+      <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
+      <button type="button" class="bb-btn" data-open="[spoiler]" data-close="[/spoiler]" data-prompt="Krótki opis spoilera (opcjonalnie):" data-open-template="[spoiler={value}]">spoiler</button>
+      <button type="button" id="enter-new-topic-quote-picker" style="font-weight:bold;">quote</button>
+      <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
+      <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
+      <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
+      <button type="button" id="new-topic-poll-button" title="Tworzenie ankiety będzie dodane w kolejnym kroku.">ankieta</button>
+    </div>
+
+    <label>{{ form.content.label }}
+      {% if form.content.errors %}<small style="color:red;">{{ form.content.errors|join:", " }}</small>{% endif %}
+    </label>
+    <div style="display:flex;border:1px solid #BC8F8F;background:#fff;">
+      <div id="new-topic-line-numbers"
+           aria-hidden="true"
+           style="flex:0 0 auto;padding:.35rem .45rem;text-align:right;color:#888;
+                  background:#f8f1f1;border-right:1px solid #d8b8b8;font:12px/1.4 monospace;
+                  user-select:none;white-space:pre;">1</div>
+      <textarea id="new-topic-content" name="content" rows="12"
+                style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;
+                       line-height:1.4;border:0;resize:vertical;padding:.35rem .45rem;">{{ form.content.value|default_if_none:"" }}</textarea>
+    </div>
+    <div id="new-topic-content-count" style="margin-top:.25rem;font-size:11px;color:#666;">
+      0/{{ post_content_soft_limit }}
+    </div>
+    <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:nowrap;">
+        <button type="button" onclick="doNewTopicPreview()" style="width:auto;flex:0 0 auto;">Podgląd</button>
+        <button type="button" onclick="doNewTopicValidate()" style="width:auto;flex:0 0 auto;">Walidacja</button>
+        <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Utwórz wątek</button>
+      </div>
+      <a href="{% url 'forum_detail' forum.pk %}" style="margin-left:auto;">Anuluj</a>
+    </div>
   </div>
-  <label>{{ form.content.label }}{{ form.content }}
-    {% if form.content.errors %}<small style="color:red;">{{ form.content.errors|join:", " }}</small>{% endif %}
-  </label>
-  <p id="new-topic-content-count" style="margin-top:-.2rem;font-size:11px;color:#666;">
-    0/{{ post_content_soft_limit }}
-  </p>
-  <button type="submit">Utwórz wątek</button>
-  <a href="{% url 'forum_detail' forum.pk %}" role="button" class="secondary outline" style="margin-left:.5rem;">Anuluj</a>
 </form>
+
+<div id="new-topic-validate-area" style="display:none;margin-top:.6rem;font-size:11px;"></div>
+
+<div id="new-topic-preview-area" style="display:none;margin-top:.4rem;">
+  <strong style="font-size:11px;color:#555;">Podgląd:</strong>
+  <div id="new-topic-preview-content"
+       style="border:1px solid #BC8F8F;padding:.4rem .6rem;margin-top:.2rem;
+              font-size:12px;line-height:18px;background:#fffcfc;"></div>
+</div>
+
+<div id="new-topic-poll-note"
+     style="display:none;margin-top:.6rem;padding:.65rem .8rem;border:1px solid #BC8F8F;background:#fff8f0;font-size:11px;color:#654;">
+  Tworzenie ankiety dla nowego wątku będzie dodane w kolejnym kroku. Przycisk jest już w pełnym edytorze, żeby układ był docelowy.
+</div>
+
+<hr style="margin:.8rem 0;">
+
+<div id="new-topic-quote-picker-banner"
+     style="display:none;margin:.7rem 0;padding:.8rem 1rem;border:2px solid #BC8F8F;
+            background:#fff5f5;">
+  <div style="font-size:1.1rem;font-weight:bold;color:#7a1f1f;margin-bottom:.35rem;">
+    Zaznacz fragment przypiętego posta, który chcesz zacytować, i naciśnij OK, aby dodać cytat.
+  </div>
+  <div style="font-size:.92rem;color:#654;">
+    W nowym wątku nie ma listy ostatnich postów, więc tryb `quote` działa przez globalne `Przypięte`.
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.65rem;">
+    <button type="button" id="new-topic-quote-picker-confirm">OK</button>
+    <button type="button" id="new-topic-quote-picker-cancel" class="secondary">Anuluj</button>
+  </div>
+</div>
+
+{% if pinned_topic_posts %}
+  <div style="margin-top:1rem;margin-bottom:1.4rem;">
+    <button
+      type="button"
+      id="toggle-new-topic-pinned-posts"
+      aria-expanded="false"
+      style="font-size:11px;padding:.2rem .5rem;"
+    >
+      Przypięte
+    </button>
+    <div
+      id="new-topic-pinned-posts-panel"
+      style="display:none;max-height:280px;overflow-y:auto;border:1px solid #BC8F8F;
+             margin-top:.3rem;font-size:11px;line-height:1.5;background:#fffaf8;
+             padding-bottom:.4rem;"
+    >
+      {% for post in pinned_topic_posts %}
+        <div data-quote-post="1"
+             data-post-id="{{ post.pk }}"
+             data-author="{{ post.author.username|default:'[usunięty]'|escape }}"
+             data-bbcode="{{ post.content_bbcode|escape }}"
+             style="padding:.3rem .5rem;border-bottom:1px solid #e0d0d0;
+                    {% if forloop.last %}border-bottom:none;{% endif %}">
+          <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+            <button
+              type="button"
+              class="toggle-pinned-post"
+              aria-expanded="false"
+              style="padding:0 .35rem;min-width:1.6rem;line-height:1.2;"
+            >+</button>
+            <button
+              type="button"
+              class="toggle-pinned-post"
+              aria-expanded="false"
+              style="border:0;background:transparent;padding:0;color:#800000;font-weight:bold;text-align:left;cursor:pointer;"
+            >{{ post.topic.title }}</button>
+            <span style="color:#666;">· {{ post.topic.forum.title }}</span>
+            <span style="color:#666;">· {{ post.author.username|default:"[usunięty]" }}</span>
+            <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
+          </div>
+          <div
+            class="pinned-post-body"
+            style="display:none;margin-top:.3rem;padding-left:2rem;"
+          >
+            <button type="button" class="new-topic-quote-btn" data-keep-selection="1" onclick="quotePinnedPostForNewTopic(this)"
+                    style="margin-bottom:.3rem;">Cytuj</button>
+            <div data-post-content="1">{{ post|post_content }}</div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
 
 <script>
 (function() {
-  var textarea = document.getElementById('id_content');
-  var counter = document.getElementById('new-topic-content-count');
-  if (!textarea || !counter) return;
-  function update() {
-    counter.textContent = textarea.value.length + '/{{ post_content_soft_limit }}';
+  var textarea = document.getElementById('new-topic-content');
+  var lineNumbers = document.getElementById('new-topic-line-numbers');
+  var contentCount = document.getElementById('new-topic-content-count');
+
+  function updateLineNumbers() {
+    var lines = textarea.value.split('\n').length;
+    var buf = [];
+    for (var i = 1; i <= lines; i++) buf.push(String(i));
+    lineNumbers.textContent = buf.join('\n');
   }
-  textarea.addEventListener('input', update);
-  update();
+
+  function syncLineNumberScroll() {
+    lineNumbers.scrollTop = textarea.scrollTop;
+  }
+
+  window.syncNewTopicEditorChrome = function() {
+    contentCount.textContent = textarea.value.length + '/{{ post_content_soft_limit }}';
+    updateLineNumbers();
+    syncLineNumberScroll();
+  };
+
+  textarea.addEventListener('input', window.syncNewTopicEditorChrome);
+  textarea.addEventListener('scroll', syncLineNumberScroll);
+  textarea.addEventListener('change', window.syncNewTopicEditorChrome);
+  window.syncNewTopicEditorChrome();
 })();
 
 document.querySelectorAll('.bb-btn').forEach(function(btn) {
   btn.addEventListener('click', function() {
-    var ta = document.getElementById('id_content');
+    var ta = document.getElementById('new-topic-content');
     var open = btn.getAttribute('data-open');
     var close = btn.getAttribute('data-close');
     var promptText = btn.getAttribute('data-prompt');
@@ -70,7 +196,328 @@ document.querySelectorAll('.bb-btn').forEach(function(btn) {
       ta.selectionStart = start + open.length;
       ta.selectionEnd = start + open.length;
     }
-    textarea.dispatchEvent(new Event('input', {bubbles: true}));
+    ta.dispatchEvent(new Event('input', {bubbles: true}));
+  });
+});
+
+function normalizeQuotedSelection(text) {
+  return (text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function buildQuoteTag(author, postId, body) {
+  return '[quote="' + author + '" post_id=' + postId + ']\n' + body + '\n[/quote]\n\n';
+}
+
+function buildTrimmedNestedQuote(author, postId, body) {
+  return '[quote="' + author + '" post_id=' + postId + ']\n(...)\n' + body + '\n(...)\n[/quote]';
+}
+
+function clearBrowserSelection() {
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (sel && sel.removeAllRanges) sel.removeAllRanges();
+}
+
+function getNewTopicQuoteSelectionPayload() {
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  var range = sel.getRangeAt(0);
+  var anchor = range.commonAncestorContainer;
+  var contentNode = anchor.nodeType === 1 ? anchor : anchor.parentNode;
+  var postContent = contentNode ? contentNode.closest('[data-post-content="1"]') : null;
+  if (!postContent) return null;
+  var postBox = postContent.closest('[data-quote-post="1"]');
+  if (!postBox) return null;
+  var selectedText = normalizeQuotedSelection(sel.toString());
+  if (!selectedText) return null;
+  var quoteNode = contentNode ? contentNode.closest('blockquote.bbquote[data-post-id]') : null;
+  var nestedQuote = null;
+  if (quoteNode && postContent.contains(quoteNode)) {
+    nestedQuote = {
+      postId: quoteNode.getAttribute('data-post-id') || '',
+      author: quoteNode.getAttribute('data-quote-author') || ''
+    };
+    if (!nestedQuote.postId || !nestedQuote.author) nestedQuote = null;
+  }
+  return {
+    postBox: postBox,
+    postId: postBox.getAttribute('data-post-id') || '',
+    author: postBox.getAttribute('data-author') || '',
+    selectedText: selectedText,
+    nestedQuote: nestedQuote
+  };
+}
+
+function requestNewTopicQuoteBody(postId, selectedText, fallbackBody, nestedQuote) {
+  if (!selectedText) {
+    return Promise.resolve((fallbackBody || '').trim());
+  }
+  return fetch('{% url "quote_fragment" 0 %}'.replace('/0/', '/' + postId + '/'), {
+    method: 'POST',
+    headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'selected_text=' + encodeURIComponent(selectedText)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data && data.body && data.exact_source) return data.body;
+    if (nestedQuote && nestedQuote.postId && nestedQuote.author) {
+      return buildTrimmedNestedQuote(nestedQuote.author, nestedQuote.postId, selectedText);
+    }
+    return (data && data.body) ? data.body : selectedText;
+  })
+  .catch(function() {
+    if (nestedQuote && nestedQuote.postId && nestedQuote.author) {
+      return buildTrimmedNestedQuote(nestedQuote.author, nestedQuote.postId, selectedText);
+    }
+    return selectedText;
+  });
+}
+
+function appendNewTopicQuote(text) {
+  var ta = document.getElementById('new-topic-content');
+  if (!text) return;
+  var needsGap = ta.value && !/\n\n$/.test(ta.value);
+  if (needsGap) ta.value += '\n\n';
+  ta.value += text;
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+  if (window.syncNewTopicEditorChrome) window.syncNewTopicEditorChrome();
+}
+
+function appendQuoteFromPinnedPost(postBox, selectedText, nestedQuote) {
+  if (!postBox) return Promise.resolve(false);
+  var postId = postBox.getAttribute('data-post-id') || '';
+  var author = postBox.getAttribute('data-author') || '';
+  var fallbackBody = postBox.getAttribute('data-bbcode') || '';
+  return requestNewTopicQuoteBody(postId, selectedText, fallbackBody, nestedQuote).then(function(body) {
+    if (!body) return false;
+    appendNewTopicQuote(buildQuoteTag(author, postId, body));
+    clearBrowserSelection();
+    return true;
+  });
+}
+
+var newTopicQuotePickerState = {active: false};
+
+function updateNewTopicQuotePanelsLayout(active) {
+  var pinnedPanel = document.getElementById('new-topic-pinned-posts-panel');
+  if (!pinnedPanel) return;
+  pinnedPanel.style.maxHeight = active ? '72vh' : '280px';
+  pinnedPanel.style.fontSize = active ? '12px' : '11px';
+}
+
+function setNewTopicQuotePickerMode(active) {
+  newTopicQuotePickerState.active = !!active;
+  document.getElementById('new-topic-editor-panel').style.display = active ? 'none' : 'block';
+  ['new-topic-validate-area', 'new-topic-preview-area', 'new-topic-poll-note'].forEach(function(id) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    if (active) {
+      node.setAttribute('data-quote-prev-display', node.style.display || '');
+      node.style.display = 'none';
+      return;
+    }
+    var prev = node.getAttribute('data-quote-prev-display');
+    node.style.display = prev !== null ? prev : node.style.display;
+    node.removeAttribute('data-quote-prev-display');
+  });
+  document.getElementById('new-topic-quote-picker-banner').style.display = active ? 'block' : 'none';
+  var pinnedPanel = document.getElementById('new-topic-pinned-posts-panel');
+  var togglePinned = document.getElementById('toggle-new-topic-pinned-posts');
+  if (active && pinnedPanel && togglePinned && pinnedPanel.style.display === 'none') {
+    pinnedPanel.style.display = 'block';
+    togglePinned.setAttribute('aria-expanded', 'true');
+  }
+  updateNewTopicQuotePanelsLayout(active);
+  if (active) {
+    document.getElementById('new-topic-quote-picker-banner').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  } else {
+    document.getElementById('new-topic-content').focus();
+  }
+}
+
+function quotePinnedPostForNewTopic(btn) {
+  if (btn.disabled) return;
+  var postBox = btn.closest('[data-quote-post="1"]');
+  var selected = getNewTopicQuoteSelectionPayload();
+  var selectedText = '';
+  var nestedQuote = null;
+  if (selected && selected.postBox === postBox) {
+    selectedText = selected.selectedText;
+    nestedQuote = selected.nestedQuote;
+  }
+  appendQuoteFromPinnedPost(postBox, selectedText, nestedQuote).then(function(appended) {
+    if (!appended) return;
+    if (newTopicQuotePickerState.active) {
+      setNewTopicQuotePickerMode(false);
+      return;
+    }
+    document.getElementById('new-topic-content').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  });
+}
+
+function confirmNewTopicQuotePickerSelection() {
+  var payload = getNewTopicQuoteSelectionPayload();
+  if (!payload) {
+    window.alert('Najpierw zaznacz fragment jednego z przypiętych postów poniżej.');
+    return;
+  }
+  appendQuoteFromPinnedPost(payload.postBox, payload.selectedText, payload.nestedQuote).then(function(appended) {
+    if (!appended) return;
+    setNewTopicQuotePickerMode(false);
+  });
+}
+
+document.getElementById('enter-new-topic-quote-picker').addEventListener('click', function() {
+  setNewTopicQuotePickerMode(true);
+});
+
+document.getElementById('new-topic-quote-picker-confirm').addEventListener('click', function() {
+  confirmNewTopicQuotePickerSelection();
+});
+
+document.getElementById('new-topic-quote-picker-cancel').addEventListener('click', function() {
+  clearBrowserSelection();
+  setNewTopicQuotePickerMode(false);
+});
+
+document.querySelectorAll('.new-topic-quote-btn, #new-topic-quote-picker-confirm').forEach(function(btn) {
+  btn.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+  });
+});
+
+function syncNewTopicQuoteButtons() {
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('.new-topic-quote-btn'));
+  var payload = getNewTopicQuoteSelectionPayload();
+  if (!payload || !payload.postBox) {
+    buttons.forEach(function(btn) { btn.disabled = false; });
+    return;
+  }
+  buttons.forEach(function(btn) {
+    var postBox = btn.closest('[data-quote-post="1"]');
+    btn.disabled = postBox !== payload.postBox;
+  });
+}
+
+document.addEventListener('selectionchange', syncNewTopicQuoteButtons);
+window.addEventListener('load', syncNewTopicQuoteButtons);
+
+(function() {
+  var toggle = document.getElementById('toggle-new-topic-pinned-posts');
+  var panel = document.getElementById('new-topic-pinned-posts-panel');
+  if (!toggle || !panel) return;
+  toggle.addEventListener('click', function() {
+    var open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+    updateNewTopicQuotePanelsLayout(newTopicQuotePickerState.active);
+  });
+})();
+
+document.querySelectorAll('.toggle-pinned-post').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var item = btn.closest('[data-quote-post="1"]');
+    if (!item) return;
+    var body = item.querySelector('.pinned-post-body');
+    if (!body) return;
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    item.querySelectorAll('.toggle-pinned-post').forEach(function(control) {
+      control.setAttribute('aria-expanded', open ? 'false' : 'true');
+      if (control.textContent === '+' || control.textContent === '−') {
+        control.textContent = open ? '+' : '−';
+      }
+    });
+  });
+});
+
+document.getElementById('new-topic-poll-button').addEventListener('click', function() {
+  var note = document.getElementById('new-topic-poll-note');
+  if (!note) return;
+  note.style.display = note.style.display === 'none' ? 'block' : 'none';
+});
+
+function requestNewTopicPreviewData() {
+  var text = document.getElementById('new-topic-content').value;
+  return fetch('{% url "preview_new_topic" forum.pk %}', {
+    method: 'POST',
+    headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'content=' + encodeURIComponent(text)
+  })
+  .then(function(r){ return r.json(); });
+}
+
+function renderNewTopicValidationResult(data) {
+  var area = document.getElementById('new-topic-validate-area');
+  function escapeHtml(value) {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  if (data.ok) {
+    area.innerHTML = '<span style="color:green;">✓ Tagi poprawne</span>';
+  } else {
+    area.innerHTML = '<span style="color:red;">' +
+      (data.errors || []).map(escapeHtml).join(' | ') + '</span>';
+  }
+  area.style.display = 'block';
+}
+
+function doNewTopicPreview() {
+  requestNewTopicPreviewData().then(function(d) {
+    var area = document.getElementById('new-topic-preview-area');
+    var content = document.getElementById('new-topic-preview-content');
+    if (!d.ok) {
+      renderNewTopicValidationResult(d);
+      area.style.display = 'none';
+      return;
+    }
+    renderNewTopicValidationResult(d);
+    if (d.content) {
+      document.getElementById('new-topic-content').value = d.content;
+      if (window.syncNewTopicEditorChrome) window.syncNewTopicEditorChrome();
+    }
+    content.innerHTML = d.html || '';
+    area.style.display = 'block';
+  });
+}
+
+function doNewTopicValidate() {
+  return requestNewTopicPreviewData().then(function(d) {
+    if (d.ok && d.content) {
+      document.getElementById('new-topic-content').value = d.content;
+      if (window.syncNewTopicEditorChrome) window.syncNewTopicEditorChrome();
+    }
+    renderNewTopicValidationResult(d);
+    return d.ok;
+  });
+}
+
+document.getElementById('new-topic-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var form = e.target;
+  requestNewTopicPreviewData().then(function(d) {
+    if (!d.ok) {
+      document.getElementById('new-topic-preview-area').style.display = 'none';
+      renderNewTopicValidationResult(d);
+      document.getElementById('new-topic-validate-area').scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest'
+      });
+      return;
+    }
+    if (d.content) {
+      document.getElementById('new-topic-content').value = d.content;
+      if (window.syncNewTopicEditorChrome) window.syncNewTopicEditorChrome();
+    }
+    form.submit();
   });
 });
 </script>

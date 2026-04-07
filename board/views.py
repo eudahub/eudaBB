@@ -58,6 +58,23 @@ def _increment_user_post_count(user) -> None:
         user.save(update_fields=["post_count"])
 
 
+def _get_global_pinned_topic_posts(exclude_topic=None):
+    qs = (
+        Post.objects.select_related("author", "topic", "topic__forum")
+        .filter(
+            post_order=1,
+            topic__topic_type__in=[
+                Topic.TopicType.STICKY,
+                Topic.TopicType.ANNOUNCEMENT,
+            ],
+        )
+        .order_by("topic__forum__title", "-topic__topic_type", "topic__title", "topic_id")
+    )
+    if exclude_topic is not None:
+        qs = qs.exclude(topic=exclude_topic)
+    return qs[:55]
+
+
 def _get_client_ip(request):
     x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
     if x_forwarded_for:
@@ -211,6 +228,7 @@ def new_topic(request, forum_id):
     return render(request, "board/new_topic.html", {
         "forum": forum,
         "form": form,
+        "pinned_topic_posts": _get_global_pinned_topic_posts(),
         "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
     })
 
@@ -299,18 +317,7 @@ def reply(request, topic_id):
     recent_posts_page = Paginator(recent_posts_qs, posts_per_page).get_page(
         request.GET.get("quotes_page")
     )
-    pinned_topic_posts = (
-        Post.objects.select_related("author", "topic")
-        .filter(
-            post_order=1,
-            topic__topic_type__in=[
-                Topic.TopicType.STICKY,
-                Topic.TopicType.ANNOUNCEMENT,
-            ],
-        )
-        .exclude(topic=topic)
-        .order_by("topic__forum__title", "-topic__topic_type", "topic__title", "topic_id")[:55]
-    )
+    pinned_topic_posts = _get_global_pinned_topic_posts(exclude_topic=topic)
     return render(request, "board/reply.html", {
         "topic": topic,
         "form": form,
@@ -342,6 +349,32 @@ def preview_post(request, topic_id):
     return JsonResponse({
         "ok": True,
         "html": html,
+        "content": repaired,
+        "changes": changes,
+    })
+
+
+@login_required
+def preview_new_topic(request, forum_id):
+    """AJAX: validate and render BBCode text for the new-topic editor."""
+    from django.http import JsonResponse
+    from .bbcode import render as bbcode_render
+
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    get_object_or_404(Forum, pk=forum_id)
+    text = request.POST.get("content", "")
+    repaired, changes, errors = validate_post_content(text)
+    if errors:
+        return JsonResponse({
+            "ok": False,
+            "errors": errors,
+            "changes": changes,
+        })
+    return JsonResponse({
+        "ok": True,
+        "html": bbcode_render(repaired),
         "content": repaired,
         "changes": changes,
     })
