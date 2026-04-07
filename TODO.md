@@ -108,12 +108,21 @@ if not settings.TEST_MODE:
 **A) Wyszukiwanie postów** (pełnotekstowe, domyślne)
 - Backend: PostgreSQL `tsvector` / `tsquery` (FTS)
 - Język: `polish` (PostgreSQL ma słownik polski — obsługuje odmianę)
+- Docelowo język wyszukiwania nie może być zaszyty na sztywno:
+  - profil wyszukiwania ma zależeć od aktywnego pluginu językowego / locale
+  - polski może mieć własne minimalne stop-words (`w`, `z`, `do`), a angielski inne
+  - lista pomijanych słów ma być mała i jawnie konfigurowalna per język
 - Logika słów: **zawsze AND**, nigdy OR — wpisanie „pies kot" = oba słowa muszą wystąpić
 - Fraza w cudzysłowie: `"pies kot"` = dokładna sekwencja słów (phrase search, `<->` w tsquery)
 - Krótkie słowa też mają działać, nie tylko długie tokeny:
   - nie odrzucać automatycznie 2- i 3-literowych słów
+  - nie odrzucać też słów 1-literowych tylko dlatego, że są krótkie
+  - user ma móc znaleźć np. `T`, `C`, `C++`, inicjały, skróty itp. jeśli rzeczywiście występują
   - minimalna lista pomijanych słów ma być naprawdę krótka, np. tylko `w`, `z`, `do`
   - unikać agresywnego "stop-wordowania", bo na forum krótkie słowa/nicki bywają sensowne
+- Wyszukiwanie ma być case-insensitive jak w Google:
+  - bez rozróżniania wielkości liter
+  - najlepiej także bez rozróżniania diakrytyków w warstwie `content_norm`
 - PostgreSQL domyślnie ma obszerną listę stop-words — skonfigurować własną `TEXT SEARCH CONFIGURATION` z okrojonym słownikiem.
 - Brak stemming jeśli zbyt agresywny — rozważyć `simple` config zamiast `polish` jeśli wyniki dziwne
 - Wyniki: posty z podświetleniem (`ts_headline`), posortowane po rankingu (`ts_rank`)
@@ -149,7 +158,17 @@ Poza zwykłym trybem „cały post” dodać także bardziej precyzyjne warianty
 - wynikami są tylko posty, które zawierają pasujący `fquote`
 - nie przeszukujemy wtedy tekstu własnego autora ani zwykłych `[quote]`
 
-4. **Tylko cytaty jako obiekty**
+4. **Tylko bloki AI**
+- wyszukujemy wyłącznie w treści bloków `[AI=...]...[/AI]`
+- wynikami są tylko posty, które zawierają pasujący blok AI
+- nie przeszukujemy wtedy reszty posta
+
+5. **Tylko bloki code**
+- wyszukujemy wyłącznie w treści bloków `[code]...[/code]`
+- wynikami są tylko posty, które zawierają pasujący blok code
+- tryb code ma być osobny i nie mieszać się ze zwykłymi `quote`
+
+6. **Tylko cytaty jako obiekty**
 - zamiast szukać po całych postach, szukamy po tabeli cytatów / indeksie cytowań
 - wynik może być:
   - post + podgląd konkretnego cytatu
@@ -157,6 +176,8 @@ Poza zwykłym trybem „cały post” dodać także bardziej precyzyjne warianty
 - warianty:
   - tylko `Bible`
   - tylko `fquote`
+  - tylko `AI`
+  - tylko `code`
   - docelowo także zwykłe `quote`
 
 #### Osobna tabela / indeks dla treści cytowanych
@@ -235,6 +256,8 @@ Pola do rozważenia:
 3. **Użyć tabeli cytatów do wyszukiwania**
 - `Bible` i `fquote` wyszukiwać bezpośrednio po `forum_quote_refs`
 - zwykłe `quote` też móc przeszukiwać jako osobne obiekty
+- rozważyć czy `AI` i `code` trzymać w tej samej tabeli rozszerzonego indeksu bloków,
+  czy w równoległym indeksie parsera BBCode; ważne, żeby UI wyszukiwarki widziało to jednolicie
 
 4. **Użyć tabeli cytatów do walidacji i napraw**
 - walidacja `[quote="user" post_id=N]` nie musi parsować całego posta od zera przy każdym kroku
@@ -272,6 +295,67 @@ Pola do rozważenia:
 - Nie wprowadzać OR w UI podstawowym
 - Jeśli kiedyś dodać OR/NOT, to dopiero jako tryb zaawansowany, nie domyślny
 
+### Filtry dodatkowe
+
+- Checkbox / filtr: **„tylko polubione przeze mnie”**
+  - wynikami są tylko posty, które current user polubił
+  - może działać jako filtr zawężający, nie osobny tryb
+- Zakres czasu:
+  - `date_from`
+  - `date_to`
+  - opcjonalnie także godzina/minuta, nie tylko data dzienna
+  - zakres ma być jawny, a nie wyłącznie presetami typu „ostatni tydzień”
+- Presety czasu nadal mogą istnieć jako skróty UX:
+  - ostatnia doba
+  - ostatni tydzień
+  - ostatni miesiąc
+  - cały okres
+
+### Leniwy cache wyników wyszukiwania
+
+Problem:
+- dla jednego zapytania nie chcemy od razu materializować np. 100 tys. wyników
+- user często potrzebuje tylko pierwszych stron
+- sortowanie po czasie i dodatkowe filtry mogą być kosztowne przy wielkiej tabeli postów
+
+Pomysł:
+- osobna tabela cache wyników wyszukiwania dla konkretnego usera i konkretnego zapytania
+- wyniki liczone leniwie, partiami, w miarę przewijania kolejnych stron
+- cache ma pamiętać do jakiej „głębokości czasu” już policzono wyniki
+  - np. najpierw najnowsze dni/tygodnie/miesiące
+  - potem starsze zakresy dopiero gdy user przewija dalej
+
+Tabela do rozważenia:
+- `search_session`
+  - `user_id`
+  - `query_hash`
+  - `query_text`
+  - `search_mode`
+  - `filters_json`
+  - `date_from`
+  - `date_to`
+  - `computed_until`
+  - `sort_mode`
+  - `created_at`
+  - `last_used_at`
+- `search_session_hits`
+  - `session_id`
+  - `post_id`
+  - `rank`
+  - `matched_block_type`
+  - `matched_at_bucket` / `post_created_at`
+  - `ordinal`
+
+Zasada:
+- pierwsze otwarcie wyszukuje tylko tyle, ile trzeba do sensownej liczby pierwszych stron
+- wejście na dalsze strony dopisuje kolejne trafienia do cache
+- nowa edycja zapytania lub filtrów tworzy nową sesję cache
+- stare sesje można czyścić TTL-em / cronem
+
+To nie musi być idealnie „małe”:
+- jeśli tabela postów ma ~700 MB, dopuszczalne jest nawet kilkaset MB albo podobny rząd wielkości
+  dla indeksów i cache wyszukiwania, o ile realnie daje to szybkie odpowiedzi i nie niszczy prostoty systemu
+
 ### Wydajność i indeksy
 
 - Posty:
@@ -281,6 +365,18 @@ Pola do rozważenia:
   - osobny indeks po `Topic.title`
   - jeśli FTS na tytułach okaże się zbyt ciężki dla krótkich słów, rozważyć `pg_trgm` + GIN/GIST dla `ILIKE`
 - Krótkie słowa i frazy trzeba przetestować na realnych danych forum, nie tylko syntetycznie
+- Przed wyborem finalnych stop-words zrobić analizę częstości słów na realnej bazie Sfinia:
+  - nie zgadywać listy stop-words "na oko"
+  - policzyć częstości tokenów na danych forumowych
+  - osobno dla całych postów i dla tekstu własnego autora
+- Do pierwszej analizy i budowy indeksu tekstu autora wykorzystać pole `content_user` z bazy SQLite Sfinia:
+  - `content_user` jest już oczyszczone z cytatów
+  - to lepszy punkt startowy niż ponowne czyszczenie wszystkiego regexami od zera
+  - można na nim szybko zbudować próbny indeks słów/częstości i zobaczyć, które tokeny rzeczywiście są kandydatami na stop-words
+- Pierwszy eksperymentalny indeks częstości robić bez stemmingu / lemmatyzacji:
+  - najpierw zobaczyć realny rozkład form słów
+  - dopiero potem ocenić, czy warto utożsamiać odmiany tego samego wyrazu
+  - to pozwoli porównać później podejście "proste tokeny" vs `polish` stemming vs własny profil
 
 ### UX
 
@@ -290,6 +386,7 @@ Pola do rozważenia:
   - pokaż forum, wątek, autora, datę
   - snippet z podświetleniem
   - klik prowadzi do konkretnego posta
+- jeśli aktywny był filtr „tylko polubione przeze mnie”, pokaż to jasno w nagłówku wyników
 - W wynikach wątków:
   - pokaż tytuł, forum, autora wątku, datę startu, liczbę odpowiedzi
   - klik prowadzi do wątku
