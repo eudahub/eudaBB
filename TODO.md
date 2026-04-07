@@ -515,6 +515,207 @@ Niski — zrobić po ustabilizowaniu wersji webowej. Read-only API jako pierwszy
 
 ---
 
+## Modułowość: core + pluginy
+
+### Cel
+
+Silnik ma docelowo mieć architekturę:
+- `core` — forum działające samodzielnie bez pluginów
+- `plugins` — opcjonalne moduły rozszerzające funkcje, UI, walidację, wyszukiwarkę i treści specyficzne dla danego wdrożenia
+
+Założenie:
+- core ma pozostać możliwie ogólny
+- rzeczy specyficzne kulturowo, językowo lub domenowo nie powinny być na sztywno wbite w core
+- pluginy mają być możliwe do pisania zarówno przez społeczność, jak i docelowo komercyjnie
+
+### Granica odpowiedzialności
+
+**Core powinien zawierać:**
+- użytkowników, fora, wątki, posty, uprawnienia, moderację
+- parser i renderer BBCode
+- system quote / fquote / Bible jako mechanizm techniczny
+- wyszukiwarkę bazową
+- rejestr hooków / API pluginów
+- ładowanie pluginów, ich konfigurację i migracje
+
+**Pluginy powinny zawierać:**
+- tłumaczenia i locale
+- funkcje domenowe specyficzne dla danej społeczności
+- dodatkowe bloki edytora i ich walidację
+- profile rozszerzone o własne pola
+- wyszukiwarkę lub indeksy specyficzne dla języka / domeny
+- dodatkowe widoki, endpointy, komendy management
+
+### Typy pluginów do przewidzenia
+
+1. **Plugin językowy**
+- tłumaczenia UI
+- lokalne formaty dat, nazw miesięcy, komunikatów walidacji
+- specyficzne reguły wyszukiwania dla języka
+- przykład początkowy: `plugin_pl`
+
+2. **Plugin domenowy / religijny**
+- blok `Bible` i przycisk w edytorze
+- ustawienie wyznania w profilu (`denomination`)
+- specyficzne widoki lub filtry związane z cytatami biblijnymi
+- przykład: `plugin_religion`
+
+3. **Plugin zaawansowanego renderingu**
+- przykład: `plugin_latex`
+- własny BBCode lub inline/block node
+- render HTML
+- sanitizacja i cache renderu
+- możliwe dodatkowe assety JS/CSS
+
+### Pierwsze konkretne pluginy
+
+#### 1. Polski plugin językowy
+
+Cel:
+- na początek nie trzymać polonizacji na sztywno w core
+- potraktować polski jako pierwszy realny plugin językowy
+
+Zakres:
+- tłumaczenia interfejsu
+- polskie komunikaty walidacji
+- polskie odmiany / konfiguracja wyszukiwarki
+- ewentualne polskie stop-words i `TEXT SEARCH CONFIGURATION`
+
+Pytanie architektoniczne do rozstrzygnięcia:
+- czy sam mechanizm i18n ma być w core, a plugin dostarcza tylko pliki tłumaczeń
+- czy plugin językowy może też podmieniać parser wyszukiwarki i konfigurację FTS
+
+Rekomendacja:
+- i18n i locale infrastructure w core
+- konkretne locale + search profile w pluginie
+
+#### 2. Plugin religia
+
+Zakres:
+- blok `Bible`
+- przycisk `Bible` w edytorze
+- wybór wyznania w profilu (`combo`)
+- ewentualne ustawienia domyślnego przekładu, skrótów ksiąg, formatowania cytatów
+
+Rekomendacja:
+- sam system „rejestracji custom blocków BBCode” w core
+- `Bible` jako pierwszy rzeczywisty plugin korzystający z tego API
+
+#### 3. Plugin LaTeX
+
+To dobry test modułowości, bo wymaga kilku warstw naraz:
+- własny znacznik BBCode, np. `[latex]...[/latex]`
+- walidacja wejścia
+- render do HTML
+- cache wyników
+- assety frontendowe albo render po stronie serwera
+- możliwe indeksowanie/wyszukiwanie tekstu źródłowego
+
+Jeśli architektura pluginów poradzi sobie z LaTeX-em, to znaczy że jest sensownie zaprojektowana.
+
+### Co musi udostępniać core pluginom
+
+1. **Rejestr pluginów**
+- lista aktywnych pluginów w `settings`
+- kolejność ładowania
+- możliwość deklarowania zależności
+
+2. **Hooki backendowe**
+- rozszerzanie modeli użytkownika / profilu
+- rejestracja własnych komend management
+- własne walidatory postów
+- udział w procesie zapisu i renderu posta
+- rozszerzanie indeksowania wyszukiwarki
+
+3. **Hooki BBCode**
+- rejestracja nowych tagów inline i block
+- parser -> AST / node registry
+- renderer HTML dla custom node
+- reguły bezpieczeństwa dla custom node
+
+4. **Hooki UI**
+- dokładanie przycisków do edytora
+- dodatkowe sekcje profilu
+- dodatkowe akcje moderatorskie
+- własne zakładki w konfiguracji / adminie
+
+5. **Hooki wyszukiwarki**
+- możliwość dodania nowych indeksów
+- możliwość dodania trybów wyszukiwania
+- możliwość podmiany parsera zapytań dla danego języka
+
+### Minimalny model techniczny pluginu
+
+Każdy plugin powinien móc deklarować:
+- `name`
+- `version`
+- `depends_on`
+- `provides`
+- `urls.py` (opcjonalnie)
+- `models.py` / migracje (opcjonalnie)
+- `templates/`
+- `static/`
+- `search hooks`
+- `bbcode hooks`
+
+Do rozważenia:
+- prosty rejestr pythonowy (`register_plugin(...)`)
+- albo `AppConfig` + konwencje Django
+
+Rekomendacja na start:
+- oprzeć to o zwykłe aplikacje Django (`INSTALLED_APPS`)
+- nad nimi zbudować cienką warstwę plugin metadata + hook registry
+- nie wynajdywać od razu własnego loadera modułów
+
+### Etapy wdrożenia
+
+1. **Opisać API pluginów**
+- jakie hooki są stabilne
+- co wolno pluginowi zmieniać
+- które miejsca są częścią publicznego API, a które wewnętrzne
+
+2. **Wyodrębnić z core to, co już dziś jest domenowe**
+- przygotować `Bible` do przyszłego wyjęcia z core
+- nie doklejać nowych funkcji domenowych bezpośrednio do core
+
+3. **Dodać registry dla custom BBCode blocks**
+- to kluczowe pod `Bible`, `LaTeX` i podobne rozszerzenia
+
+4. **Dodać registry dla przycisków edytora**
+- plugin ma móc dodać własny button + dialog / akcję
+
+5. **Dodać registry dla pól profilu**
+- np. `denomination` z pluginu religijnego
+
+6. **Dodać registry dla search providers**
+- plugin językowy ma móc dostarczyć konfigurację wyszukiwarki
+- plugin domenowy ma móc dodać nowy tryb wyszukiwania
+
+7. **Zrobić pierwszy realny plugin językowy `pl`**
+- nie tylko pliki tłumaczeń, ale pełny test mechanizmu pluginów
+
+8. **Zrobić plugin religijny jako drugi test**
+- `Bible`, profil wyznania, przycisk w edytorze
+
+9. **Dopiero potem projektować plugin LaTeX**
+- jako test trudniejszego przypadku z własnym renderingiem
+
+### Uwaga licencyjna
+
+Modułowość trzeba projektować też z myślą o licencji:
+- otwarte pluginy społecznościowe powinny być naturalną ścieżką
+- ale architektura nie powinna zniechęcać tych, którzy chcą zamknięte pluginy
+
+Do osobnego rozstrzygnięcia później:
+- czyste `GPL-3.0`
+- `GPL-3.0 + plugin exception`
+- `GPL-3.0 + licencja komercyjna`
+
+Architektura techniczna powinna umożliwiać pluginy, a model licencyjny dopiero określi,
+czy i kiedy część z nich może być zamknięta.
+
+---
+
 ## Użytkownicy — liczniki i usuwanie kont
 
 ### `post_count` po imporcie
