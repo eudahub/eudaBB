@@ -23,7 +23,12 @@ from .forms import (
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
 )
 from .email_utils import mask_email, mask_email_variants
-from .spam_utils import get_author_spam_filter, filter_forums, get_ignored_user_ids
+from .spam_utils import (
+    get_author_spam_filter,
+    filter_forums,
+    get_ignored_user_ids,
+    get_topic_visibility_filter,
+)
 from .middleware import invalidate_blocked_ips_cache
 from .auth_utils import prehash_password
 from .username_utils import normalize
@@ -42,7 +47,22 @@ def _update_topic_stats(topic: Topic, last_post: Post) -> None:
     topic.reply_count = topic.posts.count() - 1  # first post is not a "reply"
     topic.last_post = last_post
     topic.last_post_at = last_post.created_at
-    topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
+
+    # Maintain denormalized last_post_at_<class> used by "Nowe wątki" / "Nowe posty"
+    # to filter out spam classes without joining Post + User.
+    update_fields = ["reply_count", "last_post", "last_post_at"]
+    author = last_post.author
+    spam_class = author.spam_class if author is not None else User.SpamClass.NORMAL
+    if spam_class <= User.SpamClass.NORMAL:
+        topic.last_post_at_normal = last_post.created_at
+        topic.last_post_normal_author_id = author.pk if author else None
+        update_fields += ["last_post_at_normal", "last_post_normal_author_id"]
+    if spam_class <= User.SpamClass.GRAY:
+        topic.last_post_at_gray = last_post.created_at
+        topic.last_post_gray_author_id = author.pk if author else None
+        update_fields += ["last_post_at_gray", "last_post_gray_author_id"]
+
+    topic.save(update_fields=update_fields)
 
 
 def _update_forum_stats(forum: Forum, last_post: Post) -> None:
@@ -278,10 +298,12 @@ def forum_detail(request, forum_id):
     from .spam_utils import get_max_forum_level
     if forum.archive_level > get_max_forum_level(request.user):
         return HttpResponseForbidden("Brak dostępu do tego forum.")
+    ts_field, ignore_q = get_topic_visibility_filter(request.user)
     topics_qs = (
         forum.topics
         .select_related("author", "last_post", "last_post__author")
-        .filter(get_author_spam_filter(request.user))
+        .filter(**{f"{ts_field}__isnull": False})
+        .exclude(ignore_q)
     )
     paginator = Paginator(topics_qs, getattr(settings, "TOPICS_PER_PAGE", 30))
     page = paginator.get_page(request.GET.get("page"))
@@ -1011,7 +1033,7 @@ def search(request):
         search_mode = "posts"
     search_filter = (request.GET.get("kind") or "all").strip().lower()
     allowed_filters = {
-        "posts": {"all", "links", "youtube"},
+        "posts": {"all", "links", "youtube", "liked"},
         "topics": {"all", "polls"},
     }
     if search_filter not in allowed_filters[search_mode]:
@@ -1078,11 +1100,13 @@ def search(request):
         if not info_message:
             max_forum_level = getattr(request.user, "archive_access", 0)
             if search_mode == "topics":
+                ts_field, ignore_q = get_topic_visibility_filter(request.user)
                 qs = (
                     Topic.objects
                     .select_related("forum", "author", "last_post", "last_post__author", "poll")
                     .filter(forum__archive_level__lte=max_forum_level)
-                    .filter(get_author_spam_filter(request.user))
+                    .filter(**{f"{ts_field}__isnull": False})
+                    .exclude(ignore_q)
                 )
                 if selected_forum is not None:
                     qs = qs.filter(forum=selected_forum)
@@ -1138,6 +1162,8 @@ def search(request):
                     qs = qs.filter(has_link=True)
                 elif search_filter == "youtube":
                     qs = qs.filter(has_youtube=True)
+                elif search_filter == "liked" and request.user.is_authenticated:
+                    qs = qs.filter(post__likes__user=request.user)
 
                 for phrase in parsed["phrases"]:
                     qs = qs.filter(content_search_author_normalized__contains=phrase)
@@ -1211,10 +1237,12 @@ def new_posts(request):
 
 def new_topics(request):
     max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    ts_field, ignore_q = get_topic_visibility_filter(request.user)
     topics = (
         Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
         .filter(forum__archive_level__lte=max_forum_level)
-        .filter(get_author_spam_filter(request.user))
+        .filter(**{f"{ts_field}__isnull": False})
+        .exclude(ignore_q)
         .order_by("-created_at", "-pk")
     )
     page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
@@ -1278,10 +1306,13 @@ def unanswered_topics(request):
 def unread_topics(request):
     max_forum_level = getattr(request.user, "archive_access", 0)
     posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+    ts_field, ignore_q = get_topic_visibility_filter(request.user)
     topics = list(
         Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
         .filter(forum__archive_level__lte=max_forum_level)
         .exclude(last_post__isnull=True)
+        .filter(**{f"{ts_field}__gt": request.user.mark_all_read_at})
+        .exclude(ignore_q)
         .order_by("-last_post_at", "-pk")
     )
     read_state_map = {
@@ -1307,9 +1338,16 @@ def unread_topics(request):
         topic.unread_url = _build_unread_topic_url(request.user, topic, state, posts_per_page)
         unread.append(topic)
 
+    unread_limit = getattr(settings, "UNREAD_TOPICS_MAX", 500)
+    truncated = len(unread) > unread_limit
+    if truncated:
+        unread = unread[:unread_limit]
+
     page = Paginator(unread, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
     return render(request, "board/unread_topics.html", {
         "page": page,
+        "truncated": truncated,
+        "unread_limit": unread_limit,
     })
 
 

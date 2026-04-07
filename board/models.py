@@ -350,6 +350,15 @@ class Topic(models.Model):
     )
     last_post_at = models.DateTimeField(null=True, blank=True)
 
+    # Denormalized "last visible post" per spam class.
+    # Updated whenever a post is added. Lets "Nowe wątki" / "Nowe posty"
+    # filter without joining Post + User and without Exists() subqueries.
+    # NORMAL user uses *_normal, GRAY user uses *_gray, WEB user uses last_post_at.
+    last_post_at_normal = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_post_normal_author_id = models.IntegerField(null=True, blank=True)
+    last_post_at_gray = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_post_gray_author_id = models.IntegerField(null=True, blank=True)
+
     class Meta:
         # Announcements > Stickies > Normal, then newest last post first
         ordering = ["-topic_type", "-last_post_at"]

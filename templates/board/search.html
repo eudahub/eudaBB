@@ -39,6 +39,7 @@
         <option value="links"{% if search_filter == "links" %} selected{% endif %}>Z linkami</option>
         <option value="youtube"{% if search_filter == "youtube" %} selected{% endif %}>Z YouTube</option>
         <option value="polls"{% if search_filter == "polls" %} selected{% endif %}>Z ankietami</option>
+        {% if user.is_authenticated %}<option value="liked"{% if search_filter == "liked" %} selected{% endif %}>Polubione przeze mnie</option>{% endif %}
       </select>
     </label>
     <label style="flex:0 1 220px;">
@@ -153,12 +154,13 @@
   var kindSelect = document.getElementById('search-kind');
   if (!modeSelect || !kindSelect) return;
 
+  var isAuthenticated = {{ user.is_authenticated|yesno:"true,false" }};
   var optionsByMode = {
     posts: [
       {value: 'all', label: 'Wszystkie'},
       {value: 'links', label: 'Z linkami'},
       {value: 'youtube', label: 'Z YouTube'}
-    ],
+    ].concat(isAuthenticated ? [{value: 'liked', label: 'Polubione przeze mnie'}] : []),
     topics: [
       {value: 'all', label: 'Wszystkie'},
       {value: 'polls', label: 'Z ankietami'}

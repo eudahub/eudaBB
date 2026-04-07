@@ -9,6 +9,10 @@
   <button type="submit">Oznacz wszystko jako przeczytane</button>
 </form>
 
+{% if truncated %}
+  <p style="font-size:11px;color:#888;">Pokazano najnowszych {{ unread_limit }} nieprzeczytanych wątków.</p>
+{% endif %}
+
 {% if page %}
   <p style="font-size:11px;color:#555;">
     Wątków na tej stronie: {{ page.object_list|length }}. Łącznie: {{ page.paginator.count }}.

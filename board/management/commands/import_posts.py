@@ -28,7 +28,7 @@ _POST_ID_RE = re.compile(r'(post_id=)(\d+)', re.IGNORECASE)
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
 _WARSAW = ZoneInfo("Europe/Warsaw")
@@ -336,6 +336,34 @@ class Command(BaseCommand):
             if last_post:
                 topic.last_post = last_post
                 topic.save(update_fields=["last_post"])
+
+        # --- Backfill denormalized last_post_at_<class> on topics ---
+        # NORMAL visibility = posts from NORMAL authors or anonymous (null author)
+        # GRAY  visibility = posts from NORMAL/GRAY authors or anonymous
+        self.stdout.write("Wypełniam denormalizację last_post_at_<class>…")
+        normal_visible = (
+            Post.objects
+            .filter(topic_id=OuterRef("pk"))
+            .filter(Q(author__isnull=True) | Q(author__spam_class=User.SpamClass.NORMAL))
+            .order_by("-created_at")
+        )
+        Topic.objects.update(
+            last_post_at_normal=Subquery(normal_visible.values("created_at")[:1]),
+            last_post_normal_author_id=Subquery(normal_visible.values("author_id")[:1]),
+        )
+        gray_visible = (
+            Post.objects
+            .filter(topic_id=OuterRef("pk"))
+            .filter(
+                Q(author__isnull=True)
+                | Q(author__spam_class__in=[User.SpamClass.NORMAL, User.SpamClass.GRAY])
+            )
+            .order_by("-created_at")
+        )
+        Topic.objects.update(
+            last_post_at_gray=Subquery(gray_visible.values("created_at")[:1]),
+            last_post_gray_author_id=Subquery(gray_visible.values("author_id")[:1]),
+        )
 
         # --- Update forum counters (recursive, like phpBB) ---
         self.stdout.write("Aktualizuję liczniki forów (rekurencyjnie)…")
