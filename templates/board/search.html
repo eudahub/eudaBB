@@ -95,7 +95,10 @@
               · ankieta
             {% endif %}
           </div>
-          <div><a href="{% url 'topic_detail' topic.pk %}">{{ topic.title_html|default:topic.title|safe }}</a></div>
+          <div>
+            <a href="{{ topic.unread_url }}">{{ topic.title_html|default:topic.title|safe }}</a>
+            {% if topic.has_unread %}<strong style="color:#800000;"> [nowe]</strong>{% endif %}
+          </div>
         </div>
       </div>
     {% empty %}

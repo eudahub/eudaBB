@@ -21,6 +21,7 @@ urlpatterns = [
     path("kontakt/", views.contact, name="contact"),
     path("nowe-posty/", views.new_posts, name="new_posts"),
     path("nowe-watki/", views.new_topics, name="new_topics"),
+    path("twoje-posty/", views.my_topics, name="my_topics"),
     path("nieprzeczytane/", views.unread_topics, name="unread_topics"),
     path("nieprzeczytane/oznacz-wszystko/", views.mark_all_topics_read, name="mark_all_topics_read"),
     path("tematy-bez-odpowiedzi/", views.unanswered_topics, name="unanswered_topics"),

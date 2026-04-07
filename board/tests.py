@@ -584,6 +584,44 @@ class UserRenameTests(TestCase):
         self.assertContains(response, "[nowe]")
         self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
 
+    def test_my_topics_lists_participated_topics_with_post_count_and_unread_link(self):
+        author = User.objects.create_user(username="AutorMyTopics", password="x")
+        reader = User.objects.create_user(username="CzytelnikMyTopics", password="x")
+        topic = self._make_topic(author, title="Mój udział w wątku")
+        first_unread = None
+        last_post = None
+        for order in range(1, 4):
+            post_author = reader if order in (1, 3) else author
+            last_post = Post.objects.create(
+                topic=topic,
+                author=post_author,
+                content_bbcode=f"Post {order}",
+                post_order=order,
+            )
+            if order == 3:
+                first_unread = last_post
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.reply_count = 2
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+        TopicParticipant.objects.create(
+            topic=topic,
+            user=reader,
+            post_count=2,
+            last_post_at=last_post.created_at,
+        )
+        TopicReadState.objects.create(user=reader, topic=topic, last_read_post_order=2)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("my_topics"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Mój udział w wątku")
+        self.assertContains(response, "twoich postów: 2")
+        self.assertContains(response, "[nowe]")
+        self.assertContains(response, f'/topic/{topic.pk}/?page=1#post-{first_unread.pk}')
+
     def test_mark_all_topics_read_sets_user_baseline_and_clears_states(self):
         author = User.objects.create_user(username="AutorMarkRead", password="x")
         reader = User.objects.create_user(username="CzytelnikMarkRead", password="x")
@@ -676,6 +714,30 @@ class UserRenameTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Temat z ankietą")
         self.assertNotContains(response, "Temat bez ankiety")
+
+    def test_search_topics_mode_marks_unread_and_links_to_first_unread(self):
+        reader = User.objects.create_user(username="CzytelnikSearchUnread", password="x")
+        author = User.objects.create_user(username="AutorSearchUnread", password="x")
+        topic = self._make_topic(author, title="Szukany nieprzeczytany wątek")
+        first_unread = None
+        last_post = None
+        for order in range(1, 26):
+            last_post = Post.objects.create(topic=topic, author=author, content_bbcode=f"Post {order}", post_order=order)
+            if order == 21:
+                first_unread = last_post
+        topic.last_post = last_post
+        topic.last_post_at = last_post.created_at
+        topic.reply_count = 24
+        topic.save(update_fields=["last_post", "last_post_at", "reply_count"])
+        TopicReadState.objects.create(user=reader, topic=topic, last_read_post_order=20)
+
+        client = Client()
+        client.force_login(reader)
+        response = client.get(reverse("search"), {"mode": "topics", "q": "Szukany"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "[nowe]")
+        self.assertContains(response, f'/topic/{topic.pk}/?page=2#post-{first_unread.pk}')
 
     def test_search_posts_mode_can_filter_only_posts_with_links(self):
         reader = User.objects.create_user(username="CzytelnikSearch3", password="x")

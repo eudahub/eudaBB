@@ -1042,6 +1042,11 @@ def search(request):
                     topic.has_poll = getattr(topic, "poll", None) is not None
                     matched_topics.append(topic)
 
+                _annotate_topics_with_unread_state(
+                    request.user,
+                    matched_topics,
+                    getattr(settings, "POSTS_PER_PAGE", 20),
+                )
                 paginator = Paginator(matched_topics, getattr(settings, "TOPICS_PER_PAGE", 30))
                 page = paginator.get_page(page_num)
             else:
@@ -1141,6 +1146,36 @@ def new_topics(request):
     )
 
     return render(request, "board/new_topics.html", {
+        "page": page,
+    })
+
+
+@login_required
+def my_topics(request):
+    participations = (
+        TopicParticipant.objects.select_related(
+            "topic",
+            "topic__forum",
+            "topic__author",
+            "topic__last_post",
+            "topic__last_post__author",
+        )
+        .filter(
+            user=request.user,
+            topic__forum__archive_level__lte=request.user.archive_access,
+        )
+        .order_by("-last_post_at", "-topic_id")
+    )
+    page = Paginator(participations, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(
+        request.GET.get("page")
+    )
+    _annotate_topics_with_unread_state(
+        request.user,
+        [row.topic for row in page.object_list],
+        getattr(settings, "POSTS_PER_PAGE", 20),
+    )
+
+    return render(request, "board/my_topics.html", {
         "page": page,
     })
 
