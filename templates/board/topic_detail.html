@@ -157,6 +157,10 @@ function buildQuoteTag(author, postId, body) {
   return '[quote="' + author + '" post_id=' + postId + ']\n' + body + '\n[/quote]\n\n';
 }
 
+function buildTrimmedNestedQuote(author, postId, body) {
+  return '[quote="' + author + '" post_id=' + postId + ']\n(...)\n' + body + '\n(...)\n[/quote]';
+}
+
 function storeQuoteAndOpenEditor(author, postId, body) {
   if (!body) return;
   var keyDraft = 'reply_draft_{{ topic.pk }}';
@@ -169,11 +173,26 @@ function storeQuoteAndOpenEditor(author, postId, body) {
   window.location.href = '{% url "reply" topic.pk %}';
 }
 
+function getSelectedNestedQuote(postBox) {
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  var range = sel.getRangeAt(0);
+  var anchor = range.commonAncestorContainer;
+  var contentNode = anchor.nodeType === 1 ? anchor : anchor.parentNode;
+  var quoteNode = contentNode ? contentNode.closest('blockquote.bbquote[data-post-id]') : null;
+  if (!quoteNode || !postBox.contains(quoteNode)) return null;
+  var postId = quoteNode.getAttribute('data-post-id') || '';
+  var author = quoteNode.getAttribute('data-quote-author') || '';
+  if (!postId || !author) return null;
+  return {postId: postId, author: author};
+}
+
 function quotePost(btn) {
   var postBox = btn.closest('.post-box');
   var author = btn.getAttribute('data-author') || '';
   var postId = btn.getAttribute('data-post-id') || '';
   var selectedText = getSelectionWithinPost(postBox);
+  var nestedQuote = selectedText ? getSelectedNestedQuote(postBox) : null;
   if (!selectedText) {
     storeQuoteAndOpenEditor(author, postId, (btn.getAttribute('data-bbcode') || '').trim());
     return;
@@ -186,9 +205,21 @@ function quotePost(btn) {
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
+    if ((!data || !data.exact_source) && nestedQuote) {
+      storeQuoteAndOpenEditor(author, postId, buildTrimmedNestedQuote(
+        nestedQuote.author, nestedQuote.postId, selectedText
+      ));
+      return;
+    }
     storeQuoteAndOpenEditor(author, postId, (data && data.body) ? data.body : selectedText);
   })
   .catch(function() {
+    if (nestedQuote) {
+      storeQuoteAndOpenEditor(author, postId, buildTrimmedNestedQuote(
+        nestedQuote.author, nestedQuote.postId, selectedText
+      ));
+      return;
+    }
     storeQuoteAndOpenEditor(author, postId, selectedText);
   });
 }

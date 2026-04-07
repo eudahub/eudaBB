@@ -189,6 +189,10 @@ function buildQuoteTag(author, postId, body) {
   return '[quote="' + author + '" post_id=' + postId + ']\n' + body + '\n[/quote]\n\n';
 }
 
+function buildTrimmedNestedQuote(author, postId, body) {
+  return '[quote="' + author + '" post_id=' + postId + ']\n(...)\n' + body + '\n(...)\n[/quote]';
+}
+
 function getQuoteSelectionPayload() {
   var sel = window.getSelection ? window.getSelection() : null;
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
@@ -201,15 +205,27 @@ function getQuoteSelectionPayload() {
   if (!postBox) return null;
   var selectedText = normalizeQuotedSelection(sel.toString());
   if (!selectedText) return null;
+  var quoteNode = contentNode ? contentNode.closest('blockquote.bbquote[data-post-id]') : null;
+  var nestedQuote = null;
+  if (quoteNode && postContent.contains(quoteNode)) {
+    nestedQuote = {
+      postId: quoteNode.getAttribute('data-post-id') || '',
+      author: quoteNode.getAttribute('data-quote-author') || ''
+    };
+    if (!nestedQuote.postId || !nestedQuote.author) {
+      nestedQuote = null;
+    }
+  }
   return {
     postBox: postBox,
     postId: postBox.getAttribute('data-post-id') || '',
     author: postBox.getAttribute('data-author') || '',
-    selectedText: selectedText
+    selectedText: selectedText,
+    nestedQuote: nestedQuote
   };
 }
 
-function requestQuoteBody(postId, selectedText, fallbackBody) {
+function requestQuoteBody(postId, selectedText, fallbackBody, nestedQuote) {
   if (!selectedText) {
     return Promise.resolve((fallbackBody || '').trim());
   }
@@ -220,9 +236,18 @@ function requestQuoteBody(postId, selectedText, fallbackBody) {
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
+    if (data && data.body && data.exact_source) {
+      return data.body;
+    }
+    if (nestedQuote && nestedQuote.postId && nestedQuote.author) {
+      return buildTrimmedNestedQuote(nestedQuote.author, nestedQuote.postId, selectedText);
+    }
     return (data && data.body) ? data.body : selectedText;
   })
   .catch(function() {
+    if (nestedQuote && nestedQuote.postId && nestedQuote.author) {
+      return buildTrimmedNestedQuote(nestedQuote.author, nestedQuote.postId, selectedText);
+    }
     return selectedText;
   });
 }
@@ -232,12 +257,12 @@ function clearBrowserSelection() {
   if (sel && sel.removeAllRanges) sel.removeAllRanges();
 }
 
-function appendQuoteFromPost(postBox, selectedText) {
+function appendQuoteFromPost(postBox, selectedText, nestedQuote) {
   if (!postBox) return Promise.resolve(false);
   var postId = postBox.getAttribute('data-post-id') || '';
   var author = postBox.getAttribute('data-author') || '';
   var fallbackBody = postBox.getAttribute('data-bbcode') || '';
-  return requestQuoteBody(postId, selectedText, fallbackBody).then(function(body) {
+  return requestQuoteBody(postId, selectedText, fallbackBody, nestedQuote).then(function(body) {
     if (!body) return false;
     window.appendReplyQuote(buildQuoteTag(author, postId, body));
     clearBrowserSelection();
@@ -278,10 +303,12 @@ function quoteRecentPost(btn) {
   var postBox = btn.closest('[data-quote-post="1"]');
   var selected = getQuoteSelectionPayload();
   var selectedText = '';
+  var nestedQuote = null;
   if (selected && selected.postBox === postBox) {
     selectedText = selected.selectedText;
+    nestedQuote = selected.nestedQuote;
   }
-  appendQuoteFromPost(postBox, selectedText).then(function(appended) {
+  appendQuoteFromPost(postBox, selectedText, nestedQuote).then(function(appended) {
     if (!appended) return;
     if (quotePickerState.active) {
       setQuotePickerMode(false);
@@ -297,7 +324,7 @@ function confirmQuotePickerSelection() {
     window.alert('Najpierw zaznacz fragment jednego z postów poniżej.');
     return;
   }
-  appendQuoteFromPost(payload.postBox, payload.selectedText).then(function(appended) {
+  appendQuoteFromPost(payload.postBox, payload.selectedText, payload.nestedQuote).then(function(appended) {
     if (!appended) return;
     setQuotePickerMode(false);
   });

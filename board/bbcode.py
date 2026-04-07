@@ -21,6 +21,7 @@ Backslash escapes (processed before BBCode parsing):
     backslash-] →  literal ]
 """
 import bbcode
+from html import escape as _html_escape
 
 _parser = bbcode.Parser(
     newline="<br>",
@@ -101,6 +102,15 @@ def _render_quote(tag_name, value, options, parent, context):
         ts = str(options.get("time", "") or "").strip()
 
     not_found = (post_id.lower() == "not_found") if post_id else False
+    escaped_author_attr = _html_escape(author, quote=True)
+    quote_attrs = ['class="bbquote"']
+    cite_attrs = ['class="bbquote-cite"']
+    if author:
+        quote_attrs.append(f'data-quote-author="{escaped_author_attr}"')
+        cite_attrs.append(f'data-quote-author="{escaped_author_attr}"')
+    if post_id and not not_found:
+        quote_attrs.append(f'data-post-id="{post_id}"')
+        cite_attrs.append(f'data-post-id="{post_id}"')
 
     if author and post_id and not not_found and ts:
         # Format timestamp as "YYYY-MM-DD HH:MM"
@@ -127,8 +137,8 @@ def _render_quote(tag_name, value, options, parent, context):
         cite = "Cytat:"
 
     return (
-        f'<cite class="bbquote-cite">{cite}</cite>'
-        f'<blockquote class="bbquote">'
+        f'<cite {" ".join(cite_attrs)}>{cite}</cite>'
+        f'<blockquote {" ".join(quote_attrs)}>'
         f'{value}'
         f'</blockquote>'
     )

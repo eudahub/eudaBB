@@ -203,6 +203,20 @@ class UserRenameTests(TestCase):
         fragment = extract_exact_quote_fragment('[quote="A"]abc[/quote] def', "abc")
         self.assertIsNone(fragment)
 
+    def test_extract_exact_quote_fragment_keeps_nested_quote_with_post_id(self):
+        fragment = extract_exact_quote_fragment(
+            '[quote="Michał" post_id=10]x[quote="Semele" post_id=20]abc[/quote]y[/quote]',
+            "abc",
+        )
+        self.assertEqual(fragment, '[quote="Semele" post_id=20]abc[/quote]')
+
+    def test_extract_exact_quote_fragment_trims_nested_quote_with_ellipsis(self):
+        fragment = extract_exact_quote_fragment(
+            '[quote="Michał" post_id=10]x[quote="Semele" post_id=20]abc def ghi[/quote]y[/quote]',
+            "def",
+        )
+        self.assertEqual(fragment, '[quote="Semele" post_id=20](...)\ndef\n(...)[/quote]')
+
     def test_quote_fragment_endpoint_returns_exact_source_when_safe(self):
         author = User.objects.create_user(username="Autor", password="x")
         reader = User.objects.create_user(username="Czytelnik", password="x")
