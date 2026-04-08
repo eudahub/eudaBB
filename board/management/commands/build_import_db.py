@@ -33,7 +33,8 @@ CREATE TABLE users (
     signature TEXT NOT NULL DEFAULT '',
     website   TEXT NOT NULL DEFAULT '',
     location  TEXT NOT NULL DEFAULT '',
-    avatar    TEXT NOT NULL DEFAULT ''
+    avatar    TEXT NOT NULL DEFAULT '',
+    joined_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_username ON users(username);
 
@@ -55,6 +56,11 @@ class Command(BaseCommand):
         parser.add_argument("admin_db",  help="Path to sfinia_users_admin.db")
         parser.add_argument("real_db",   help="Path to sfinia_users_real.db")
         parser.add_argument("output_db", help="Path to output .db file")
+        parser.add_argument(
+            "--public-db",
+            default="",
+            help="Path to sfinia_users_public.db (provides joined_at dates)",
+        )
 
     def handle(self, *args, **options):
         admin_path  = options["admin_db"]
@@ -100,6 +106,34 @@ class Command(BaseCommand):
             ).fetchall()
         real_conn.close()
 
+        # Load joined_at from public DB (username → ISO date string)
+        public_joined = {}
+        public_db_path = options.get("public_db", "")
+        if public_db_path:
+            try:
+                pub_conn = sqlite3.connect(public_db_path)
+                pub_conn.row_factory = sqlite3.Row
+                pub_rows = pub_conn.execute(
+                    "SELECT username, joined_at FROM users WHERE joined_at != ''"
+                ).fetchall()
+                pub_conn.close()
+                pl_months = {
+                    "Sty": "01", "Lut": "02", "Mar": "03", "Kwi": "04",
+                    "Maj": "05", "Cze": "06", "Lip": "07", "Sie": "08",
+                    "Wrz": "09", "Paź": "10", "Paz": "10", "Lis": "11", "Gru": "12",
+                }
+                for r in pub_rows:
+                    raw = (r["joined_at"] or "").strip()
+                    parts = raw.split()
+                    if len(parts) == 3:
+                        day, mon, year = parts
+                        m = pl_months.get(mon)
+                        if m:
+                            public_joined[r["username"]] = f"{year}-{m}-{day.zfill(2)}"
+                self.stdout.write(f"Wczytano {len(public_joined)} dat rejestracji z public DB.")
+            except Exception as e:
+                self.stderr.write(f"Ostrzeżenie: nie wczytano public DB ({e})")
+
         # Merge: admin users first (have emails), then real-only users
         seen = set()
         merged = []
@@ -124,8 +158,8 @@ class Command(BaseCommand):
             raw_email = row["email"].strip().lower() if is_admin and row["email"] else ""
 
             out_conn.execute(
-                "INSERT INTO users (user_id, username, email, signature, website, location, avatar) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO users (user_id, username, email, signature, website, location, avatar, joined_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (
                     row["user_id"] if "user_id" in row.keys() else None,
                     row["username"],
@@ -134,6 +168,7 @@ class Command(BaseCommand):
                     (row["website"]   or "") if is_admin else "",
                     (row["location"]  or "") if is_admin else "",
                     (row["avatar"]    or "") if is_admin else "",
+                    public_joined.get(row["username"], ""),
                 )
             )
 

@@ -10,6 +10,7 @@ ADMIN_DB="${ARCHIVER_DIR}/sfinia_users_admin.db"
 REAL_DB="${ARCHIVER_DIR}/sfinia_users_real.db"
 IMPORT_DB="${ARCHIVER_DIR}/sfinia_import.db"
 ARCHIVE_DB="${ARCHIVER_DIR}/sfiniabb.db"
+PUBLIC_DB="${ARCHIVER_DIR}/sfinia_users_public.db"
 AVATARS_DIR="${ARCHIVER_DIR}/admin_avatars"
 
 require_file() {
@@ -43,7 +44,8 @@ echo "==> Budowa bazy importowej userów"
 python manage.py build_import_db \
   "${ADMIN_DB}" \
   "${REAL_DB}" \
-  "${IMPORT_DB}"
+  "${IMPORT_DB}" \
+  --public-db "${PUBLIC_DB}"
 
 echo "==> Import userów"
 if [[ -d "${AVATARS_DIR}" ]]; then

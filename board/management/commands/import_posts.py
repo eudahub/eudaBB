@@ -36,7 +36,7 @@ _WARSAW = ZoneInfo("Europe/Warsaw")
 
 from board.models import Forum, Post, Topic, User, TopicParticipant
 from board.bbcode_lint import repair as repair_bbcode
-from board.management.commands.update_forum_counts import compute_recursive_counts
+from board.management.commands.update_forum_counts import compute_recursive_counts, compute_recursive_last_posts
 from board.quote_refs import rebuild_quote_references_for_posts
 from board.search_index import rebuild_post_search_index_for_posts
 
@@ -414,11 +414,15 @@ class Command(BaseCommand):
         # --- Update forum counters (recursive, like phpBB) ---
         self.stdout.write("Aktualizuję liczniki forów (rekurencyjnie)…")
         totals = compute_recursive_counts()
+        last_posts = compute_recursive_last_posts()
         for forum in Forum.objects.all():
             tc, pc = totals[forum.id]
             forum.topic_count = tc
             forum.post_count  = pc
-            forum.save(update_fields=["topic_count", "post_count"])
+            lp = last_posts.get(forum.id)
+            forum.last_post    = lp
+            forum.last_post_at = lp.created_at if lp else None
+            forum.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
 
         # --- Recalculate per-user post counters from imported posts ---
         self.stdout.write("Przeliczam liczbę postów użytkowników…")

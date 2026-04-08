@@ -14,6 +14,7 @@ Only ghost/inactive users are touched; active accounts are left alone.
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand, CommandError
@@ -75,7 +76,8 @@ class Command(BaseCommand):
             )
 
         rows = conn.execute(
-            "SELECT user_id, username, email, signature, website, location, avatar "
+            "SELECT user_id, username, email, signature, website, location, avatar, "
+            "COALESCE(joined_at, '') AS joined_at "
             "FROM users ORDER BY user_id"
         ).fetchall()
 
@@ -111,6 +113,14 @@ class Command(BaseCommand):
                 website=row["website"]   or "",
                 location=row["location"] or "",
             )
+            joined_str = (row["joined_at"] or "").strip()
+            if joined_str:
+                try:
+                    defaults["date_joined"] = datetime.strptime(joined_str, "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    )
+                except ValueError:
+                    pass
 
             user, was_created = User.objects.get_or_create(
                 username=username,
