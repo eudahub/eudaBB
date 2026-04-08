@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Partial reimport — pełna struktura i userzy, ale tylko pierwsze 250 000 postów.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,8 +11,6 @@ REAL_DB="${ARCHIVER_DIR}/sfinia_users_real.db"
 IMPORT_DB="${ARCHIVER_DIR}/sfinia_import.db"
 ARCHIVE_DB="${ARCHIVER_DIR}/sfiniabb.db"
 AVATARS_DIR="${ARCHIVER_DIR}/admin_avatars"
-
-RUNSERVER_BIND="${1:-127.0.0.1:8000}"
 
 require_file() {
   local path="$1"
@@ -30,7 +29,6 @@ require_file "${ADMIN_DB}"
 require_file "${REAL_DB}"
 require_file "${ARCHIVE_DB}"
 
-# Safe even if the venv is already active.
 source "${VENV_ACTIVATE}"
 
 cd "${SCRIPT_DIR}"
@@ -58,11 +56,11 @@ fi
 echo "==> Import spam_class"
 python manage.py import_spam_classes "${REAL_DB}"
 
-echo "==> Import struktury forum"
+echo "==> Import struktury forum (pełna)"
 python manage.py import_forums "${ARCHIVE_DB}"
 
-echo "==> Import postów"
-python manage.py import_posts "${ARCHIVE_DB}" --import-db "${IMPORT_DB}"
+echo "==> Import postów (pierwsze 250 000)"
+python manage.py import_posts "${ARCHIVE_DB}" --first 250000 --import-db "${IMPORT_DB}"
 
 echo "==> Import ankiet"
 python manage.py import_polls "${ARCHIVE_DB}"
@@ -70,5 +68,4 @@ python manage.py import_polls "${ARCHIVE_DB}"
 echo "==> Tworzenie konta root"
 python manage.py create_root
 
-echo "==> Start serwera: ${RUNSERVER_BIND}"
-#python manage.py runserver "${RUNSERVER_BIND}"
+echo "==> Gotowe."

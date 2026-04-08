@@ -25,6 +25,7 @@ from itertools import groupby
 from zoneinfo import ZoneInfo
 
 _POST_ID_RE = re.compile(r'(post_id=)(\d+)', re.IGNORECASE)
+_QUOTE_AUTHOR_RE = re.compile(r'\[quote="([^"]+)"')
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -91,6 +92,16 @@ class Command(BaseCommand):
         group.add_argument("--last",   type=int, metavar="N", help="Last N posts")
         group.add_argument("--every",  type=int, metavar="N", help="Every N-th post")
         group.add_argument("--random", type=int, metavar="N", help="N random posts")
+        parser.add_argument(
+            "--only-forums",
+            metavar="TITLE1,TITLE2",
+            help="Comma-separated forum titles; import only posts from these forums",
+        )
+        parser.add_argument(
+            "--import-db",
+            metavar="PATH",
+            help="Path to sfinia_import.db; used to map renamed usernames back to archive names",
+        )
 
     def handle(self, *args, **options):
         db_path = options["archive_db"]
@@ -158,6 +169,31 @@ class Command(BaseCommand):
 
         # --- Pre-load lookup tables ---
         user_map  = {u.username: u for u in User.objects.all()}
+
+        # Extend user_map with old archive names → renamed user
+        # so posts authored as "Towarzyski,Pelikan" find user "Towarzyski,Pelikan_1"
+        # rename_map is also used later to fix [quote="OldName"] in content_bbcode
+        rename_map = {}  # old_name → new_name
+        import_db_path = options.get("import_db")
+        if import_db_path:
+            try:
+                conn_imp = sqlite3.connect(import_db_path)
+                conn_imp.row_factory = sqlite3.Row
+                alias_rows = conn_imp.execute(
+                    "SELECT alias, new_name FROM username_aliases "
+                    "WHERE action='rename' AND new_name != ''"
+                ).fetchall()
+                conn_imp.close()
+                rename_map = {ar["alias"]: ar["new_name"] for ar in alias_rows}
+                alias_count = 0
+                for old, new in rename_map.items():
+                    if old not in user_map and new in user_map:
+                        user_map[old] = user_map[new]
+                        alias_count += 1
+                self.stdout.write(f"Dodano {alias_count} aliasów autorów do user_map.")
+            except Exception as e:
+                self.stderr.write(f"Ostrzeżenie: nie wczytano aliasów ({e})")
+
         topic_map = {}   # archive topic_id → our Topic instance
 
         # Build archive_forum_id → our Forum mapping by title
@@ -170,10 +206,14 @@ class Command(BaseCommand):
         conn2.close()
 
         our_forums_by_title = {f.title: f for f in Forum.objects.all()}
+        only_forums = None
+        if options.get("only_forums"):
+            only_forums = {t.strip() for t in options["only_forums"].split(",")}
         forum_map = {}
         for arch_id, title in archive_forums.items():
             if title in our_forums_by_title:
-                forum_map[arch_id] = our_forums_by_title[title]
+                if only_forums is None or title in only_forums:
+                    forum_map[arch_id] = our_forums_by_title[title]
         self.stdout.write(
             f"Zmapowano {len(forum_map)}/{len(archive_forums)} forów po tytułach."
         )
@@ -235,6 +275,12 @@ class Command(BaseCommand):
                     if repair_changes:
                         content_bbcode = repaired_content
                         repaired_posts += 1
+                    if rename_map and "[quote=" in content_bbcode:
+                        content_bbcode = _QUOTE_AUTHOR_RE.sub(
+                            lambda m: f'[quote="{rename_map[m.group(1)]}"'
+                                      if m.group(1) in rename_map else m.group(0),
+                            content_bbcode,
+                        )
                     broken_tags = (
                         "quote_status" in keys and row["quote_status"] == 4
                     )

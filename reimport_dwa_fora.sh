@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# Partial reimport — only two subforums:
+#   "Rozbieranie irracjonalizmu"  (forum_id 29)
+#   "Apologia kontra krytyka teizmu"  (forum_id 5)
+#
+# Użycie: ./reimport_dwa_fora.sh [BIND]
+#   BIND  — adres:port serwera (domyślnie 127.0.0.1:8000)
+#
+# Aby ograniczyć się do jednego podforum, zakomentuj drugie
+# w zmiennej FORUMS poniżej.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +20,8 @@ IMPORT_DB="${ARCHIVER_DIR}/sfinia_import.db"
 ARCHIVE_DB="${ARCHIVER_DIR}/sfiniabb.db"
 AVATARS_DIR="${ARCHIVER_DIR}/admin_avatars"
 
-RUNSERVER_BIND="${1:-127.0.0.1:8000}"
+# Dwa podfora — usuń jedno jeśli chcesz tylko jedno
+FORUMS="Rozbieranie irracjonalizmu,Apologia kontra krytyka teizmu"
 
 require_file() {
   local path="$1"
@@ -30,7 +40,6 @@ require_file "${ADMIN_DB}"
 require_file "${REAL_DB}"
 require_file "${ARCHIVE_DB}"
 
-# Safe even if the venv is already active.
 source "${VENV_ACTIVATE}"
 
 cd "${SCRIPT_DIR}"
@@ -58,17 +67,18 @@ fi
 echo "==> Import spam_class"
 python manage.py import_spam_classes "${REAL_DB}"
 
-echo "==> Import struktury forum"
+echo "==> Import struktury forum (pełna)"
 python manage.py import_forums "${ARCHIVE_DB}"
 
-echo "==> Import postów"
-python manage.py import_posts "${ARCHIVE_DB}" --import-db "${IMPORT_DB}"
+echo "==> Import postów (tylko: ${FORUMS})"
+python manage.py import_posts "${ARCHIVE_DB}" --only-forums "${FORUMS}" --import-db "${IMPORT_DB}"
 
-echo "==> Import ankiet"
+echo "==> Import ankiet (tylko wybrane fora)"
+# import_polls nie obsługuje --only-forums, więc importuje wszystkie ankiety
+# ale powiązane tematy i tak istnieją tylko dla wybranych forów
 python manage.py import_polls "${ARCHIVE_DB}"
 
 echo "==> Tworzenie konta root"
 python manage.py create_root
 
-echo "==> Start serwera: ${RUNSERVER_BIND}"
-#python manage.py runserver "${RUNSERVER_BIND}"
+echo "==> Gotowe."

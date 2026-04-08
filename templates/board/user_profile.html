@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.username }}{% endblock %}
+
+{% block content %}
+<h2>{{ profile.username }}</h2>
+
+<table style="border-collapse:collapse; margin-bottom:1rem;">
+  {% if profile.avatar %}
+  <tr>
+    <td colspan="2" style="padding:.3rem 0;">
+      <img src="{{ profile.avatar.url }}" alt="" style="max-width:128px; max-height:128px;">
+    </td>
+  </tr>
+  {% endif %}
+  {% if profile.rank %}
+  <tr><td style="padding:.2rem .6rem .2rem 0; color:#555;">Ranga</td><td>{{ profile.rank }}</td></tr>
+  {% endif %}
+  <tr><td style="padding:.2rem .6rem .2rem 0; color:#555;">Postów</td><td>{{ profile.post_count }}</td></tr>
+  <tr><td style="padding:.2rem .6rem .2rem 0; color:#555;">Zarejestrowany</td><td>{{ profile.date_joined|date:"d.m.Y" }}</td></tr>
+  {% if profile.location %}
+  <tr><td style="padding:.2rem .6rem .2rem 0; color:#555;">Lokalizacja</td><td>{{ profile.location }}</td></tr>
+  {% endif %}
+  {% if profile.website %}
+  <tr><td style="padding:.2rem .6rem .2rem 0; color:#555;">WWW</td><td><a href="{{ profile.website }}" rel="nofollow noopener">{{ profile.website }}</a></td></tr>
+  {% endif %}
+  <tr>
+    <td style="padding:.2rem .6rem .2rem 0; color:#555;">Polubienia</td>
+    <td>
+      <a href="{% url 'user_likes_received' profile.pk %}">Otrzymał: {{ profile.likes_received_count }}</a>
+      &nbsp;·&nbsp;
+      <a href="{% url 'user_likes_given' profile.pk %}">Dał: {{ profile.likes_given_count }}</a>
+    </td>
+  </tr>
+</table>
+
+{% if profile.signature %}
+<p style="border-top:1px solid #ddd; padding-top:.5rem; font-size:13px; color:#555;">{{ profile.signature }}</p>
+{% endif %}
+
+<p>
+  <a href="{% url 'search' %}?mode=posts&author={{ profile.username|urlencode }}">Posty tego użytkownika</a>
+</p>
+{% endblock %}

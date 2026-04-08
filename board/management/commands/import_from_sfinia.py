@@ -78,12 +78,30 @@ class Command(BaseCommand):
             "SELECT user_id, username, email, signature, website, location, avatar "
             "FROM users ORDER BY user_id"
         ).fetchall()
+
+        # Load rename map from username_aliases (action='rename')
+        rename_map = {}
+        try:
+            alias_rows = conn.execute(
+                "SELECT alias, new_name FROM username_aliases "
+                "WHERE action='rename' AND new_name != ''"
+            ).fetchall()
+            rename_map = {r["alias"]: r["new_name"] for r in alias_rows}
+            if rename_map:
+                self.stdout.write(f"Wczytano {len(rename_map)} aliasów rename.")
+        except Exception:
+            pass  # table may not exist in older DBs
+
         conn.close()
 
         avatars_dir = options["avatars_dir"]
 
-        created = updated = avatars_set = 0
+        created = updated = avatars_set = renamed = 0
         for row in rows:
+            username = rename_map.get(row["username"], row["username"])
+            if username != row["username"]:
+                renamed += 1
+
             email = (row["email"] or "").strip().lower()
             defaults = dict(
                 is_ghost=True,
@@ -95,7 +113,7 @@ class Command(BaseCommand):
             )
 
             user, was_created = User.objects.get_or_create(
-                username=row["username"],
+                username=username,
                 defaults={**defaults, "password": make_password(None)},
             )
 
@@ -138,5 +156,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f"Gotowe. Utworzono: {created}, zaktualizowano: {updated}"
+            + (f", przemianowano: {renamed}" if renamed else "")
             + (f", awatary: {avatars_set}" if avatars_set else "")
         ))

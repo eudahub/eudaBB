@@ -1288,6 +1288,20 @@ def my_topics(request):
     })
 
 
+def user_profile(request, user_id):
+    profile = get_object_or_404(User, pk=user_id)
+    return render(request, "board/user_profile.html", {"profile": profile})
+
+
+def user_list(request):
+    q = (request.GET.get("q") or "").strip()
+    users = User.objects.order_by("-post_count", "username")
+    if q:
+        users = users.filter(username__icontains=q)
+    page = Paginator(users, 50).get_page(request.GET.get("page"))
+    return render(request, "board/user_list.html", {"page": page, "q": q})
+
+
 def unanswered_topics(request):
     max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     topics = (

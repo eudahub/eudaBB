@@ -113,10 +113,10 @@
   <table style="width:100%; border-collapse: collapse;">
     <tr>
       <td class="post-author">
-        <strong>{{ post.author.username|default:"[usunięty]" }}</strong>
         {% if post.author %}
+          <strong><a href="{% url 'user_profile' post.author.pk %}" style="color:inherit;">{{ post.author.username }}</a></strong>
           {% if post.author.avatar %}
-            <br><img src="{{ post.author.avatar.url }}" alt="" style="max-width:80px; max-height:80px; display:block; margin:.3rem 0;">
+            <br><a href="{% url 'user_profile' post.author.pk %}"><img src="{{ post.author.avatar.url }}" alt="" style="max-width:80px; max-height:80px; display:block; margin:.3rem 0;"></a>
           {% endif %}
           <br><small>Postów: {{ post.author.post_count }}</small>
           <br><small><a href="{% url 'user_likes_received' post.author.pk %}">Otrzymał: {{ post.author.likes_received_count }}</a></small>
