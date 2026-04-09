@@ -22,8 +22,10 @@ media/
 snapshots/
 *.dump
 
-# Morphological dictionary (duży plik — link do Google Drive zamiast w repo)
+# Morphological dictionary (duże pliki — link do Google Drive zamiast w repo)
 morph_families*.csv
+morph_suffixes*.csv
+morph_indeclinable.csv
 
 # Work/scratch files
 bible_dry.log

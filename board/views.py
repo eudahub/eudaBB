@@ -36,7 +36,7 @@ from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
 from .quote_refs import rebuild_quote_references_for_post
 from .quote_selection import extract_exact_quote_fragment, normalize_selected_text
-from .search_index import extract_author_search_text, expand_morph_term, normalize_search_text, strip_diacritics
+from .search_index import extract_author_search_text, expand_morph_term, expand_morph_term_all, normalize_search_text, strip_diacritics
 
 
 # ---------------------------------------------------------------------------
@@ -844,20 +844,30 @@ def _parse_search_query(raw_query: str):
         display_alts = []
 
         for alt in alternatives:
-            do_expand = alt.endswith("+")
-            base = alt[:-1] if do_expand else alt
+            do_expand_all = alt.endswith("++")
+            do_expand     = not do_expand_all and alt.endswith("+")
+            if do_expand_all:
+                base = alt[:-2]
+            elif do_expand:
+                base = alt[:-1]
+            else:
+                base = alt
             normalized = normalize_search_text(base)
             if not normalized:
                 continue
             if normalized in _SAFE_STOP_WORDS:
                 group_skipped.append(base)
                 continue
-            if do_expand:
+            if do_expand_all:
+                expanded = expand_morph_term_all(normalized)
+                group.extend(expanded)
+                display_alts.extend(expanded)
+                has_expansion = True
+            elif do_expand:
                 expanded = expand_morph_term(normalized)
                 group.extend(expanded)
                 display_alts.extend(expanded)
-                if len(expanded) > 1:
-                    has_expansion = True
+                has_expansion = True
             else:
                 group.append(normalized)
                 display_alts.append(normalized)

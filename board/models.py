@@ -542,6 +542,22 @@ class MorphForm(models.Model):
         ]
 
 
+class MorphSuffix(models.Model):
+    """Sufiksy lematów do analogii morfologicznej — fallback dla słów spoza MorphForm."""
+
+    suffix_len = models.SmallIntegerField()
+    suffix     = models.CharField(max_length=8)
+    lemma_norm = models.CharField(max_length=120)
+    family_id  = models.IntegerField()
+
+    class Meta:
+        db_table = "forum_morph_suffix"
+        unique_together = [("suffix_len", "suffix", "lemma_norm", "family_id")]
+        indexes = [
+            models.Index(fields=["suffix_len", "suffix"]),
+        ]
+
+
 class Poll(models.Model):
     """Thread poll, both imported archival polls and native future polls."""
 

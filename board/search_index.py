@@ -119,7 +119,7 @@ def rebuild_post_search_index_for_posts(posts, chunk_size: int = 500) -> int:
 def expand_morph_term(term_norm: str) -> list[str]:
     """
     Zwraca wszystkie znormalizowane formy z tej samej rodziny morfologicznej.
-    Jeśli słowa nie ma w słowniku (tabela pusta lub brak wpisu), zwraca [term_norm].
+    Jeśli słowa nie ma w słowniku, próbuje analogii sufiksowej (fallback).
     """
     from .models import MorphForm
 
@@ -134,13 +134,126 @@ def expand_morph_term(term_norm: str) -> list[str]:
         return [term_norm]
 
     if not families:
-        return [term_norm]
+        # Słowo nie w słowniku — spróbuj analogii sufiksowej
+        analog = _expand_by_suffix_analogy(term_norm)
+        return analog if analog else [term_norm]
+
+    # Jeśli wpisana forma jest lematem w jakiejś rodzinie (kot→kot),
+    # ogranicz do tych rodzin — pomija przypadkowe trafienia w innych
+    # lematach (kot = gen.pl leksemu "kota").
+    canonical = [e for e in families if e["lemma_norm"] == term_norm]
+    working = canonical if canonical else families
 
     q = Q()
-    for entry in families:
+    for entry in working:
         q |= Q(lemma_norm=entry["lemma_norm"], family_id=entry["family_id"])
 
     forms = sorted(set(
         MorphForm.objects.filter(q).values_list("form_norm", flat=True)
     ))
     return forms if forms else [term_norm]
+
+
+def expand_morph_term_all(term_norm: str) -> list[str]:
+    """
+    Operator ++: wszystkie rodziny lematu (sg+pl, wszystkie rodzaje, wszystkie stopnie).
+    Jeśli słowa nie ma w słowniku, używa analogii sufiksowej jak expand_morph_term.
+    """
+    from .models import MorphForm
+
+    try:
+        families = list(
+            MorphForm.objects
+            .filter(form_norm=term_norm)
+            .values("lemma_norm", "family_id")
+            .distinct()
+        )
+    except Exception:
+        return [term_norm]
+
+    if not families:
+        analog = _expand_by_suffix_analogy(term_norm)
+        return analog if analog else [term_norm]
+
+    # Kanoniczny lemat (forma = lemat) lub wszystkie lematy
+    canonical = [e for e in families if e["lemma_norm"] == term_norm]
+    working_lemmas = {e["lemma_norm"] for e in (canonical if canonical else families)}
+
+    # Wszystkie formy ze wszystkich rodzin danego lematu
+    q = Q()
+    for lemma in working_lemmas:
+        q |= Q(lemma_norm=lemma)
+
+    forms = sorted(set(
+        MorphForm.objects.filter(q).values_list("form_norm", flat=True)
+    ))
+    return forms if forms else [term_norm]
+
+
+def _expand_by_suffix_analogy(term_norm: str) -> list[str]:
+    """
+    Fallback dla słów spoza MorphForm.
+    Szuka rodzin (subst:sg, adj:sg:n, adj:pl:nonvir) o tym samym sufiksie formy nominalnej
+    i stosuje ich wzorzec odmiany do term_norm.
+    Zwraca pustą listę gdy brak analogów (wywołujący powinien wtedy zwrócić [term_norm]).
+    """
+    from collections import defaultdict
+    from .models import MorphForm, MorphSuffix
+
+    MAX_ANALOGS = 20   # max rodzin analogicznych na sufiks
+    SUFFIX_LENS = (4, 3, 2)
+
+    results: set[str] = set()
+
+    for slen in SUFFIX_LENS:
+        if len(term_norm) <= slen:
+            continue
+        suffix = term_norm[-slen:]
+        unknown_stem = term_norm[:-slen]
+
+        try:
+            analogs = list(
+                MorphSuffix.objects
+                .filter(suffix_len=slen, suffix=suffix)
+                .values("lemma_norm", "family_id")[:MAX_ANALOGS]
+            )
+        except Exception:
+            continue
+
+        if not analogs:
+            continue
+
+        # Pobierz wszystkie formy analogicznych rodzin jednym zapytaniem
+        q = Q()
+        for entry in analogs:
+            q |= Q(lemma_norm=entry["lemma_norm"], family_id=entry["family_id"])
+
+        try:
+            all_rows = list(
+                MorphForm.objects.filter(q)
+                .values_list("lemma_norm", "family_id", "form_norm")
+            )
+        except Exception:
+            continue
+
+        # Grupuj formy po rodzinie, wyklucz formy z myślnikiem
+        by_family: dict[tuple, list[str]] = defaultdict(list)
+        for lemma_norm, fid, form_norm in all_rows:
+            if "-" not in form_norm:
+                by_family[(lemma_norm, fid)].append(form_norm)
+
+        for forms in by_family.values():
+            # Znajdź kotwicę: forma kończąca się na szukany sufiks (mianownik)
+            anchors = [f for f in forms if f.endswith(suffix)]
+            if not anchors:
+                continue
+            anchor = min(anchors, key=len)   # najkrótsza = mianownikowa
+            anchor_stem = anchor[:-slen]
+            for form in forms:
+                if form.startswith(anchor_stem):
+                    results.add(unknown_stem + form[len(anchor_stem):])
+
+        if results:
+            break
+
+    return sorted(results)

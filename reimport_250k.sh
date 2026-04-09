@@ -49,6 +49,15 @@ else
   echo "Pobierz plik z Google Drive i umieść jako morph_families.csv w katalogu projektu." >&2
 fi
 
+echo "==> Import sufiksów morfologicznych (analogia dla słów spoza słownika)"
+MORPH_SUF="${SCRIPT_DIR}/morph_suffixes.csv"
+if [[ -f "${MORPH_SUF}" ]]; then
+  python manage.py import_morph_suffix "${MORPH_SUF}"
+else
+  echo "Uwaga: brak ${MORPH_SUF} — analogia sufiksowa (słowo+) nie będzie działać." >&2
+  echo "Pobierz plik z Google Drive i umieść jako morph_suffixes.csv w katalogu projektu." >&2
+fi
+
 
 echo "==> Budowa bazy importowej userów"
 python manage.py build_import_db \

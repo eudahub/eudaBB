@@ -52,9 +52,28 @@
     </label>
     <button type="submit">Szukaj</button>
   </div>
-  <p style="margin-top:.4rem;font-size:11px;color:#555;">
-    Domyślnie: słowa są łączone przez AND, frazy wpisuj w cudzysłowie. Dopisz <code>+</code> do słowa aby rozwinąć formy odmiany.
-  </p>
+  <details style="margin-top:.4rem;font-size:11px;color:#555;">
+    <summary style="cursor:pointer;color:#800000;">Jak szukać? (składnia zapytań)</summary>
+    <div style="margin-top:.4rem;line-height:1.7;max-width:720px;">
+      <table style="border-collapse:collapse;width:100%;">
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>byt wolna</code></td><td>AND — oba słowa muszą wystąpić w poście</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>"wolna wola"</code></td><td>fraza — słowa obok siebie; we frazach stopwords <em>nie</em> są pomijane</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>byt|istnienie</code></td><td>OR — wystarczy jedno z nich (spacje wokół <code>|</code> są opcjonalne)</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>pies+</code></td><td>formy odmiany jednej rodziny: <em>pies|psa|psu|psem|psie</em> (sg lub pl zależnie od formy wpisanej)</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>pies++</code></td><td>wszystkie rodziny lematu: sg+pl, wszystkie rodzaje, wszystkie stopnie — szerokie szukanie</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>Behemot+</code></td><td>słowo spoza słownika — analogia sufiksowa do podobnie odmienianych słów</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;vertical-align:top;white-space:nowrap;"><code>pies+|kot+</code></td><td>OR z rozwinięciem: formy psa OR formy kota</td></tr>
+      </table>
+      <p style="margin:.4rem 0 0;">
+        <strong>Stopwords</strong> (pomijane poza frazami):
+        <code>nie, to, w, i, się, że, na, z, a, do, o, ale</code>
+      </p>
+      <p style="margin:.2rem 0 0;">
+        Rozwinięcie <code>+</code>/<code>++</code> działa też jako fallback dla słów spoza słownika morfologicznego — szuka analogii po sufiksie.
+        Użyte rozwinięcia widać w spoilerze „Szukam:" nad wynikami.
+      </p>
+    </div>
+  </details>
 </form>
 
 {% if parsed_query.has_expansion %}

@@ -2,14 +2,18 @@
 """
 Buduje CSV rodzin morfologicznych z PoliMorf.
 
-Wyjście: form,lemma,family_id
-- Bez normalizacji (małe litery, diakrytyki, ł) — to robi Django przy imporcie
+Wyjście:
+  morph_families.csv    — form,lemma,family_id (4.7M wierszy)
+  morph_suffixes.csv    — suffix_len,suffix,lemma,family_id (sufiksy do analogii)
+  morph_indeclinable.csv — form_norm (nieodmienne: adv,prep,conj,... + jednoformowe)
+
+- Bez normalizacji form/lematów — normalizację robi Django przy imporcie
 - Zawiera tożsamości: pies,pies,1 (forma == lemat)
-- Pomija nieodmienne części mowy
+- Pomija nieodmienne części mowy w morph_families (trafiają do indeclinable)
 - family_id: liczba całkowita unikalna per (lemat, rodzaj_morfologiczny)
 
 Użycie:
-    python3 build_morph_csv.py [wejście] [wyjście]
+    python3 build_morph_csv.py [wejście] [wyjście_families]
     python3 build_morph_csv.py  # używa domyślnych ścieżek
 """
 
@@ -18,9 +22,21 @@ import os
 import subprocess
 import sys
 import time
+import unicodedata
+from collections import defaultdict
 
 DEFAULT_INPUT  = "/home/andrzej/Downloads/Polimorf/PoliMorf-0.6.7.tab"
 DEFAULT_OUTPUT = "morph_families.csv"
+DEFAULT_SUFFIXES    = "morph_suffixes.csv"
+DEFAULT_INDECLINABLE = "morph_indeclinable.csv"
+
+
+def _normalize(text: str) -> str:
+    """Mirrors board.search_index.normalize_search_text (lowercase + strip diacritics + ł→l)."""
+    text = (text or "").replace("ł", "l").replace("Ł", "L")
+    nfkd = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return text.lower().strip()
 
 # Nieodmienne — pomijamy całkowicie
 SKIP_POS = frozenset({
@@ -29,10 +45,11 @@ SKIP_POS = frozenset({
 })
 
 
-def adj_gender_families(number: str, gender_field: str) -> list[str]:
+def adj_gender_families(number: str, gender_field: str, degree: str = "pos") -> list[str]:
     """
-    Wyznacza rodziny dla przymiotnika na podstawie liczby i pola gender.
+    Wyznacza rodziny dla przymiotnika na podstawie liczby, pola gender i stopnia.
     gender_field może mieć postać 'm1.m2.m3' lub 'n1.n2' itp.
+    degree: pos / comp / sup
     Zwraca listę (może być więcej niż jedna, gdy forma jest niejednoznaczna).
     """
     genders = gender_field.split(".")
@@ -40,18 +57,18 @@ def adj_gender_families(number: str, gender_field: str) -> list[str]:
     for g in genders:
         if number == "sg":
             if g.startswith("m"):
-                result.add("adj:sg:m")
+                result.add(f"adj:sg:m:{degree}")
             elif g == "f":
-                result.add("adj:sg:f")
+                result.add(f"adj:sg:f:{degree}")
             elif g.startswith("n"):
-                result.add("adj:sg:n")
+                result.add(f"adj:sg:n:{degree}")
             else:
-                result.add("adj:sg:other")
+                result.add(f"adj:sg:other:{degree}")
         else:  # pl
             if g in ("m1", "p1"):
-                result.add("adj:pl:vir")     # męskoosobowy
+                result.add(f"adj:pl:vir:{degree}")
             else:
-                result.add("adj:pl:nonvir")  # niemęskoosobowy
+                result.add(f"adj:pl:nonvir:{degree}")
     return sorted(result)
 
 
@@ -78,7 +95,8 @@ def tag_to_families(tag: str) -> list[str]:
         # (case może mieć kropki np. nom.voc — nas interesuje gender = parts[3])
         if len(parts) < 4:
             return ["adj:other"]
-        return adj_gender_families(parts[1], parts[3])
+        degree = parts[4] if len(parts) > 4 and parts[4] in ("pos", "com", "sup") else "pos"
+        return adj_gender_families(parts[1], parts[3], degree)
 
     # adja (przymiotnik atrybutywny, nieokreślona forma), adjp, adjc
     # — jedna forma per lemat, ale warto je mieć w tabeli
@@ -132,7 +150,7 @@ def tag_to_families(tag: str) -> list[str]:
     return [pos]
 
 
-def build_csv(input_path: str, output_path: str) -> None:
+def build_csv(input_path: str, output_path: str, skip_pos_out: set | None = None) -> None:
     # (lemat, nazwa_rodziny) → family_id (int)
     family_id_map: dict[tuple[str, str], int] = {}
     next_id = 0
@@ -175,6 +193,8 @@ def build_csv(input_path: str, output_path: str) -> None:
             families = tag_to_families(tag)
             if not families:
                 skipped += 1
+                if skip_pos_out is not None and tag.split(":")[0] in SKIP_POS:
+                    skip_pos_out.add(_normalize(lemma))
                 continue
 
             for family_name in families:
@@ -220,9 +240,143 @@ def build_csv(input_path: str, output_path: str) -> None:
     print(f"Mapa rodzin: {debug_path}", file=sys.stderr)
 
 
+def build_auxiliary_csvs(
+    families_csv: str,
+    suffixes_csv: str,
+    indeclinable_csv: str,
+    skip_pos_lemmas: set,
+    suffix_lens: tuple = (2, 3, 4),
+) -> None:
+    """
+    Czyta morph_families.csv i buduje:
+      morph_suffixes.csv    — sufiksy lematów dla analogii morfologicznej
+      morph_indeclinable.csv — nieodmienne słowa
+
+    Wywołuj po build_csv (potrzebuje gotowego morph_families.csv).
+    skip_pos_lemmas: znormalizowane lematy z SKIP_POS zebrane przez build_csv.
+    """
+    # Zbieramy (lemma_raw, family_id) → czy ma tylko formę = lemat
+    identity_keys: set[tuple[str, int]] = set()     # form == lemma
+    nonidentity_keys: set[tuple[str, int]] = set()  # form != lemma
+
+    t0 = time.time()
+
+    # ── Wczytaj nazwy rodzin ─────────────────────────────────────────────────
+    family_name_map: dict[int, str] = {}
+    family_names_csv = families_csv.replace(".csv", "_family_names.csv")
+    if os.path.exists(family_names_csv):
+        with open(family_names_csv, encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                family_name_map[int(row["family_id"])] = row["family_name"]
+        print(f"  Nazwy rodzin: {len(family_name_map):,}", file=sys.stderr)
+    else:
+        print("  Uwaga: brak _family_names.csv — sufiks bez filtrowania po typie rodziny", file=sys.stderr)
+
+    # Rodziny przymiotnikowe (adj:sg:n, adj:pl:nonvir) — zbieramy wszystkie formy,
+    # żeby wybrać najkrótszą jako kotwicę sufiksu zamiast lematu.
+    ADJ_FAMILIES = frozenset({"adj:sg:n:pos", "adj:pl:nonvir:pos"})
+    adj_fids: set[int] = {
+        fid for fid, fname in family_name_map.items() if fname in ADJ_FAMILIES
+    }
+    adj_family_forms: dict[tuple[str, int], set[str]] = defaultdict(set)
+
+    print("Wczytywanie morph_families.csv (budowa suffix/indeclinable)...", file=sys.stderr)
+
+    with open(families_csv, encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        next(reader)  # pomiń nagłówek
+        for row in reader:
+            if len(row) < 3:
+                continue
+            form, lemma, fid = row[0], row[1], int(row[2])
+            key = (lemma, fid)
+            if form == lemma:
+                identity_keys.add(key)
+            else:
+                nonidentity_keys.add(key)
+            if fid in adj_fids:
+                adj_family_forms[key].add(form)
+
+    # Rodziny wieloformowe z tożsamością (subst z mianownikiem = lemat)
+    multi_with_identity = identity_keys & nonidentity_keys
+    print(f"  Rodzin subst z tożsamością i >1 formą: {len(multi_with_identity):,}", file=sys.stderr)
+    print(f"  Rodzin przymiotnikowych (adj:sg:n+pl:nonvir): {len(adj_family_forms):,}", file=sys.stderr)
+
+    # ── Buduj morph_suffixes.csv ─────────────────────────────────────────────
+    # subst:sg — kotwica = lemat (forma mianownikowa)
+    # adj:sg:n / adj:pl:nonvir — kotwica = najkrótsza forma (mianownik nijaki/niemęskoos.)
+    suffix_count = 0
+    with open(suffixes_csv, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["suffix_len", "suffix", "lemma", "family_id"])
+
+        for (lemma, fid) in multi_with_identity:
+            if family_name_map and family_name_map.get(fid) != "subst:sg":
+                continue
+            anchor_norm = _normalize(lemma)   # dla subst kotwica = lemat
+            for slen in suffix_lens:
+                if len(anchor_norm) <= slen:
+                    continue
+                w.writerow([slen, anchor_norm[-slen:], lemma, fid])
+                suffix_count += 1
+
+        for (lemma, fid), forms in adj_family_forms.items():
+            if not forms:
+                continue
+            # najkrótsza forma ≈ mianownik (niebieskie, białe, dobre …)
+            anchor_norm = _normalize(min(forms, key=len))
+            for slen in suffix_lens:
+                if len(anchor_norm) <= slen:
+                    continue
+                w.writerow([slen, anchor_norm[-slen:], lemma, fid])
+                suffix_count += 1
+
+    print(f"Suffix CSV: {suffix_count:,} wierszy (subst:sg + adj:sg:n/pl:nonvir) → {suffixes_csv}", file=sys.stderr)
+
+    # ── Buduj morph_indeclinable.csv ─────────────────────────────────────────
+    # Jednoformowe rzeczowniki/przymiotniki: tylko forma = lemat, brak innych
+    identity_lemmas = {_normalize(lemma) for (lemma, fid) in identity_keys}
+    nonidentity_lemmas = {_normalize(lemma) for (lemma, fid) in nonidentity_keys}
+    indeclinable_nouns = identity_lemmas - nonidentity_lemmas
+
+    all_indeclinable = indeclinable_nouns | skip_pos_lemmas
+
+    with open(indeclinable_csv, "w", encoding="utf-8") as f:
+        f.write("form_norm\n")
+        for word in sorted(all_indeclinable):
+            f.write(word + "\n")
+
+    elapsed = time.time() - t0
+    print(
+        f"Indeclinable CSV: {len(all_indeclinable):,} słów "
+        f"({len(indeclinable_nouns):,} jednoformowe + {len(skip_pos_lemmas):,} SKIP_POS) "
+        f"→ {indeclinable_csv}  [{elapsed:.1f}s]",
+        file=sys.stderr,
+    )
+
+
 if __name__ == "__main__":
-    inp = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_INPUT
-    out = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUTPUT
-    print(f"Wejście:  {inp}", file=sys.stderr)
-    print(f"Wyjście:  {out}", file=sys.stderr)
-    build_csv(inp, out)
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input",   nargs="?", default=DEFAULT_INPUT,    help="PoliMorf .tab")
+    parser.add_argument("output",  nargs="?", default=DEFAULT_OUTPUT,   help="morph_families.csv")
+    parser.add_argument("--aux-only", action="store_true",
+                        help="Pomiń parsowanie PoliMorfa; przebuduj tylko suffix/indeclinable z gotowego families CSV")
+    args = parser.parse_args()
+
+    out_suf    = DEFAULT_SUFFIXES
+    out_indecl = DEFAULT_INDECLINABLE
+
+    if args.aux_only:
+        print(f"Families CSV:  {args.output}", file=sys.stderr)
+        print(f"Suffixes CSV:  {out_suf}", file=sys.stderr)
+        print(f"Indeclinable:  {out_indecl}", file=sys.stderr)
+        build_auxiliary_csvs(args.output, out_suf, out_indecl, skip_pos_lemmas=set())
+    else:
+        print(f"Wejście:       {args.input}", file=sys.stderr)
+        print(f"Families CSV:  {args.output}", file=sys.stderr)
+        print(f"Suffixes CSV:  {out_suf}", file=sys.stderr)
+        print(f"Indeclinable:  {out_indecl}", file=sys.stderr)
+        skip_pos_lemmas: set[str] = set()
+        build_csv(args.input, args.output, skip_pos_out=skip_pos_lemmas)
+        build_auxiliary_csvs(args.output, out_suf, out_indecl, skip_pos_lemmas)
