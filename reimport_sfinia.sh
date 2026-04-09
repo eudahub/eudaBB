@@ -42,6 +42,16 @@ python manage.py flush --no-input
 echo "==> Migracje"
 python manage.py migrate
 
+echo "==> Import słownika morfologicznego (formy odmiany)"
+MORPH_CSV="${SCRIPT_DIR}/morph_families.csv"
+if [[ -f "${MORPH_CSV}" ]]; then
+  python manage.py import_morph_csv "${MORPH_CSV}"
+else
+  echo "Uwaga: brak ${MORPH_CSV} — szukanie z + nie będzie działać." >&2
+  echo "Pobierz plik z Google Drive i umieść jako morph_families.csv w katalogu projektu." >&2
+fi
+
+
 echo "==> Budowa bazy importowej userów"
 python manage.py build_import_db \
   "${ADMIN_DB}" \

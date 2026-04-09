@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from django.db.models import Q
+
 from .models import Post, PostSearchIndex
 
 
@@ -13,7 +15,8 @@ _YOUTUBE_TAG_RE = re.compile(r"\[(?:youtube|yt)(?:=[^\]]*)?\]", re.IGNORECASE)
 
 
 def strip_diacritics(text: str) -> str:
-    nfkd = unicodedata.normalize("NFKD", text or "")
+    text = (text or "").replace("ł", "l").replace("Ł", "L")
+    nfkd = unicodedata.normalize("NFKD", text)
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
@@ -111,3 +114,33 @@ def rebuild_post_search_index_for_posts(posts, chunk_size: int = 500) -> int:
 
     flush()
     return total
+
+
+def expand_morph_term(term_norm: str) -> list[str]:
+    """
+    Zwraca wszystkie znormalizowane formy z tej samej rodziny morfologicznej.
+    Jeśli słowa nie ma w słowniku (tabela pusta lub brak wpisu), zwraca [term_norm].
+    """
+    from .models import MorphForm
+
+    try:
+        families = list(
+            MorphForm.objects
+            .filter(form_norm=term_norm)
+            .values("lemma_norm", "family_id")
+            .distinct()
+        )
+    except Exception:
+        return [term_norm]
+
+    if not families:
+        return [term_norm]
+
+    q = Q()
+    for entry in families:
+        q |= Q(lemma_norm=entry["lemma_norm"], family_id=entry["family_id"])
+
+    forms = sorted(set(
+        MorphForm.objects.filter(q).values_list("form_norm", flat=True)
+    ))
+    return forms if forms else [term_norm]

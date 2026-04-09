@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta
 
 from django.db import models as django_models
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
 from django.contrib.auth import login
@@ -35,7 +36,7 @@ from .username_utils import normalize
 from .user_rename import rename_user_and_update_quotes
 from .quote_refs import rebuild_quote_references_for_post
 from .quote_selection import extract_exact_quote_fragment, normalize_selected_text
-from .search_index import extract_author_search_text, normalize_search_text, strip_diacritics
+from .search_index import extract_author_search_text, expand_morph_term, normalize_search_text, strip_diacritics
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +644,7 @@ def reply(request, topic_id):
 
     if quote_query and not quote_filter_message:
         parsed_quote = _parse_search_query(quote_query)
-        if not parsed_quote["phrases"] and not parsed_quote["terms"]:
+        if not parsed_quote["phrases"] and not parsed_quote["term_groups"]:
             if parsed_quote["skipped_terms"]:
                 quote_filter_message = (
                     "W filtrze pominięto wyłącznie słowa zbyt częste: "
@@ -658,14 +659,20 @@ def reply(request, topic_id):
                 search_rows = search_rows.filter(author=selected_quote_author)
             for phrase in parsed_quote["phrases"]:
                 search_rows = search_rows.filter(content_search_author_normalized__contains=phrase)
-            for term in parsed_quote["terms"]:
-                search_rows = search_rows.filter(content_search_author_normalized__contains=term)
+            for group in parsed_quote["term_groups"]:
+                if len(group) == 1:
+                    search_rows = search_rows.filter(content_search_author_normalized__contains=group[0])
+                else:
+                    q = Q()
+                    for alt in group:
+                        q |= Q(content_search_author_normalized__contains=alt)
+                    search_rows = search_rows.filter(q)
             matched_post_ids = [
                 row.post_id for row in search_rows.only("post_id", "content_search_author_normalized")
                 if _matches_search_text(
                     row.content_search_author_normalized,
                     parsed_quote["phrases"],
-                    parsed_quote["terms"],
+                    parsed_quote["term_groups"],
                 )
             ]
             recent_posts_qs = recent_posts_qs.filter(pk__in=matched_post_ids)
@@ -813,9 +820,13 @@ _SEARCH_BOUNDARY = r"(?<!\w){needle}(?!\w)"
 
 
 def _parse_search_query(raw_query: str):
+    # Spacje wokół | są ignorowane: "pies+| kot" → "pies+|kot"
+    raw_query = re.sub(r'\s*\|\s*', '|', raw_query or '')
     phrases = []
-    terms = []
+    term_groups = []
     skipped_terms = []
+    display_parts = []   # do zbudowania expanded_query
+    has_expansion = False
 
     for match in _SEARCH_PHRASE_RE.finditer(raw_query or ""):
         phrase = match.group(1)
@@ -824,20 +835,50 @@ def _parse_search_query(raw_query: str):
             normalized_phrase = normalize_search_text(phrase)
             if normalized_phrase:
                 phrases.append(normalized_phrase)
+                display_parts.append(f'"{phrase}"')
             continue
 
-        normalized_token = normalize_search_text(token or "")
-        if not normalized_token:
-            continue
-        if normalized_token in _SAFE_STOP_WORDS:
-            skipped_terms.append(token)
-            continue
-        terms.append(normalized_token)
+        alternatives = (token or "").split("|")
+        group = []
+        group_skipped = []
+        display_alts = []
+
+        for alt in alternatives:
+            do_expand = alt.endswith("+")
+            base = alt[:-1] if do_expand else alt
+            normalized = normalize_search_text(base)
+            if not normalized:
+                continue
+            if normalized in _SAFE_STOP_WORDS:
+                group_skipped.append(base)
+                continue
+            if do_expand:
+                expanded = expand_morph_term(normalized)
+                group.extend(expanded)
+                display_alts.extend(expanded)
+                if len(expanded) > 1:
+                    has_expansion = True
+            else:
+                group.append(normalized)
+                display_alts.append(normalized)
+
+        if group:
+            # dedupl z zachowaniem kolejności (obejmuje ręczne alt + ekspansje)
+            seen_g: set[str] = set()
+            deduped = [x for x in group if not (x in seen_g or seen_g.add(x))]
+            term_groups.append(deduped)
+            display_parts.append("|".join(deduped))
+        else:
+            skipped_terms.extend(group_skipped)
+
+    expanded_query = " ".join(display_parts) if has_expansion else ""
 
     return {
         "phrases": phrases,
-        "terms": terms,
+        "term_groups": term_groups,
         "skipped_terms": skipped_terms,
+        "expanded_query": expanded_query,
+        "has_expansion": has_expansion,
     }
 
 
@@ -853,12 +894,12 @@ def _find_match_start(haystack: str, needle: str):
     return match.start() if match else -1
 
 
-def _matches_search_text(text_norm: str, phrases: list[str], terms: list[str]) -> bool:
+def _matches_search_text(text_norm: str, phrases: list[str], term_groups: list[list[str]]) -> bool:
     for phrase in phrases:
         if _find_match_start(text_norm, phrase) == -1:
             return False
-    for term in terms:
-        if _find_match_start(text_norm, term) == -1:
+    for group in term_groups:
+        if not any(_find_match_start(text_norm, term) != -1 for term in group):
             return False
     return True
 
@@ -925,7 +966,7 @@ def _highlight_snippet(snippet: str, needles: list[str]) -> str:
     return "".join(parts)
 
 
-def _build_search_snippet(text: str, phrases: list[str], terms: list[str], df_map: dict[str, int], width: int = 220):
+def _build_search_snippet(text: str, phrases: list[str], term_groups: list[list[str]], df_map: dict[str, int], width: int = 220):
     text = (text or "").strip()
     if not text:
         return ""
@@ -933,6 +974,7 @@ def _build_search_snippet(text: str, phrases: list[str], terms: list[str], df_ma
     text_norm = _normalize_for_match(text)
     anchor = None
     matched_needles = []
+    terms = [term for group in term_groups for term in group]
 
     for phrase in phrases:
         idx = _find_match_start(text_norm, phrase)
@@ -1043,7 +1085,7 @@ def search(request):
     indexed_forums = Forum.objects.filter(search_posts__isnull=False).distinct().order_by("title")
     selected_forum = None
     selected_author = None
-    parsed = {"phrases": [], "terms": [], "skipped_terms": []}
+    parsed = {"phrases": [], "term_groups": [], "skipped_terms": [], "expanded_query": "", "has_expansion": False}
     page = None
     info_message = ""
     snippet_width = max(80, getattr(settings, "SEARCH_SNIPPET_CHARS", 800))
@@ -1087,7 +1129,7 @@ def search(request):
 
     if (raw_query or search_filter != "all" or selected_author is not None or date_from or date_to) and not info_message:
         parsed = _parse_search_query(raw_query)
-        if not parsed["phrases"] and not parsed["terms"]:
+        if not parsed["phrases"] and not parsed["term_groups"]:
             if search_filter != "all" or selected_author is not None or date_from or date_to:
                 pass
             elif parsed["skipped_terms"]:
@@ -1122,16 +1164,16 @@ def search(request):
                 matched_topics = []
                 for topic in qs.order_by("-created_at", "-pk"):
                     title_normalized = normalize_search_text(topic.title)
-                    if parsed["phrases"] or parsed["terms"]:
+                    if parsed["phrases"] or parsed["term_groups"]:
                         if not _matches_search_text(
                             title_normalized,
                             parsed["phrases"],
-                            parsed["terms"],
+                            parsed["term_groups"],
                         ):
                             continue
                     topic.title_html = _highlight_snippet(
                         topic.title,
-                        parsed["phrases"] + parsed["terms"],
+                        parsed["phrases"] + [t for g in parsed["term_groups"] for t in g],
                     )
                     topic.has_poll = getattr(topic, "poll", None) is not None
                     matched_topics.append(topic)
@@ -1167,23 +1209,30 @@ def search(request):
 
                 for phrase in parsed["phrases"]:
                     qs = qs.filter(content_search_author_normalized__contains=phrase)
-                for term in parsed["terms"]:
-                    qs = qs.filter(content_search_author_normalized__contains=term)
+                for group in parsed["term_groups"]:
+                    if len(group) == 1:
+                        qs = qs.filter(content_search_author_normalized__contains=group[0])
+                    else:
+                        q = Q()
+                        for alt in group:
+                            q |= Q(content_search_author_normalized__contains=alt)
+                        qs = qs.filter(q)
 
                 matched_rows = [
                     row for row in qs.order_by("-created_at", "-post_id")
                     if _matches_search_text(
                         row.content_search_author_normalized,
                         parsed["phrases"],
-                        parsed["terms"],
+                        parsed["term_groups"],
                     )
                 ]
 
                 paginator = Paginator(matched_rows, getattr(settings, "POSTS_PER_PAGE", 20))
                 page = paginator.get_page(page_num)
                 if page is not None:
+                    flat_terms = [term for group in parsed["term_groups"] for term in group]
                     df_map = {}
-                    for term in parsed["terms"]:
+                    for term in flat_terms:
                         df_map[term] = sum(
                             1 for row in matched_rows
                             if _find_match_start(row.content_search_author_normalized, term) != -1
@@ -1192,7 +1241,7 @@ def search(request):
                         row.snippet_html = _build_search_snippet(
                             row.content_search_author,
                             parsed["phrases"],
-                            parsed["terms"],
+                            parsed["term_groups"],
                             df_map,
                             width=snippet_width,
                         )

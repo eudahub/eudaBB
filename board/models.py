@@ -526,6 +526,22 @@ class PostSearchIndex(models.Model):
         return f"PostSearch post={self.post_id}"
 
 
+class MorphForm(models.Model):
+    """Morfologiczne rodziny słów (PoliMorf) do ekspansji zapytań typu słowo+."""
+
+    form_norm  = models.CharField(max_length=120)
+    lemma_norm = models.CharField(max_length=120)
+    family_id  = models.IntegerField()
+
+    class Meta:
+        db_table = "forum_morph_form"
+        unique_together = [("form_norm", "lemma_norm", "family_id")]
+        indexes = [
+            models.Index(fields=["form_norm"]),
+            models.Index(fields=["lemma_norm", "family_id"]),
+        ]
+
+
 class Poll(models.Model):
     """Thread poll, both imported archival polls and native future polls."""
 

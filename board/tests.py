@@ -1247,7 +1247,7 @@ class UserRenameTests(TestCase):
         parsed = _parse_search_query('do "do rzeczy" byt ale')
 
         self.assertEqual(parsed["phrases"], ["do rzeczy"])
-        self.assertEqual(parsed["terms"], ["byt"])
+        self.assertEqual(parsed["term_groups"], [["byt"]])
         self.assertEqual(parsed["skipped_terms"], ["do", "ale"])
 
     def test_search_view_returns_indexed_post_match(self):
@@ -1296,7 +1296,7 @@ class UserRenameTests(TestCase):
         snippet = _build_search_snippet(
             "Ala ma kota i potem wolna wola wraca do tematu.",
             ["wolna wola"],
-            ["ala", "tematu"],
+            [["ala"], ["tematu"]],
             {"ala": 100, "tematu": 50},
             width=30,
         )
@@ -1307,7 +1307,7 @@ class UserRenameTests(TestCase):
         snippet = _build_search_snippet(
             "slowo popularne jest na początku, ale unikatowe trafienie jest dużo dalej w tym poście",
             [],
-            ["popularne", "unikatowe"],
+            [["popularne"], ["unikatowe"]],
             {"popularne": 5000, "unikatowe": 10},
             width=32,
         )
@@ -1319,14 +1319,14 @@ class UserRenameTests(TestCase):
         self.assertTrue(_matches_search_text("to jest do rzeczy i tyle", ["do rzeczy"], []))
 
     def test_matches_search_text_requires_word_boundaries_for_term(self):
-        self.assertFalse(_matches_search_text("zalobe", [], ["obe"]))
-        self.assertTrue(_matches_search_text("to jest zalobe", [], ["zalobe"]))
+        self.assertFalse(_matches_search_text("zalobe", [], [["obe"]]))
+        self.assertTrue(_matches_search_text("to jest zalobe", [], [["zalobe"]]))
 
     def test_build_search_snippet_highlights_without_diacritics(self):
         snippet = _build_search_snippet(
             "To była żałobę po kimś ważnym.",
             [],
-            ["zalobe"],
+            [["zalobe"]],
             {"zalobe": 10},
             width=40,
         )

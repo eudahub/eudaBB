@@ -53,9 +53,15 @@
     <button type="submit">Szukaj</button>
   </div>
   <p style="margin-top:.4rem;font-size:11px;color:#555;">
-    Domyślnie: słowa są łączone przez AND, frazy wpisuj w cudzysłowie.
+    Domyślnie: słowa są łączone przez AND, frazy wpisuj w cudzysłowie. Dopisz <code>+</code> do słowa aby rozwinąć formy odmiany.
   </p>
 </form>
+
+{% if parsed_query.has_expansion %}
+<details style="font-size:11px;color:#555;margin:.1rem 0 .5rem;">
+  <summary style="cursor:pointer;color:#800000;">Szukam: {{ parsed_query.expanded_query }}</summary>
+</details>
+{% endif %}
 
 {% if info_message %}
   <p><em>{{ info_message }}</em></p>
