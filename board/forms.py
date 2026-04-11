@@ -17,7 +17,12 @@ def _check_email_domain(email: str) -> str | None:
         ext = tldextract.extract(host)
         if not ext.suffix:
             return "Adres email ma nieprawidłowe rozszerzenie domeny."
-        base = f"{ext.domain}.{ext.suffix}"
+        name = ext.domain
+        if len(name) > 29:
+            return "Adres email pochodzi z domeny o podejrzanie długiej nazwie."
+        if ("mail" in name or "box" in name) and len(name) > 11:
+            return "Adres email pochodzi z domeny o podejrzanie długiej nazwie."
+        base = f"{name}.{ext.suffix}"
         if SpamDomain.objects.filter(domain=base, spam=1).exists():
             return (
                 "Adres skrzynki pocztowej wygląda na jednorazowy, tymczasowy lub spambox. "
