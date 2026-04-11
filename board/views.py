@@ -1820,7 +1820,11 @@ def register(request):
                 return redirect("register")
             start_form = RegisterStartForm(initial=pending)
             finish_form = RegisterFinishForm()
-            send_registration_code(pending["username"], pending["email"])
+            email_confirm = request.POST.get("email_confirm", "").strip().lower()
+            if email_confirm != pending["email"]:
+                error = "Podany adres email nie zgadza się. Wpisz pełny adres widoczny w masce."
+            else:
+                send_registration_code(pending["username"], pending["email"])
         elif action == "finish":
             if not pending:
                 return redirect("register")
@@ -1877,10 +1881,13 @@ def register(request):
     if pending:
         start_form = RegisterStartForm(initial=pending)
 
+    email_mask = mask_email(pending["email"]) if pending else None
+
     return render(request, "registration/register.html", {
         "start_form": start_form,
         "finish_form": finish_form,
         "pending": pending,
+        "email_mask": email_mask,
         "sent": sent,
         "test_code": test_code,
         "error": error,

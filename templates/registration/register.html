@@ -6,8 +6,9 @@
   <h2>Rejestracja</h2>
 
   {% if pending %}
-    <p>Rejestracja dla nicka <strong>{{ pending.username }}</strong> i emaila <strong>{{ pending.email }}</strong>.</p>
-    <p>Najpierw wyślij kod, potem wpisz go poniżej i ustaw hasło.</p>
+    <p>Rejestracja dla nicka <strong>{{ pending.username }}</strong>.</p>
+    <p>Kod weryfikacyjny zostanie wysłany na: <strong>{{ email_mask }}</strong></p>
+    <p style="font-size:12px;color:#666;">Aby potwierdzić, wpisz pełny adres email poniżej.</p>
 
     {% if error %}
       <p style="color:red;">{{ error }}</p>
@@ -21,6 +22,11 @@
     <form method="post" style="margin-bottom:1rem;">
       {% csrf_token %}
       <input type="hidden" name="action" value="send_code">
+      <label style="display:block;margin-bottom:.5rem;">
+        <span style="display:block;font-size:12px;margin-bottom:.2rem;">Potwierdź adres email</span>
+        <input type="email" name="email_confirm" autocomplete="email"
+               style="width:100%;box-sizing:border-box;" placeholder="{{ email_mask }}">
+      </label>
       <button type="submit">Wyślij kod</button>
     </form>
 
