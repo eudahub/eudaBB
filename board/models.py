@@ -848,6 +848,7 @@ def _decrement_like_counters(sender, instance, **kwargs):
 class SpamDomain(models.Model):
     domain = models.CharField(max_length=255, primary_key=True)
     spam = models.SmallIntegerField()
+    added_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "forum_spam_domain"
