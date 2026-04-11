@@ -843,3 +843,11 @@ def _decrement_like_counters(sender, instance, **kwargs):
         User.objects.filter(pk=instance.post.author_id, likes_received_count__gt=0).update(
             likes_received_count=models.F("likes_received_count") - 1
         )
+
+
+class SpamDomain(models.Model):
+    domain = models.CharField(max_length=255, primary_key=True)
+    spam = models.SmallIntegerField()
+
+    class Meta:
+        db_table = "forum_spam_domain"

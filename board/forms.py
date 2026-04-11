@@ -7,6 +7,22 @@ from .email_utils import mask_email, mask_email_variants
 from .auth_utils import prehash_password
 from .polls import validate_poll_option_count
 
+
+def _is_spam_email_domain(email: str) -> bool:
+    """Return True if the email's base domain is in SpamDomain with spam=1."""
+    try:
+        import tldextract
+        from .models import SpamDomain
+        host = email.split("@", 1)[-1].lower().strip()
+        ext = tldextract.extract(host)
+        if ext.domain and ext.suffix:
+            base = f"{ext.domain}.{ext.suffix}"
+        else:
+            base = host
+        return SpamDomain.objects.filter(domain=base, spam=1).exists()
+    except Exception:
+        return False
+
 TOPIC_TITLE_MAX_LENGTH = 70
 
 
@@ -72,6 +88,11 @@ class RegisterStartForm(forms.Form):
 
     def clean_email(self):
         email = self.cleaned_data["email"].strip().lower()
+        if _is_spam_email_domain(email):
+            raise forms.ValidationError(
+                "Adres skrzynki pocztowej wygląda na jednorazowy, tymczasowy lub spambox. "
+                "Użyj stałego adresu email."
+            )
         conflict = User.objects.filter(email=email).first()
         if not conflict:
             return email
