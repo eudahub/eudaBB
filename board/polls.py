@@ -48,9 +48,19 @@ def parse_archive_datetime(value: str):
         return None
 
 
+def _get_soft_limit() -> int:
+    """Soft limit from SiteConfig (DB), falls back to settings, then 32."""
+    try:
+        from board.models import SiteConfig
+        val = SiteConfig.get().poll_options_soft_max
+    except Exception:
+        val = getattr(settings, "POLL_OPTIONS_SOFT_MAX", 32)
+    return max(1, val)
+
+
 def get_poll_options_limit(original_count: int = 0) -> int:
     hard_limit = max(1, getattr(settings, "POLL_OPTIONS_HARD_MAX", 64))
-    soft_limit = max(1, getattr(settings, "POLL_OPTIONS_SOFT_MAX", 32))
+    soft_limit = _get_soft_limit()
     return min(hard_limit, max(int(original_count or 0), soft_limit))
 
 

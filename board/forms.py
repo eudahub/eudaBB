@@ -106,6 +106,82 @@ class RegisterFinishForm(forms.Form):
         return cleaned
 
 
+def parse_poll_options_text(raw_text: str) -> tuple[list[dict], list[str]]:
+    """Parse poll options textarea.
+
+    Returns (options, errors) where options is list of {"text": str, "category": str}.
+    Format: lines starting with '-' are options, '##' lines are category headers,
+    blank lines reset current category, other non-empty lines are errors.
+    """
+    current_category = ""
+    options = []
+    bad_lines = []
+    empty_category_lines = []
+    declared_categories = []
+    categories_with_options = set()
+
+    for ln in raw_text.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            current_category = ""
+            continue
+        if stripped.startswith("-"):
+            text = stripped[1:].strip()
+            if text:
+                options.append({"text": text, "category": current_category})
+                if current_category:
+                    categories_with_options.add(current_category)
+        elif stripped.startswith("##"):
+            cat = stripped[2:].strip()
+            if not cat:
+                empty_category_lines.append(stripped)
+            else:
+                current_category = cat
+                if cat not in declared_categories:
+                    declared_categories.append(cat)
+        else:
+            bad_lines.append(stripped)
+
+    errors = []
+    if bad_lines:
+        examples = ", ".join(f'„{ln}"' for ln in bad_lines[:3])
+        errors.append(f"Nieznane linie (muszą zaczynać się od - lub ##): {examples}.")
+    if empty_category_lines:
+        errors.append("Nazwa kategorii (##) nie może być pusta.")
+    empty_categories = [c for c in declared_categories if c not in categories_with_options]
+    if empty_categories:
+        examples = ", ".join(f'„{c}"' for c in empty_categories[:3])
+        errors.append(f"Kategorie bez opcji: {examples}.")
+
+    seen = set()
+    duplicates = []
+    for opt in options:
+        t = opt["text"].lower()
+        if t in seen:
+            duplicates.append(opt["text"])
+        seen.add(t)
+    if duplicates:
+        examples = ", ".join(f'„{t}"' for t in duplicates[:3])
+        errors.append(f"Opcje muszą być unikalne. Duplikaty: {examples}.")
+
+    return options, errors
+
+
+def poll_options_to_text(options) -> str:
+    """Reconstruct textarea text from a queryset/list of PollOption objects."""
+    lines = []
+    current_cat = object()  # sentinel
+    for opt in options:
+        if opt.category != current_cat:
+            if lines:
+                lines.append("")  # blank line before new category section
+            if opt.category:
+                lines.append(f"## {opt.category}")
+            current_cat = opt.category
+        lines.append(f"- {opt.option_text}")
+    return "\n".join(lines)
+
+
 def validate_post_content(content: str, original_size: int = 0) -> tuple[str, list[str], list[str]]:
     """Repair and validate post content.
 
@@ -206,6 +282,10 @@ class NewTopicForm(forms.Form):
     poll_allow_vote_change = forms.BooleanField(required=False)
     poll_allow_multiple_choice = forms.BooleanField(required=False)
 
+    def __init__(self, *args, is_admin: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._is_admin = is_admin
+
     def clean_content(self):
         return _validate_post_content(self.cleaned_data["content"])
 
@@ -218,8 +298,9 @@ class NewTopicForm(forms.Form):
             cleaned["poll_data"] = None
             return cleaned
 
-        raw_options = [value.strip() for value in self.data.getlist("poll_options")]
-        poll_options = [value for value in raw_options if value]
+        raw_text = self.data.get("poll_options_text", "")
+        poll_options, option_errors = parse_poll_options_text(raw_text)
+
         poll_question = (cleaned.get("poll_question") or "").strip()
         duration = cleaned.get("poll_duration_days")
         allow_vote_change = bool(cleaned.get("poll_allow_vote_change"))
@@ -228,11 +309,12 @@ class NewTopicForm(forms.Form):
         errors = []
         if not poll_question:
             errors.append("Podaj pytanie ankiety.")
-        if len(poll_options) < 2:
-            errors.append("Ankieta musi mieć co najmniej 2 niepuste opcje.")
+        errors.extend(option_errors)
+        if not option_errors and len(poll_options) < 2:
+            errors.append("Ankieta musi mieć co najmniej 2 niepuste opcje (linie zaczynające się od -).")
         _, option_errors = validate_poll_option_count(len(poll_options))
         errors.extend(option_errors)
-        if not duration:
+        if not duration and not self._is_admin:
             errors.append("Podaj czas trwania ankiety w dniach.")
 
         if errors:
@@ -240,10 +322,10 @@ class NewTopicForm(forms.Form):
 
         cleaned["poll_data"] = {
             "question": poll_question,
-            "duration_days": int(duration),
+            "duration_days": int(duration) if duration else None,
             "allow_vote_change": allow_vote_change,
             "allow_multiple_choice": allow_multiple_choice,
-            "options": poll_options,
+            "options": poll_options,  # list of {"text": str, "category": str}
         }
         return cleaned
 

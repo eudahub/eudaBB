@@ -638,6 +638,7 @@ class PollOption(models.Model):
         Poll, on_delete=models.CASCADE, related_name="options"
     )
     option_text = models.TextField()
+    category = models.CharField(max_length=200, default="", blank=True)
     vote_count = models.PositiveIntegerField(default=0)
     sort_order = models.PositiveSmallIntegerField(default=0)
 
@@ -788,6 +789,10 @@ class SiteConfig(models.Model):
     # Show "Przełącz" link in nav (lets you quickly switch accounts — test use only)
     show_switch_link = models.BooleanField(default=False)
     search_snippet_chars = models.PositiveIntegerField(default=800)
+    poll_options_soft_max = models.PositiveSmallIntegerField(
+        default=50,
+        help_text="Miękki limit opcji ankiety (max = twardy limit z settings POLL_OPTIONS_HARD_MAX, domyślnie 64).",
+    )
 
     class Meta:
         db_table = "forum_siteconfig"

@@ -47,69 +47,152 @@
   <div class="post-box" style="margin-bottom:.7rem;">
     <div class="post-header">
       <span>Ankieta</span>
-      <span>{% if poll_is_closed %}zamknięta{% else %}otwarta{% endif %}</span>
+      <span style="display:flex;gap:.5rem;align-items:center;">
+        {% if poll_is_closed %}zamknięta{% else %}otwarta{% endif %}
+        {% if can_edit_poll %}
+          <a href="{% url 'edit_poll' topic.pk %}" class="bbsrc-btn">Edytuj ankietę</a>
+        {% endif %}
+      </span>
     </div>
     <div style="padding:.55rem .7rem;">
       <div style="font-weight:bold;margin-bottom:.45rem;">{{ topic.poll.question }}</div>
-      {% if poll_show_results %}
-        {% for option in topic.poll.options.all %}
-          <div style="margin-bottom:.45rem;">
-            <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:11px;">
-              <span>
-                {{ option.option_text }}
-                {% if option.pk in poll_user_vote_option_ids %}
-                  <strong style="color:#800000;"> · X Twój głos</strong>
-                {% endif %}
-              </span>
-              <span>
-                {% widthratio option.vote_count topic.poll.total_votes|default:1 100 as option_pct %}
-                {{ option.vote_count }} gł.
-                {% if topic.poll.total_votes %}· {{ option_pct }}%{% endif %}
-              </span>
-            </div>
-            <div style="height:10px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.15rem;">
-              <div style="height:100%;background:#800000;width:{% if poll_max_option_votes %}{% widthratio option.vote_count poll_max_option_votes 100 %}{% else %}0{% endif %}%;"></div>
-            </div>
-          </div>
-        {% endfor %}
-        <div style="font-size:11px;color:#555;margin-top:.35rem;">
-          Łącznie głosów: {{ topic.poll.total_votes }}
-          {% if poll_max_option_votes and topic.poll.total_votes != poll_max_option_votes %}
-            · paski w skali do najwyższej odpowiedzi
-          {% endif %}
-        </div>
-      {% endif %}
 
-      {% if poll_can_vote %}
-        <form method="post" action="{% url 'vote_poll' topic.pk %}" style="margin-top:{% if poll_show_results %}.7rem{% else %}.2rem{% endif %};">
+      <div style="font-size:11px;color:#555;display:flex;gap:.9rem;flex-wrap:wrap;margin-bottom:.55rem;">
+        <span>Głosów oddanych: <strong>{{ topic.poll.total_votes }}</strong></span>
+        {% if not poll_is_closed %}
+          {% if poll_days_left is None %}
+            <span>Czas trwania: <strong>bezterminowo</strong></span>
+          {% elif poll_days_left == 0 %}
+            <span>Czas trwania: <strong>ostatni dzień</strong></span>
+          {% elif poll_days_left == 1 %}
+            <span>Czas trwania: zostało <strong>1 dzień</strong></span>
+          {% elif poll_days_left < 5 %}
+            <span>Czas trwania: zostało <strong>{{ poll_days_left }} dni</strong></span>
+          {% else %}
+            <span>Czas trwania: zostało <strong>{{ poll_days_left }} dni</strong></span>
+          {% endif %}
+        {% endif %}
+        {% if topic.poll.allow_multiple_choice %}
+          <span>Wybór: <strong>wielokrotny</strong></span>
+        {% else %}
+          <span>Wybór: <strong>jedna odpowiedź</strong></span>
+        {% endif %}
+        {% if not poll_is_closed %}
+          {% if topic.poll.allow_vote_change %}
+            <span>Głos: <strong>można zmienić</strong></span>
+          {% else %}
+            <span>Głos: <strong>nie można zmienić</strong></span>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      {# ------------------------------------------------------------------ #}
+      {# SCENARIUSZ 1: brak głosów i można głosować → tylko formularz      #}
+      {# SCENARIUSZ 2: są głosy + można głosować → paski + input razem     #}
+      {# SCENARIUSZ 3: są głosy, nie można głosować → tylko paski          #}
+      {# We wszystkich przypadkach: kategorie, bez duplikowania opcji       #}
+      {# ------------------------------------------------------------------ #}
+
+      {% if not poll_show_results and poll_can_vote %}
+        {# Scenariusz 1: zero głosów, formularz bez pasków #}
+        <form method="post" action="{% url 'vote_poll' topic.pk %}">
           {% csrf_token %}
           <div style="display:flex;flex-direction:column;gap:.35rem;">
-            {% for option in topic.poll.options.all %}
+            {% for option in poll_options_list %}
+              {% if option.show_category and option.category %}
+                <div style="font-size:11px;font-weight:bold;color:#5a2020;margin-top:.4rem;border-bottom:1px solid #d7b2b2;padding-bottom:.1rem;">{{ option.category }}</div>
+              {% endif %}
               <label style="display:flex;gap:.45rem;align-items:flex-start;">
                 {% if topic.poll.allow_multiple_choice %}
-                  <input type="checkbox" name="poll_option" value="{{ option.pk }}"{% if option.pk in poll_user_vote_option_ids %} checked{% endif %}>
+                  <input type="checkbox" name="poll_option" value="{{ option.pk }}">
                 {% else %}
-                  <input type="radio" name="poll_option" value="{{ option.pk }}"{% if option.pk in poll_user_vote_option_ids %} checked{% endif %}>
+                  <input type="radio" name="poll_option" value="{{ option.pk }}">
                 {% endif %}
                 <span>{{ option.option_text }}</span>
               </label>
             {% endfor %}
           </div>
           <div style="margin-top:.55rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
-            <button type="submit">{% if poll_can_change_vote %}Zmień głos{% else %}Głosuj{% endif %}</button>
-            {% if topic.poll.allow_multiple_choice %}
-              <small style="color:#666;">Możesz zaznaczyć więcej niż jedną odpowiedź.</small>
-            {% endif %}
+            <button type="submit">Głosuj</button>
           </div>
         </form>
-      {% elif not request.user.is_authenticated and not poll_is_closed and not topic.poll.is_archived_import %}
-        <div style="font-size:11px;color:#555;margin-top:.5rem;">
-          Zaloguj się, aby zagłosować.
+
+      {% elif poll_show_results and poll_can_vote %}
+        {# Scenariusz 2: są głosy + można głosować/zmienić → paski + input razem #}
+        <form method="post" action="{% url 'vote_poll' topic.pk %}">
+          {% csrf_token %}
+          <div style="display:flex;flex-direction:column;gap:.4rem;">
+            {% for option in poll_options_list %}
+              {% if option.show_category and option.category %}
+                <div style="font-size:11px;font-weight:bold;color:#5a2020;margin-top:.5rem;border-bottom:1px solid #d7b2b2;padding-bottom:.1rem;">{{ option.category }}</div>
+              {% endif %}
+              <div style="display:flex;gap:.5rem;align-items:center;">
+                <label style="display:flex;gap:.4rem;align-items:flex-start;flex:0 0 auto;">
+                  {% if topic.poll.allow_multiple_choice %}
+                    <input type="checkbox" name="poll_option" value="{{ option.pk }}"{% if option.pk in poll_user_vote_option_ids %} checked{% endif %}>
+                  {% else %}
+                    <input type="radio" name="poll_option" value="{{ option.pk }}"{% if option.pk in poll_user_vote_option_ids %} checked{% endif %}>
+                  {% endif %}
+                </label>
+                <div style="flex:1 1 auto;">
+                  <div style="display:flex;justify-content:space-between;font-size:11px;">
+                    <span>{{ option.option_text }}{% if option.pk in poll_user_vote_option_ids %} <strong style="color:#800000;">· X</strong>{% endif %}</span>
+                    <span>{% widthratio option.vote_count topic.poll.total_votes 100 as option_pct %}{{ option.vote_count }} gł.{% if topic.poll.total_votes %} · {{ option_pct }}%{% endif %}</span>
+                  </div>
+                  <div style="height:8px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.1rem;">
+                    <div style="height:100%;background:#800000;width:{% if poll_max_option_votes %}{% widthratio option.vote_count poll_max_option_votes 100 %}{% else %}0{% endif %}%;"></div>
+                  </div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:.4rem;">
+            Łącznie: {{ topic.poll.total_votes }} głosów
+          </div>
+          <div style="margin-top:.5rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+            <button type="submit">{% if poll_can_change_vote %}Zmień głos{% else %}Głosuj{% endif %}</button>
+          </div>
+        </form>
+
+      {% elif poll_show_results %}
+        {# Scenariusz 3: są głosy, nie można głosować → tylko paski #}
+        <div style="display:flex;flex-direction:column;gap:.4rem;">
+          {% for option in poll_options_list %}
+            {% if option.show_category and option.category %}
+              <div style="font-size:11px;font-weight:bold;color:#5a2020;margin-top:.5rem;border-bottom:1px solid #d7b2b2;padding-bottom:.1rem;">{{ option.category }}</div>
+            {% endif %}
+            <div style="margin-bottom:.2rem;">
+              <div style="display:flex;justify-content:space-between;font-size:11px;">
+                <span>{{ option.option_text }}{% if option.pk in poll_user_vote_option_ids %} <strong style="color:#800000;">· X Twój głos</strong>{% endif %}</span>
+                <span>{% widthratio option.vote_count topic.poll.total_votes 100 as option_pct %}{{ option.vote_count }} gł.{% if topic.poll.total_votes %} · {{ option_pct }}%{% endif %}</span>
+              </div>
+              <div style="height:8px;background:#f2e2e2;border:1px solid #d7b2b2;margin-top:.1rem;">
+                <div style="height:100%;background:#800000;width:{% if poll_max_option_votes %}{% widthratio option.vote_count poll_max_option_votes 100 %}{% else %}0{% endif %}%;"></div>
+              </div>
+            </div>
+          {% endfor %}
         </div>
-      {% elif topic.poll.total_votes and not poll_show_results %}
-        <div style="font-size:11px;color:#555;margin-top:.5rem;">
-          Wyniki będą widoczne po oddaniu głosu albo po zamknięciu ankiety.
+        <div style="font-size:11px;color:#555;margin-top:.4rem;">
+          Łącznie: {{ topic.poll.total_votes }} głosów
+          {% if poll_max_option_votes and topic.poll.total_votes != poll_max_option_votes %} · paski w skali do najwyższej odpowiedzi{% endif %}
         </div>
+        {% if not request.user.is_authenticated and not poll_is_closed and not topic.poll.is_archived_import %}
+          <div style="font-size:11px;color:#555;margin-top:.4rem;">Zaloguj się, aby zagłosować.</div>
+        {% endif %}
+
+      {% else %}
+        {# Zero głosów, niezalogowany lub brak uprawnień #}
+        <div style="display:flex;flex-direction:column;gap:.3rem;">
+          {% for option in poll_options_list %}
+            {% if option.show_category and option.category %}
+              <div style="font-size:11px;font-weight:bold;color:#5a2020;margin-top:.4rem;border-bottom:1px solid #d7b2b2;padding-bottom:.1rem;">{{ option.category }}</div>
+            {% endif %}
+            <div style="font-size:11px;padding-left:.3rem;">{{ option.option_text }}</div>
+          {% endfor %}
+        </div>
+        {% if not request.user.is_authenticated and not poll_is_closed %}
+          <div style="font-size:11px;color:#555;margin-top:.4rem;">Zaloguj się, aby zagłosować.</div>
+        {% endif %}
       {% endif %}
     </div>
   </div>
@@ -130,6 +213,16 @@
               data-bbcode="{{ post.content_bbcode|escape }}">Cytuj</button>
       <button class="bbsrc-btn" onclick="showBBSrc(this)"
               data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
+      {% if post.pk in editable_post_ids %}
+        <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
+      {% endif %}
+      {% if post.pk in deletable_post_ids %}
+        <form method="post" action="{% url 'delete_post' post.pk %}" style="display:inline;"
+              onsubmit="return confirm('Usunąć ten post?');">
+          {% csrf_token %}
+          <button type="submit" class="bbsrc-btn" style="color:#900;">Usuń</button>
+        </form>
+      {% endif %}
     </span>
   </div>
   <table style="width:100%; border-collapse: collapse;">
@@ -209,6 +302,16 @@
               data-bbcode="{{ post.content_bbcode|escape }}">Cytuj</button>
       <button class="bbsrc-btn" onclick="showBBSrc(this)"
               data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
+      {% if post.pk in editable_post_ids %}
+        <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
+      {% endif %}
+      {% if post.pk in deletable_post_ids %}
+        <form method="post" action="{% url 'delete_post' post.pk %}" style="display:inline;"
+              onsubmit="return confirm('Usunąć ten post?');">
+          {% csrf_token %}
+          <button type="submit" class="bbsrc-btn" style="color:#900;">Usuń</button>
+        </form>
+      {% endif %}
     </span>
   </div>
   <p style="margin:.4rem .6rem; font-style:italic; color:#888;">

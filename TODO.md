@@ -1254,3 +1254,17 @@ CHAT_RETENTION_HOURS = 4   # ustawiany przez moderatora (w DB lub settings)
 
 ### Priorytet
 Niski — zrobić po ustabilizowaniu głównych funkcji forum.
+
+---
+
+## Parser BBCode — składnia Markdown dla bold/italic
+
+Dodać obsługę skrótów Markdown w parserze BBCode:
+- `**abc**` → bold (odpowiednik `[b]abc[/b]`)
+- `*abc*` → italic (odpowiednik `[i]abc[/i]`)
+
+Uwagi:
+- Musi działać obok istniejących tagów `[b]` i `[i]` (nie zamiast)
+- Uważać na kolizję: `**` musi być rozpoznany przed `*`
+- Rozważyć czy `*` w środku słowa (np. `foo*bar`) ma być ignorowany (Markdown tak robi)
+- Dotyczy parsera w `board/bbcode_parser.py` (lub odpowiedniku)

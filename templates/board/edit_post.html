@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Edytuj post — {{ topic.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
+  Edycja postu #{{ post.post_order }}
+</p>
+
+<h2>Edycja postu #{{ post.post_order }}</h2>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div style="color:{% if msg.tags == 'error' %}#8a1f1f{% else %}green{% endif %};margin-bottom:.5rem;">{{ msg }}</div>
+  {% endfor %}
+{% endif %}
+
+<form method="post" id="reply-form">
+  {% csrf_token %}
+
+  {% if form.non_field_errors %}
+    <div style="color:#8a1f1f;margin-bottom:.5rem;">{{ form.non_field_errors|join:" | " }}</div>
+  {% endif %}
+
+  <div id="reply-editor-panel">
+    <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.3rem;">
+      <button type="button" class="bb-btn" data-open="[b]" data-close="[/b]"><b>B</b></button>
+      <button type="button" class="bb-btn" data-open="[i]" data-close="[/i]"><i>I</i></button>
+      <button type="button" class="bb-btn" data-open="[u]" data-close="[/u]"><u>U</u></button>
+      <button type="button" class="bb-btn" data-open="[spoiler]" data-close="[/spoiler]" data-prompt="Krótki opis spoilera (opcjonalnie):" data-open-template="[spoiler={value}]">spoiler</button>
+      <button type="button" class="bb-btn" data-open='[fquote=""]' data-close="[/fquote]">fquote</button>
+      <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
+      <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
+    </div>
+
+    <div style="display:flex;border:1px solid #BC8F8F;background:#fff;">
+      <div id="reply-line-numbers" aria-hidden="true"
+           style="flex:0 0 auto;padding:.35rem .45rem;text-align:right;color:#888;
+                  background:#f8f1f1;border-right:1px solid #d8b8b8;font:12px/1.4 monospace;
+                  user-select:none;white-space:pre;">1</div>
+      <textarea id="reply-content" name="content" rows="16"
+                style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;
+                       line-height:1.4;border:0;resize:vertical;padding:.35rem .45rem;">{{ form.content.value|default_if_none:"" }}</textarea>
+    </div>
+    {% if form.content.errors %}
+      <div style="color:#8a1f1f;font-size:11px;margin-top:.2rem;">{{ form.content.errors|join:" | " }}</div>
+    {% endif %}
+    <div id="reply-content-count" style="margin-top:.25rem;font-size:11px;color:#666;"></div>
+  </div>
+
+  <div style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+    <button type="submit">Zapisz zmiany</button>
+    <a href="{% url 'topic_detail' topic.pk %}#post-{{ post.pk }}">Anuluj</a>
+  </div>
+</form>
+
+<script>
+var POST_CONTENT_SOFT_LIMIT = {{ post_content_soft_limit }};
+var replyTextarea = document.getElementById('reply-content');
+var lineNumbers  = document.getElementById('reply-line-numbers');
+var countDiv     = document.getElementById('reply-content-count');
+
+function updateLineNumbers() {
+  var lines = replyTextarea.value.split('\n').length;
+  lineNumbers.textContent = Array.from({length: lines}, (_, i) => i + 1).join('\n');
+}
+function updateCount() {
+  var n = replyTextarea.value.length;
+  countDiv.textContent = n + ' / ' + POST_CONTENT_SOFT_LIMIT + ' znaków';
+  countDiv.style.color = n > POST_CONTENT_SOFT_LIMIT ? '#900' : '#666';
+}
+replyTextarea.addEventListener('input', function() { updateLineNumbers(); updateCount(); });
+replyTextarea.addEventListener('scroll', function() { lineNumbers.scrollTop = replyTextarea.scrollTop; });
+updateLineNumbers();
+updateCount();
+
+document.querySelectorAll('.bb-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var open = btn.dataset.open, close = btn.dataset.close;
+    var prompt = btn.dataset.prompt, tpl = btn.dataset.openTemplate;
+    if (prompt) {
+      var val = window.prompt(prompt, '');
+      if (val === null) return;
+      open = tpl ? tpl.replace('{value}', val) : open;
+    }
+    var ta = replyTextarea;
+    var start = ta.selectionStart, end = ta.selectionEnd;
+    var sel = ta.value.substring(start, end);
+    ta.value = ta.value.substring(0, start) + open + sel + close + ta.value.substring(end);
+    ta.selectionStart = start + open.length;
+    ta.selectionEnd   = start + open.length + sel.length;
+    ta.focus();
+    updateLineNumbers(); updateCount();
+  });
+});
+</script>
+{% endblock %}

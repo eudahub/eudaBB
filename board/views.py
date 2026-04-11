@@ -1,3 +1,4 @@
+import math
 import secrets
 import re
 from html import escape
@@ -351,9 +352,12 @@ def topic_detail(request, topic_id):
     poll_can_change_vote = False
     poll_show_results = False
     poll_max_option_votes = 0
+    poll_days_left = None  # None = bezterminowa; int >= 0 = dni do końca
 
     if poll is not None:
         poll_is_closed = poll.is_closed or (poll.ends_at is not None and poll.ends_at <= poll_now)
+        if poll.ends_at is not None and not poll_is_closed:
+            poll_days_left = max(0, math.ceil((poll.ends_at - poll_now).total_seconds() / 86400))
         if request.user.is_authenticated and not poll.is_archived_import:
             poll_user_votes = list(
                 PollVote.objects.filter(poll=poll, user=request.user).select_related("option")
@@ -368,11 +372,16 @@ def topic_detail(request, topic_id):
         poll_can_change_vote = poll_can_vote and bool(poll_user_votes) and poll.allow_vote_change
         poll_show_results = (
             poll.is_archived_import
-            or poll.total_votes == 0
+            or poll.total_votes > 0
             or poll_is_closed
-            or bool(poll_user_votes)
         )
-        poll_max_option_votes = max((option.vote_count for option in poll.options.all()), default=0)
+        poll_options_list = list(poll.options.all())
+        poll_max_option_votes = max((o.vote_count for o in poll_options_list), default=0)
+        # Annotate each option with show_category=True when category header changes
+        _prev_cat = object()
+        for opt in poll_options_list:
+            opt.show_category = (opt.category != _prev_cat)
+            _prev_cat = opt.category
 
     reply_form = ReplyForm() if not topic.is_locked else None
 
@@ -380,6 +389,40 @@ def topic_detail(request, topic_id):
         request.user.is_authenticated
         and _is_moderator(request.user, topic.forum)
     )
+    is_admin_view = request.user.is_authenticated and request.user.role >= User.ROLE_ADMIN
+
+    # Compute which posts on this page can be deleted/edited by current user.
+    # First post (post_order=1) is only deletable when it's the sole post in topic.
+    topic_post_count = topic.posts.count()
+    deletable_post_ids = set()
+    editable_post_ids = set()
+    if request.user.is_authenticated:
+        for p in page.object_list:
+            author_role = p.author.role if p.author else User.ROLE_USER
+            if is_admin_view:
+                can_del = p.post_order > 1 or topic_post_count == 1
+                deletable_post_ids.update([p.pk] if can_del else [])
+                editable_post_ids.add(p.pk)
+            elif is_mod:
+                own = p.author_id == request.user.pk
+                author_is_user = author_role < User.ROLE_MODERATOR
+                if own or author_is_user:
+                    can_del = p.post_order > 1 or topic_post_count == 1
+                    deletable_post_ids.update([p.pk] if can_del else [])
+                    editable_post_ids.add(p.pk)
+            else:
+                # Regular user: edit own posts only, no delete
+                if p.author_id == request.user.pk:
+                    editable_post_ids.add(p.pk)
+
+    # Can current user edit the poll?
+    can_edit_poll = False
+    if poll is not None and poll.total_votes == 0 and not poll_is_closed:
+        if is_admin_view or is_mod or (
+            request.user.is_authenticated and topic.author_id == request.user.pk
+        ):
+            can_edit_poll = True
+
     liked_post_ids = set()
     if request.user.is_authenticated:
         liked_post_ids = set(
@@ -405,9 +448,14 @@ def topic_detail(request, topic_id):
         "poll_can_vote": poll_can_vote,
         "poll_can_change_vote": poll_can_change_vote,
         "poll_user_vote_option_ids": poll_user_vote_option_ids,
+        "poll_options_list": poll_options_list if poll else [],
         "poll_max_option_votes": poll_max_option_votes,
+        "poll_days_left": poll_days_left,
         "topic_participants": topic_participants,
         "ignored_author_ids": ignored_author_ids,
+        "deletable_post_ids": deletable_post_ids,
+        "editable_post_ids": editable_post_ids,
+        "can_edit_poll": can_edit_poll,
     })
 
 
@@ -445,6 +493,10 @@ def vote_poll(request, topic_id):
 
     if not poll.allow_multiple_choice and len(selected_options) != 1:
         messages.error(request, "Ta ankieta pozwala wybrać tylko jedną odpowiedź.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    if poll.allow_multiple_choice and len(selected_options) > poll.options.count():
+        messages.error(request, "Wybrano więcej opcji niż istnieje w ankiecie.")
         return redirect("topic_detail", topic_id=topic.pk)
 
     existing_votes = list(PollVote.objects.filter(poll=poll, user=request.user))
@@ -519,8 +571,9 @@ def new_topic(request, forum_id):
         return HttpResponseForbidden("Konto root nie może tworzyć postów.")
     forum = get_object_or_404(Forum, pk=forum_id)
 
+    is_admin = request.user.role >= User.ROLE_ADMIN
     if request.method == "POST":
-        form = NewTopicForm(request.POST)
+        form = NewTopicForm(request.POST, is_admin=is_admin)
         if form.is_valid():
             topic = Topic.objects.create(
                 forum=forum,
@@ -543,7 +596,10 @@ def new_topic(request, forum_id):
                 poll = Poll.objects.create(
                     topic=topic,
                     question=poll_data["question"],
-                    ends_at=timezone.now() + timedelta(days=poll_data["duration_days"]),
+                    ends_at=(
+                        timezone.now() + timedelta(days=poll_data["duration_days"])
+                        if poll_data["duration_days"] else None
+                    ),
                     allow_vote_change=poll_data["allow_vote_change"],
                     allow_multiple_choice=poll_data["allow_multiple_choice"],
                     is_closed=False,
@@ -553,24 +609,22 @@ def new_topic(request, forum_id):
                 PollOption.objects.bulk_create([
                     PollOption(
                         poll=poll,
-                        option_text=option_text,
+                        option_text=opt["text"],
+                        category=opt["category"],
                         sort_order=index,
                     )
-                    for index, option_text in enumerate(poll_data["options"], start=1)
+                    for index, opt in enumerate(poll_data["options"], start=1)
                 ])
             return redirect("topic_detail", topic_id=topic.pk)
     else:
-        form = NewTopicForm()
+        form = NewTopicForm(is_admin=is_admin)
 
-    raw_poll_options = request.POST.getlist("poll_options") if request.method == "POST" else []
-    poll_option_values = list(raw_poll_options) if raw_poll_options else ["", ""]
-    while len(poll_option_values) < 2:
-        poll_option_values.append("")
+    poll_options_text = request.POST.get("poll_options_text", "") if request.method == "POST" else ""
     poll_panel_open = bool(
         request.method == "POST" and (
-            request.POST.get("poll_enabled") == "1"  # "0" is falsy but "0" as str is truthy — compare explicitly
+            request.POST.get("poll_enabled") == "1"
             or (request.POST.get("poll_question") or "").strip()
-            or any(v.strip() for v in raw_poll_options)
+            or poll_options_text.strip()
             or request.POST.get("poll_duration_days")
             or request.POST.get("poll_allow_vote_change") == "1"
             or request.POST.get("poll_allow_multiple_choice") == "1"
@@ -581,10 +635,11 @@ def new_topic(request, forum_id):
     return render(request, "board/new_topic.html", {
         "forum": forum,
         "form": form,
+        "is_admin": is_admin,
         "pinned_topic_posts": _get_global_pinned_topic_posts(),
-        "poll_option_values": poll_option_values,
+        "poll_options_text": poll_options_text,
         "poll_panel_open": poll_panel_open,
-        "poll_options_soft_limit": getattr(settings, "POLL_OPTIONS_SOFT_MAX", 32),
+        "poll_options_soft_limit": SiteConfig.get().poll_options_soft_max,
         "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
     })
 
@@ -691,6 +746,228 @@ def reply(request, topic_id):
         "selected_quote_author": selected_quote_author,
         "quote_filter_message": quote_filter_message,
         "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
+    })
+
+
+@login_required
+def delete_post(request, post_id):
+    """Delete a post. Permissions: admin=all, moderator=own+users, user=none."""
+    if request.method != "POST":
+        return redirect("index")
+
+    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    topic = post.topic
+    forum = topic.forum
+    user = request.user
+
+    is_admin = user.role >= User.ROLE_ADMIN
+    is_mod = _is_moderator(user, forum)
+    author_role = post.author.role if post.author else User.ROLE_USER
+
+    if is_admin:
+        can_delete = True
+    elif is_mod:
+        # Moderator can delete own posts and posts by regular users only
+        own_post = post.author_id == user.pk
+        author_is_user = author_role < User.ROLE_MODERATOR
+        can_delete = own_post or author_is_user
+    else:
+        can_delete = False
+
+    if not can_delete:
+        messages.error(request, "Nie masz uprawnień do usunięcia tego postu.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    with transaction.atomic():
+        remaining = topic.posts.count()
+
+        if remaining == 1:
+            # Last post → delete whole topic (with poll etc.)
+            forum_id = forum.pk
+            topic.delete()
+            messages.success(request, "Usunięto ostatni post — wątek został usunięty.")
+            forum.refresh_from_db()
+            forum.post_count = Post.objects.filter(topic__forum=forum).count()
+            forum.topic_count = forum.topics.count()
+            new_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
+            forum.last_post = new_last
+            forum.last_post_at = new_last.created_at if new_last else None
+            forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
+            return redirect("forum_detail", forum_id=forum_id)
+
+        if post.post_order == 1:
+            # First post with siblings — cannot delete, only hide
+            messages.error(request, "Pierwszego postu nie można usunąć gdy wątek ma więcej postów. Można go tylko ukryć.")
+            return redirect("topic_detail", topic_id=topic.pk)
+
+        # Delete the post and renumber remaining posts
+        deleted_order = post.post_order
+        if post.author:
+            post.author.post_count = max(0, post.author.post_count - 1)
+            post.author.save(update_fields=["post_count"])
+        post.delete()
+        topic.posts.filter(post_order__gt=deleted_order).update(
+            post_order=django_models.F("post_order") - 1
+        )
+        # Update topic stats
+        new_last_post = topic.posts.order_by("-created_at").first()
+        if new_last_post:
+            topic.reply_count = topic.posts.count() - 1
+            topic.last_post = new_last_post
+            topic.last_post_at = new_last_post.created_at
+            topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
+        # Update forum stats
+        forum.post_count = Post.objects.filter(topic__forum=forum).count()
+        new_forum_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
+        forum.last_post = new_forum_last
+        forum.last_post_at = new_forum_last.created_at if new_forum_last else None
+        forum.save(update_fields=["post_count", "last_post", "last_post_at"])
+        messages.success(request, "Post usunięty.")
+
+    return redirect("topic_detail", topic_id=topic.pk)
+
+
+@login_required
+def edit_post(request, post_id):
+    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    topic = post.topic
+    forum = topic.forum
+    user = request.user
+
+    is_admin = user.role >= User.ROLE_ADMIN
+    is_mod = _is_moderator(user, forum)
+    author_role = post.author.role if post.author else User.ROLE_USER
+
+    if is_admin:
+        can_edit = True
+    elif is_mod:
+        own = post.author_id == user.pk
+        author_is_user = author_role < User.ROLE_MODERATOR
+        can_edit = own or author_is_user
+    else:
+        can_edit = post.author_id == user.pk
+
+    if not can_edit:
+        messages.error(request, "Nie masz uprawnień do edycji tego postu.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    original_size = len(post.content_bbcode)
+    if request.method == "POST":
+        form = ReplyForm(request.POST, original_size=original_size)
+        if form.is_valid():
+            post.content_bbcode = form.cleaned_data["content"]
+            post.edit_count += 1
+            post.updated_by = user
+            post.updated_at = timezone.now()
+            post.save(update_fields=["content_bbcode", "edit_count", "updated_by", "updated_at"])
+            messages.success(request, "Post zaktualizowany.")
+            return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
+    else:
+        form = ReplyForm(initial={"content": post.content_bbcode}, original_size=original_size)
+
+    return render(request, "board/edit_post.html", {
+        "form": form,
+        "post": post,
+        "topic": topic,
+        "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
+    })
+
+
+@login_required
+def edit_poll(request, topic_id):
+    topic = get_object_or_404(Topic.objects.select_related("forum"), pk=topic_id)
+    forum = topic.forum
+    poll = getattr(topic, "poll", None)
+    user = request.user
+
+    if poll is None:
+        messages.error(request, "Ten wątek nie ma ankiety.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    if poll.total_votes > 0:
+        messages.error(request, "Nie można edytować ankiety, gdy oddano już głosy.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    is_admin = user.role >= User.ROLE_ADMIN
+    is_mod = _is_moderator(user, forum)
+    is_author = topic.author_id == user.pk
+
+    if not (is_admin or is_mod or is_author):
+        messages.error(request, "Nie masz uprawnień do edycji tej ankiety.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    from .forms import parse_poll_options_text, poll_options_to_text
+    from .polls import validate_poll_option_count
+
+    if request.method == "POST":
+        question = request.POST.get("poll_question", "").strip()
+        allow_multiple = request.POST.get("allow_multiple_choice") == "1"
+        duration_raw = request.POST.get("poll_duration_days", "").strip()
+        raw_text = request.POST.get("poll_options_text", "")
+
+        new_options, option_errors = parse_poll_options_text(raw_text)
+
+        errors = []
+        if not question:
+            errors.append("Pytanie nie może być puste.")
+        errors.extend(option_errors)
+        if not option_errors and len(new_options) < 2:
+            errors.append("Ankieta musi mieć co najmniej 2 opcje.")
+        _, limit_errors = validate_poll_option_count(len(new_options))
+        errors.extend(limit_errors)
+
+        duration_days = None
+        if duration_raw:
+            try:
+                duration_days = int(duration_raw)
+                if duration_days < 1:
+                    raise ValueError
+            except ValueError:
+                errors.append("Czas trwania musi być liczbą całkowitą ≥ 1.")
+        elif not is_admin:
+            errors.append("Podaj czas trwania (tylko admin może zostawić puste = bezterminowo).")
+
+        if errors:
+            for e in errors:
+                messages.error(request, e)
+        else:
+            with transaction.atomic():
+                poll.question = question
+                poll.allow_multiple_choice = allow_multiple
+                poll.ends_at = (
+                    timezone.now() + timedelta(days=duration_days)
+                    if duration_days else None
+                )
+                poll.save(update_fields=["question", "allow_multiple_choice", "ends_at"])
+                poll.options.all().delete()
+                PollOption.objects.bulk_create([
+                    PollOption(
+                        poll=poll,
+                        option_text=opt["text"],
+                        category=opt["category"],
+                        sort_order=idx,
+                    )
+                    for idx, opt in enumerate(new_options, start=1)
+                ])
+            messages.success(request, "Ankieta zaktualizowana.")
+            return redirect("topic_detail", topic_id=topic.pk)
+
+        poll_options_text = raw_text  # preserve on error
+    else:
+        poll_options_text = poll_options_to_text(poll.options.all())
+
+    # Current duration in days (approx)
+    current_days = None
+    if poll.ends_at:
+        delta = poll.ends_at - timezone.now()
+        current_days = max(1, math.ceil(delta.total_seconds() / 86400))
+
+    return render(request, "board/edit_poll.html", {
+        "poll": poll,
+        "topic": topic,
+        "poll_options_text": poll_options_text,
+        "current_days": current_days,
+        "is_admin": is_admin,
     })
 
 
@@ -2538,13 +2815,18 @@ def root_config(request):
         else:
             cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
             cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
+            hard_limit = getattr(settings, "POLL_OPTIONS_HARD_MAX", 64)
             try:
                 cfg.search_snippet_chars = max(
                     80,
                     int(request.POST.get("search_snippet_chars", cfg.search_snippet_chars)),
                 )
+                cfg.poll_options_soft_max = min(
+                    hard_limit,
+                    max(2, int(request.POST.get("poll_options_soft_max", cfg.poll_options_soft_max))),
+                )
             except (TypeError, ValueError):
-                messages.error(request, "Długość snippetu musi być liczbą całkowitą.")
+                messages.error(request, "Wartości liczbowe są nieprawidłowe.")
                 return redirect("root_config")
             cfg.save()
         return redirect("root_config")

@@ -31,6 +31,23 @@
     </fieldset>
 
     <fieldset style="margin-top:.8rem;">
+      <legend>Ankiety</legend>
+      <label for="poll_options_soft_max">Miękki limit opcji ankiety (soft max)</label>
+      <input
+        type="number"
+        name="poll_options_soft_max"
+        id="poll_options_soft_max"
+        min="2"
+        max="64"
+        step="1"
+        value="{{ cfg.poll_options_soft_max }}"
+      >
+      <p style="font-size:11px;color:#555;margin:.3rem 0 0 0;">
+        Domyślnie 32. Twardy limit (max 64) ustawiany w settings.py (POLL_OPTIONS_HARD_MAX).
+      </p>
+    </fieldset>
+
+    <fieldset style="margin-top:.8rem;">
       <legend>Wyszukiwanie</legend>
       <label for="search_snippet_chars">Długość snippetu wyników</label>
       <input

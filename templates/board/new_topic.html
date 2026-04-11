@@ -73,12 +73,14 @@
                value="{{ form.poll_question.value|default_if_none:'' }}">
       </label>
       <label style="flex:0 0 160px;">
-        <span>Czas trwania</span>
+        <span>Czas trwania{% if not is_admin %} <small>(wymagane)</small>{% endif %}</span>
         <div style="display:flex;gap:.35rem;align-items:center;">
           <input type="number" min="1" name="poll_duration_days" id="poll-duration-days"
-                 value="{{ form.poll_duration_days.value|default_if_none:'' }}" placeholder="14">
+                 value="{{ form.poll_duration_days.value|default_if_none:'' }}"
+                 placeholder="{% if is_admin %}bezterminowa{% else %}14{% endif %}">
           <span>dni</span>
         </div>
+        {% if is_admin %}<small style="color:var(--c-muted)">zostaw puste = bezterminowa</small>{% endif %}
       </label>
     </div>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.5rem;">
@@ -94,18 +96,15 @@
     <div style="margin-top:.7rem;">
       <div style="display:flex;gap:.5rem;align-items:center;justify-content:space-between;flex-wrap:wrap;">
         <strong style="font-size:12px;">Opcje ankiety</strong>
-        <span id="poll-option-counter" style="font-size:11px;color:#666;">0/{{ poll_options_soft_limit }}</span>
+        <span id="poll-option-counter" style="font-size:11px;color:#666;">0 / {{ poll_options_soft_limit }}</span>
       </div>
-      <div id="poll-options-list" style="display:flex;flex-direction:column;gap:.35rem;margin-top:.45rem;">
-        {% for value in poll_option_values %}
-          <div class="poll-option-row" style="display:flex;gap:.4rem;align-items:center;">
-            <input type="text" name="poll_options" value="{{ value }}" placeholder="Opcja {{ forloop.counter }}" style="flex:1 1 auto;">
-            <button type="button" class="poll-remove-option" title="Usuń opcję">×</button>
-          </div>
-        {% endfor %}
-      </div>
+      <p style="font-size:11px;color:#666;margin:.2rem 0 .4rem 0;">
+        Opcja: linia zaczynająca się od <code>-</code>. Kategoria: linia zaczynająca się od <code>##</code>. Puste linie są pomijane.
+      </p>
+      <textarea name="poll_options_text" id="poll-options-text" rows="8"
+                style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"
+                placeholder="- Opcja bez kategorii&#10;&#10;## Pierwsza kategoria&#10;- Opcja A&#10;- Opcja B&#10;&#10;## Druga kategoria&#10;- Opcja C">{{ poll_options_text }}</textarea>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem;">
-        <button type="button" id="add-poll-option">+ dodaj opcję</button>
         <button type="button" id="remove-poll-panel" class="secondary">Usuń ankietę</button>
         <button type="submit">Dodaj wątek i ankietę</button>
       </div>
@@ -490,56 +489,12 @@ document.getElementById('new-topic-poll-button').addEventListener('click', funct
   togglePollPanel(true);
 });
 
-function getPollSoftLimit() {
-  return {{ poll_options_soft_limit }};
-}
-
-function ensureMinimumPollRows() {
-  var list = document.getElementById('poll-options-list');
-  if (!list) return;
-  while (list.querySelectorAll('.poll-option-row').length < 2) {
-    addPollOptionRow('');
-  }
-}
-
 function updatePollCounter() {
-  var list = document.getElementById('poll-options-list');
+  var ta = document.getElementById('poll-options-text');
   var counter = document.getElementById('poll-option-counter');
-  if (!list || !counter) return;
-  var rows = list.querySelectorAll('.poll-option-row').length;
-  counter.textContent = rows + '/' + getPollSoftLimit();
-}
-
-function wirePollOptionRow(row) {
-  var removeBtn = row.querySelector('.poll-remove-option');
-  if (!removeBtn) return;
-  removeBtn.addEventListener('click', function() {
-    var list = document.getElementById('poll-options-list');
-    if (!list) return;
-    if (list.querySelectorAll('.poll-option-row').length <= 2) {
-      row.querySelector('input[name="poll_options"]').value = '';
-      return;
-    }
-    row.remove();
-    updatePollCounter();
-  });
-}
-
-function addPollOptionRow(value) {
-  var list = document.getElementById('poll-options-list');
-  if (!list) return;
-  var row = document.createElement('div');
-  row.className = 'poll-option-row';
-  row.style.display = 'flex';
-  row.style.gap = '.4rem';
-  row.style.alignItems = 'center';
-  var count = list.querySelectorAll('.poll-option-row').length + 1;
-  row.innerHTML = '<input type="text" name="poll_options" value="" placeholder="Opcja ' + count + '" style="flex:1 1 auto;">'
-    + '<button type="button" class="poll-remove-option" title="Usuń opcję">×</button>';
-  row.querySelector('input[name="poll_options"]').value = value || '';
-  list.appendChild(row);
-  wirePollOptionRow(row);
-  updatePollCounter();
+  if (!ta || !counter) return;
+  var lines = ta.value.split('\n').filter(function(ln) { return ln.trim().startsWith('-'); });
+  counter.textContent = lines.length + ' / {{ poll_options_soft_limit }}';
 }
 
 function togglePollPanel(forceOpen) {
@@ -550,19 +505,13 @@ function togglePollPanel(forceOpen) {
   panel.style.display = open ? 'none' : 'block';
   enabled.value = open ? '0' : '1';
   if (!open) {
-    ensureMinimumPollRows();
     updatePollCounter();
   }
 }
 
-document.querySelectorAll('.poll-option-row').forEach(wirePollOptionRow);
+var pollTextarea = document.getElementById('poll-options-text');
+if (pollTextarea) pollTextarea.addEventListener('input', updatePollCounter);
 updatePollCounter();
-ensureMinimumPollRows();
-updatePollCounter();
-
-document.getElementById('add-poll-option').addEventListener('click', function() {
-  addPollOptionRow('');
-});
 
 document.getElementById('remove-poll-panel').addEventListener('click', function() {
   var panel = document.getElementById('new-topic-poll-panel');
@@ -570,17 +519,16 @@ document.getElementById('remove-poll-panel').addEventListener('click', function(
   if (!panel || !enabled) return;
   var question = document.getElementById('poll-question');
   var duration = document.getElementById('poll-duration-days');
+  var ta = document.getElementById('poll-options-text');
   if (question) question.value = '';
-  if (duration) duration.value = '14';
-  document.querySelectorAll('input[name="poll_options"]').forEach(function(input, index) {
-    input.value = '';
-    input.placeholder = 'Opcja ' + (index + 1);
-  });
+  if (duration) duration.value = '';
+  if (ta) ta.value = '';
   document.querySelectorAll('input[name="poll_allow_vote_change"], input[name="poll_allow_multiple_choice"]').forEach(function(input) {
     input.checked = false;
   });
   panel.style.display = 'none';
   enabled.value = '0';
+  updatePollCounter();
 });
 
 function requestNewTopicPreviewData() {

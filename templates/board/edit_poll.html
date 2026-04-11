@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Edytuj ankietę — {{ topic.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
+  Edycja ankiety
+</p>
+
+<h2>Edycja ankiety</h2>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div style="color:{% if msg.tags == 'error' %}#8a1f1f{% else %}green{% endif %};margin-bottom:.4rem;">{{ msg }}</div>
+  {% endfor %}
+{% endif %}
+
+<p style="font-size:12px;color:#555;">Edycja możliwa tylko gdy nikt jeszcze nie głosował.</p>
+
+<form method="post" style="max-width:580px;">
+  {% csrf_token %}
+
+  <label style="display:block;margin-bottom:.7rem;">
+    <span style="display:block;font-size:12px;margin-bottom:.2rem;">Pytanie</span>
+    <input type="text" name="poll_question" value="{{ poll.question }}" style="width:100%;box-sizing:border-box;">
+  </label>
+
+  <label style="display:block;margin-bottom:.7rem;">
+    <span style="display:block;font-size:12px;margin-bottom:.2rem;">
+      Czas trwania (dni){% if not is_admin %} <small>(wymagane)</small>{% endif %}
+    </span>
+    <div style="display:flex;gap:.4rem;align-items:center;">
+      <input type="number" name="poll_duration_days" min="1"
+             value="{{ current_days|default:'' }}"
+             placeholder="{% if is_admin %}bezterminowo{% else %}14{% endif %}"
+             style="width:100px;">
+      <span style="font-size:12px;">dni</span>
+    </div>
+    {% if is_admin %}<small style="color:#666;">zostaw puste = bezterminowo</small>{% endif %}
+  </label>
+
+  <label style="display:flex;gap:.45rem;align-items:center;margin-bottom:.9rem;">
+    <input type="checkbox" name="allow_multiple_choice" value="1"
+           {% if poll.allow_multiple_choice %}checked{% endif %}>
+    <span style="font-size:12px;">Wielokrotny wybór</span>
+  </label>
+
+  <div style="margin-bottom:.7rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem;">
+      <span style="font-size:12px;">Opcje ankiety</span>
+      <span id="poll-option-counter" style="font-size:11px;color:#666;"></span>
+    </div>
+    <p style="font-size:11px;color:#666;margin:.0 0 .4rem 0;">
+      Opcja: linia zaczynająca się od <code>-</code>. Kategoria: linia zaczynająca się od <code>##</code>. Puste linie resetują kategorię.
+    </p>
+    <textarea name="poll_options_text" id="poll-options-text" rows="12"
+              style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;">{{ poll_options_text }}</textarea>
+  </div>
+
+  <div style="display:flex;gap:.5rem;align-items:center;">
+    <button type="submit">Zapisz</button>
+    <a href="{% url 'topic_detail' topic.pk %}">Anuluj</a>
+  </div>
+</form>
+
+<script>
+function updateCounter() {
+  var ta = document.getElementById('poll-options-text');
+  var counter = document.getElementById('poll-option-counter');
+  if (!ta || !counter) return;
+  var n = ta.value.split('\n').filter(function(ln) { return ln.trim().startsWith('-'); }).length;
+  counter.textContent = n + ' opcji';
+}
+var ta = document.getElementById('poll-options-text');
+if (ta) ta.addEventListener('input', updateCounter);
+updateCounter();
+</script>
+{% endblock %}

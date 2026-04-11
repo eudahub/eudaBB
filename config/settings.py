@@ -149,8 +149,8 @@ PM_SENT_LIMIT   = config("PM_SENT_LIMIT",   default=300, cast=int)
 PM_OUTBOX_LIMIT = config("PM_OUTBOX_LIMIT", default=50,  cast=int)  # anti-spam: max in-flight
 
 # Poll option count limits
-POLL_OPTIONS_HARD_MAX = config("POLL_OPTIONS_HARD_MAX", default=64, cast=int)
-POLL_OPTIONS_SOFT_MAX = config("POLL_OPTIONS_SOFT_MAX", default=32, cast=int)
+POLL_OPTIONS_HARD_MAX = config("POLL_OPTIONS_HARD_MAX", default=100, cast=int)
+POLL_OPTIONS_SOFT_MAX = config("POLL_OPTIONS_SOFT_MAX", default=50, cast=int)
 
 # Search results snippet length (characters around the best hit)
 SEARCH_SNIPPET_CHARS = config("SEARCH_SNIPPET_CHARS", default=800, cast=int)
