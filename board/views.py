@@ -2445,6 +2445,7 @@ def request_reset(request):
 
     if request.method == "POST":
         is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        action = request.POST.get("action", "send")  # "check" | "send"
         username = request.POST.get("username", "").strip()
 
         def ajax_err(msg):
@@ -2466,6 +2467,20 @@ def request_reset(request):
                 return ajax_err(msg)
             return render(request, "registration/request_reset.html", {
                 "error": msg, "reason": reason, "prefill_username": username,
+            })
+
+        # Step 1: just return email mask (no code sent)
+        if action == "check":
+            return JsonResponse({"ok": True, "email_mask": mask_email(user.email)})
+
+        # Step 2: validate email confirmation before sending code
+        email_confirm = request.POST.get("email_confirm", "").strip().lower()
+        if email_confirm != user.email.lower():
+            if is_ajax:
+                return ajax_err("Podany adres email nie zgadza się.")
+            return render(request, "registration/request_reset.html", {
+                "error": "Podany adres email nie zgadza się.",
+                "reason": reason, "prefill_username": username,
             })
 
         allowed, _ = _can_send_reset_code(user)
@@ -2494,13 +2509,14 @@ def request_reset(request):
                     "code": code,
                     "username": username,
                     "sent_at": sent_at,
+                    "email_mask": mask_email(user.email),
                     "do_reset_url": f"/ustaw-haslo/?username={username}",
                 })
-            # Non-AJAX fallback
             return render(request, "registration/request_reset.html", {
                 "popup_code": code,
                 "popup_username": username,
                 "popup_sent_at": sent_at,
+                "email_mask": mask_email(user.email),
                 "do_reset_url": f"/ustaw-haslo/?username={username}",
                 "reason": reason,
             })

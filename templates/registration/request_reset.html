@@ -17,36 +17,49 @@
     </p>
     <p><a href="/">Przejdź na forum →</a></p>
   {% else %}
-    <div id="reset-error" style="color:red;display:none;"></div>
+    <div id="reset-error" style="color:red;display:none;margin-bottom:.4rem;"></div>
 
     <form id="reset-form" method="post" action="{% url 'do_reset' %}">
       {% csrf_token %}
       <input type="hidden" name="password_is_prehashed" value="0" id="prehashed-flag">
 
-      <label>Nick:
-        <input type="text" id="reset-username" name="username"
-               value="{{ prefill_username }}" required autocomplete="username" autofocus>
-      </label>
+      <!-- Step 1: nick -->
+      <div id="step-nick">
+        <label>Nick:
+          <input type="text" id="reset-username" name="username"
+                 value="{{ prefill_username }}" required autocomplete="username" autofocus>
+        </label>
+        <button type="button" id="check-nick-btn">Dalej</button>
+      </div>
 
-      <button type="button" id="send-code-btn">Wyślij kod</button>
-      <span id="send-code-status" style="font-size:11px;margin-left:.5rem;"></span>
+      <!-- Step 2: email confirm + send code (hidden until step 1 done) -->
+      <div id="step-email" style="display:none;">
+        <p id="email-mask-info" style="font-size:13px;margin:.4rem 0;"></p>
+        <label>Potwierdź adres email:
+          <input type="email" id="email-confirm-input" autocomplete="email"
+                 placeholder="" style="width:100%;box-sizing:border-box;">
+        </label>
+        <button type="button" id="send-code-btn" style="margin-top:.3rem;">Wyślij kod</button>
+        <span id="send-code-status" style="font-size:11px;margin-left:.5rem;"></span>
+        <br><a href="#" id="back-to-nick" style="font-size:11px;">← Zmień nick</a>
+      </div>
 
-      <label style="margin-top:.8rem;">Kod (6 cyfr):
-        <input type="text" name="code" required pattern="[0-9]{6}"
-               inputmode="numeric" maxlength="6" autocomplete="one-time-code"
-               id="reset-code" style="letter-spacing:.15em;font-size:1.1em;">
-      </label>
-
-      <label>Nowe hasło:
-        <input type="password" name="password1" required
-               autocomplete="new-password" id="reset-pw1">
-      </label>
-      <label>Powtórz hasło:
-        <input type="password" name="password2" required
-               autocomplete="new-password" id="reset-pw2">
-      </label>
-
-      <button type="submit" id="reset-btn" style="margin-top:.5rem;">Ustaw hasło</button>
+      <div id="step-code" style="display:none;">
+        <label style="margin-top:.8rem;">Kod (6 cyfr):
+          <input type="text" name="code" required pattern="[0-9]{6}"
+                 inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+                 id="reset-code" style="letter-spacing:.15em;font-size:1.1em;">
+        </label>
+        <label>Nowe hasło:
+          <input type="password" name="password1" required
+                 autocomplete="new-password" id="reset-pw1">
+        </label>
+        <label>Powtórz hasło:
+          <input type="password" name="password2" required
+                 autocomplete="new-password" id="reset-pw2">
+        </label>
+        <button type="submit" id="reset-btn" style="margin-top:.5rem;">Ustaw hasło</button>
+      </div>
     </form>
   {% endif %}
 
@@ -99,34 +112,70 @@ function showResetPopup(code, username, sentAt) {
   };
 }
 
+var csrf = function() {
+  return document.querySelector('[name=csrfmiddlewaretoken]').value;
+};
+var errEl = document.getElementById('reset-error');
+function showErr(msg) { errEl.textContent = msg; errEl.style.display = 'block'; }
+function hideErr() { errEl.style.display = 'none'; }
+
+// Step 1: check nick → get email mask
+document.getElementById('check-nick-btn').addEventListener('click', function() {
+  var username = document.getElementById('reset-username').value.trim();
+  if (!username) return;
+  hideErr();
+  fetch(window.location.href, {
+    method: 'POST',
+    headers: {'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'action=check&username=' + encodeURIComponent(username) + '&csrfmiddlewaretoken=' + encodeURIComponent(csrf())
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d) {
+    if (!d.ok) { showErr(d.error); return; }
+    document.getElementById('step-nick').style.display = 'none';
+    document.getElementById('step-email').style.display = 'block';
+    document.getElementById('email-mask-info').textContent = 'Kod zostanie wysłany na: ' + d.email_mask;
+    document.getElementById('email-confirm-input').placeholder = d.email_mask;
+    document.getElementById('email-confirm-input').focus();
+  });
+});
+
+// Back to nick
+document.getElementById('back-to-nick').addEventListener('click', function(e) {
+  e.preventDefault();
+  hideErr();
+  document.getElementById('step-email').style.display = 'none';
+  document.getElementById('step-nick').style.display = 'block';
+  document.getElementById('send-code-status').textContent = '';
+});
+
+// Step 2: send code with email confirmation
 document.getElementById('send-code-btn').addEventListener('click', function() {
   var username = document.getElementById('reset-username').value.trim();
-  var errEl = document.getElementById('reset-error');
+  var emailConfirm = document.getElementById('email-confirm-input').value.trim();
   var status = document.getElementById('send-code-status');
-  errEl.style.display = 'none';
+  hideErr();
   status.textContent = 'Wysyłanie…';
 
   fetch(window.location.href, {
     method: 'POST',
-    headers: {
-      'X-Requested-With': 'XMLHttpRequest',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: 'username=' + encodeURIComponent(username)
-        + '&csrfmiddlewaretoken=' + encodeURIComponent(
-            document.querySelector('[name=csrfmiddlewaretoken]').value)
+    headers: {'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'action=send&username=' + encodeURIComponent(username)
+        + '&email_confirm=' + encodeURIComponent(emailConfirm)
+        + '&csrfmiddlewaretoken=' + encodeURIComponent(csrf())
   })
   .then(function(r){ return r.json(); })
   .then(function(d) {
     if (!d.ok) {
-      errEl.textContent = d.error;
-      errEl.style.display = 'block';
+      showErr(d.error);
       status.textContent = '';
     } else if (d.popup) {
-      status.textContent = 'Kod wygenerowany.';
+      status.textContent = 'Kod wygenerowany — wysłany na ' + d.email_mask + '.';
       showResetPopup(d.code, d.username, d.sent_at);
+      document.getElementById('step-code').style.display = 'block';
     } else {
       status.textContent = 'Kod wysłany na ' + d.email_mask + '.';
+      document.getElementById('step-code').style.display = 'block';
     }
   });
 });
