@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Kolejność działów{% endblock %}
+
+{% block content %}
+<h2>Kolejność działów i forów</h2>
+
+{% if parent_forum %}
+  <p>
+    <a href="{% url 'admin_order' %}">← Powrót do głównej listy</a>
+    &nbsp;|&nbsp; Podfora: <strong>{{ parent_forum.title }}</strong>
+  </p>
+{% else %}
+  <p><a href="{% url 'admin_order' %}">Kolejność działów i forów</a></p>
+
+  <h3>Sekcje</h3>
+  <table style="border-collapse:collapse;">
+    {% for s in sections %}
+    <tr>
+      <td style="padding:.25rem .5rem;">{{ s.order }}</td>
+      <td style="padding:.25rem .5rem;">{{ s.title }}</td>
+      <td style="padding:.25rem .2rem;">
+        <form method="post" action="{% url 'admin_order_move_section' s.pk 'up' %}" style="display:inline;">
+          {% csrf_token %}<button type="submit" title="W górę">▲</button>
+        </form>
+      </td>
+      <td style="padding:.25rem .2rem;">
+        <form method="post" action="{% url 'admin_order_move_section' s.pk 'down' %}" style="display:inline;">
+          {% csrf_token %}<button type="submit" title="W dół">▼</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <h3 style="margin-top:1.2rem;">Fora główne (bez rodzica)</h3>
+{% endif %}
+
+<table style="border-collapse:collapse;">
+  {% for f in top_forums %}
+  <tr>
+    <td style="padding:.25rem .5rem;">{{ f.order }}</td>
+    <td style="padding:.25rem .5rem;">
+      {{ f.title }}
+      {% if not parent_forum %}
+        <span style="font-size:11px;color:#888;">({{ f.section.title }})</span>
+      {% endif %}
+    </td>
+    <td style="padding:.25rem .2rem;">
+      <form method="post" action="{% url 'admin_order_move_forum' f.pk 'up' %}" style="display:inline;">
+        {% csrf_token %}<button type="submit" title="W górę">▲</button>
+      </form>
+    </td>
+    <td style="padding:.25rem .2rem;">
+      <form method="post" action="{% url 'admin_order_move_forum' f.pk 'down' %}" style="display:inline;">
+        {% csrf_token %}<button type="submit" title="W dół">▼</button>
+      </form>
+    </td>
+    <td style="padding:.25rem .5rem;">
+      <a href="{% url 'admin_order_children' f.pk %}" style="font-size:11px;">podfora</a>
+    </td>
+  </tr>
+  {% empty %}
+  <tr><td colspan="5" style="padding:.4rem;">Brak.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -276,6 +276,7 @@ class Forum(models.Model):
         PUBLIC = 0, "Public"
         REGISTERED = 1, "Registered only"
         ADMIN = 2, "Admin only"
+        BLOGGER = 3, "Admin + Blogger"
 
     access_level = models.SmallIntegerField(
         choices=AccessLevel.choices,

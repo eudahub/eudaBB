@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import unicodedata
 
-DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfiniabb.db"
+DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_full.db"
 USERS_DB_PATH = "/home/andrzej/wazne/gitmy/phpbb-archiver/sfinia_users_real.db"
 
 PASS_TYPES = ['known-user', 'known-user-global', 'anon-topic', 'anon-global', 'ngram',
@@ -617,7 +617,7 @@ _UNRESOLVED_OPEN_RE = re.compile(
 )
 
 
-def run_propagate(conn, dry_run=False):
+def run_propagate(conn, dry_run=False, need_repair_only=False):
     """Propaguj post_id do zagnieżdżonych cytatów.
 
     Dla każdego postu z content_quotes:
@@ -656,9 +656,10 @@ def run_propagate(conn, dry_run=False):
         enriched_this_iter = 0
 
         # Posty gdzie nested_status != 1 i content_quotes zawiera zagnieżdżone
+        extra = " AND need_repair_quotes=1 AND quote_status IN (1,3)" if need_repair_only else ""
         rows = conn.execute(
             "SELECT post_id, content_quotes FROM posts"
-            " WHERE content_quotes IS NOT NULL AND nested_status != 1"
+            f" WHERE content_quotes IS NOT NULL AND (nested_status IS NULL OR nested_status != 1){extra}"
         ).fetchall()
 
         updates = []  # (new_content_quotes, nested_status, post_id)
@@ -888,7 +889,7 @@ def run_bible(conn, dry_run=False, review_path=None):
                 continue
 
             ref, votes, total_g = _bible_votes(inner)
-            if ref is None or votes == 0:
+            if ref is None or votes < 2:
                 continue
 
             pct = votes / max(1, total_g)
@@ -1152,14 +1153,15 @@ def run_mark_broken(conn, dry_run=False):
 # Pass: fix-status – przelicz quote_status i nested_status z aktualnej treści
 # ---------------------------------------------------------------------------
 
-def run_fix_status(conn, dry_run=False):
+def run_fix_status(conn, dry_run=False, need_repair_only=False):
     """Dla postów z quote_status IN (2,3):
     1. Zamienia pozostałe nierozwiązane [quote] → [fquote] (jak to-fquote).
     2. Przelicza quote_status i nested_status z aktualnej treści.
     """
+    extra = " AND need_repair_quotes=1" if need_repair_only else ""
     rows = conn.execute(
         "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
-        " WHERE quote_status IN (2, 3)"
+        f" WHERE quote_status IN (2, 3){extra}"
     ).fetchall()
 
     updates = []
@@ -1242,7 +1244,7 @@ def run_fix_status(conn, dry_run=False):
 # Pass: to-fquote – zamień pozostałe nierozwiązane [quote] na [fquote]
 # ---------------------------------------------------------------------------
 
-def run_to_fquote(conn, dry_run=False):
+def run_to_fquote(conn, dry_run=False, need_repair_only=False):
     """Zamienia wszystkie nierozwiązane [quote...] (status 2/3) na [fquote...].
 
     Dla każdego bloku bez post_id:
@@ -1250,10 +1252,11 @@ def run_to_fquote(conn, dry_run=False):
       - [quote]     → [fquote],      [/quote] → [/fquote]
     Ustawia quote_status=1 i nested_status=1.
     """
+    extra = " AND need_repair_quotes=1" if need_repair_only else ""
     rows = conn.execute(
         "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
-        " WHERE quote_status IN (2, 3)"
-        "   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%')"
+        f" WHERE quote_status IN (2, 3)"
+        f"   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%'){extra}"
     ).fetchall()
 
     updates = []
@@ -1424,16 +1427,17 @@ def resolve_quoted_source_post_id(post_content_map, source_post_id, quote_norm, 
     return current
 
 
-def run_mark_not_found(conn, known_users, dry_run=False):
+def run_mark_not_found(conn, known_users, dry_run=False, need_repair_only=False):
     """Oznacza nierozwiązane cytaty jako post_id=not_found w dwóch przypadkach:
     1. Autor jest w sfinia_users_real.db (known user, post nie znaleziony).
     2. Cytat zawiera zagnieżdżone [quote]/[fquote]/[Bible] w środku
        (cytat wielopoziomowy / zagraniczny).
     """
+    extra = " AND need_repair_quotes=1" if need_repair_only else ""
     rows = conn.execute(
         "SELECT post_id, COALESCE(content_quotes, content) FROM posts"
-        " WHERE quote_status IN (2, 3)"
-        "   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%')"
+        f" WHERE quote_status IN (2, 3)"
+        f"   AND (content_quotes IS NOT NULL OR content LIKE '%[quote%'){extra}"
     ).fetchall()
 
     updates = []
@@ -1518,7 +1522,7 @@ def run_mark_not_found(conn, known_users, dry_run=False):
 # Pass: fix-quote-authors – popraw autora w [quote ... post_id=N]
 # ---------------------------------------------------------------------------
 
-def run_fix_quote_authors(conn, dry_run=False):
+def run_fix_quote_authors(conn, dry_run=False, need_repair_only=False):
     """Napraw autora w tagach [quote ... post_id=N] na autora posta źródłowego.
 
     Reguły:
@@ -1534,10 +1538,11 @@ def run_fix_quote_authors(conn, dry_run=False):
         )
     }
 
+    extra = " AND need_repair_quotes=1" if need_repair_only else ""
     rows = conn.execute(
         "SELECT post_id, content_quotes FROM posts"
-        " WHERE content_quotes IS NOT NULL"
-        "   AND content_quotes LIKE '%post_id=%'"
+        f" WHERE content_quotes IS NOT NULL"
+        f"   AND content_quotes LIKE '%post_id=%'{extra}"
     ).fetchall()
 
     updates = []
@@ -1596,7 +1601,7 @@ def run_fix_quote_authors(conn, dry_run=False):
     return changed_tags
 
 
-def run_fix_quote_post_ids(conn, dry_run=False):
+def run_fix_quote_post_ids(conn, dry_run=False, need_repair_only=False):
     """Cofnij post_id, jeśli wskazany post zawiera dany tekst wyłącznie w cytacie.
 
     Działa wyłącznie po istniejących post_id:
@@ -1613,10 +1618,11 @@ def run_fix_quote_post_ids(conn, dry_run=False):
         )
     }
 
+    extra = " AND need_repair_quotes=1" if need_repair_only else ""
     rows = conn.execute(
         "SELECT post_id, content_quotes FROM posts"
-        " WHERE content_quotes IS NOT NULL"
-        "   AND content_quotes LIKE '%post_id=%'"
+        f" WHERE content_quotes IS NOT NULL"
+        f"   AND content_quotes LIKE '%post_id=%'{extra}"
     ).fetchall()
 
     updates = []
@@ -2100,6 +2106,9 @@ def parse_args():
                    help='Plik do zapisu cytatów do ręcznego przeglądu (1 głos, >=25%)')
     p.add_argument('--bible-dry-min', type=float, default=0.09, metavar='FRAC',
                    help='Min. pokrycie do wyświetlenia w dry-run (0–1, domyślnie 0.09)')
+    p.add_argument('--null-only', action='store_true',
+                   help='Przetwarzaj tylko posty z quote_status IS NULL (nowe/niezbadane); '
+                        'ustawia quote_status=0 dla postów bez [quote]')
     return p.parse_args()
 
 
@@ -2110,6 +2119,7 @@ def main():
     reset = args.reset
     limit = args.limit
     pass_type = args.pass_type
+    null_only = args.null_only
     bible_index_path     = args.bible_index
     bible_coverage_min   = args.bible_coverage_min
     bible_review_path    = args.bible_review
@@ -2143,13 +2153,13 @@ def main():
 
     # Pass propagate i bible są obsługiwane osobno
     if pass_type == 'propagate':
-        total = run_propagate(conn, dry_run=dry_run)
+        total = run_propagate(conn, dry_run=dry_run, need_repair_only=null_only)
         print(f"\n=== Propagacja zakończona: {total:,} tagów wzbogaconych ===")
         conn.close()
         return
 
     if pass_type == 'mark-not-found':
-        total = run_mark_not_found(conn, known_users, dry_run=dry_run)
+        total = run_mark_not_found(conn, known_users, dry_run=dry_run, need_repair_only=null_only)
         print(f"\n=== Mark-not-found zakończony: {total:,} cytatów oznaczonych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
@@ -2157,7 +2167,7 @@ def main():
         return
 
     if pass_type == 'to-fquote':
-        total = run_to_fquote(conn, dry_run=dry_run)
+        total = run_to_fquote(conn, dry_run=dry_run, need_repair_only=null_only)
         print(f"\n=== To-fquote zakończony: {total:,} tagów zamienionych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
@@ -2165,7 +2175,7 @@ def main():
         return
 
     if pass_type == 'fix-status':
-        total = run_fix_status(conn, dry_run=dry_run)
+        total = run_fix_status(conn, dry_run=dry_run, need_repair_only=null_only)
         print(f"\n=== Fix-status zakończony: {total:,} postów poprawionych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
@@ -2181,7 +2191,7 @@ def main():
         return
 
     if pass_type == 'fix-quote-authors':
-        total = run_fix_quote_authors(conn, dry_run=dry_run)
+        total = run_fix_quote_authors(conn, dry_run=dry_run, need_repair_only=null_only)
         print(f"\n=== Fix-quote-authors zakończony: {total:,} tagów poprawionych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
@@ -2189,7 +2199,7 @@ def main():
         return
 
     if pass_type == 'fix-quote-post-ids':
-        total = run_fix_quote_post_ids(conn, dry_run=dry_run)
+        total = run_fix_quote_post_ids(conn, dry_run=dry_run, need_repair_only=null_only)
         print(f"\n=== Fix-quote-post-ids zakończony: {total:,} tagów poprawionych ===")
         if dry_run:
             print("[DRY RUN] Nie zapisano zmian.")
@@ -2247,9 +2257,20 @@ def main():
     elif pass_type == 'ngram':
         ngram_index, ngram_post_author = build_ngram_index(conn)
 
+    # --null-only: najpierw oznacz posty bez [quote] jako quote_status=0
+    if null_only and pass_type == 'known-user' and not dry_run:
+        marked = conn.execute(
+            "UPDATE posts SET quote_status = 0, nested_status = 0"
+            " WHERE quote_status IS NULL AND content NOT LIKE '%[quote%'"
+        ).rowcount
+        conn.commit()
+        print(f"  Oznaczono {marked:,} postów bez cytatów jako quote_status=0.")
+
     # Count posts to process
     if reset:
         where = "content LIKE '%[quote%'"
+    elif null_only and pass_type == 'known-user':
+        where = "content LIKE '%[quote%' AND quote_status IS NULL"
     elif pass_type == 'known-user':
         where = "content LIKE '%[quote%' AND quote_status = 0"
     else:

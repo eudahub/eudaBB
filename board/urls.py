@@ -43,4 +43,8 @@ urlpatterns = [
     path("pm/<int:box_id>/",        views.pm_view,    name="pm_view"),
     path("pm/<int:box_id>/edit/",   views.pm_edit,    name="pm_edit"),
     path("pm/<int:box_id>/delete/", views.pm_delete,  name="pm_delete"),
+    path("admin/kolejnosc/", views.admin_order, name="admin_order"),
+    path("admin/kolejnosc/subfora/<int:forum_id>/", views.admin_order_children, name="admin_order_children"),
+    path("admin/kolejnosc/sekcja/<int:pk>/przesun/<str:direction>/", views.admin_order_move_section, name="admin_order_move_section"),
+    path("admin/kolejnosc/forum/<int:pk>/przesun/<str:direction>/", views.admin_order_move_forum, name="admin_order_move_forum"),
 ]

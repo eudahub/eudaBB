@@ -29,7 +29,9 @@
       </select>
     </label>
     <label style="flex:0 1 220px;">
-      <span>Użytkownik</span>
+      <span>Użytkownik
+        <a href="{% url 'user_list' %}{% if author_query %}?q={{ author_query|urlencode }}{% endif %}" style="font-size:11px;color:#800000;margin-left:.4rem;" title="Przeglądaj użytkowników">lista</a>
+      </span>
       <input type="text" name="author" value="{{ author_query }}" placeholder="nick autora">
     </label>
     <label style="flex:0 1 220px;">

@@ -180,11 +180,11 @@ class Command(BaseCommand):
                 conn_imp = sqlite3.connect(import_db_path)
                 conn_imp.row_factory = sqlite3.Row
                 alias_rows = conn_imp.execute(
-                    "SELECT alias, new_name FROM username_aliases "
-                    "WHERE action='rename' AND new_name != ''"
+                    "SELECT username, new_name FROM users "
+                    "WHERE new_name IS NOT NULL AND new_name != '' AND new_name != username"
                 ).fetchall()
+                rename_map = {ar["username"]: ar["new_name"] for ar in alias_rows}
                 conn_imp.close()
-                rename_map = {ar["alias"]: ar["new_name"] for ar in alias_rows}
                 alias_count = 0
                 for old, new in rename_map.items():
                     if old not in user_map and new in user_map:

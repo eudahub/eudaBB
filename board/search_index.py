@@ -6,7 +6,7 @@ from django.db.models import Q
 from .models import Post, PostSearchIndex
 
 
-_TAG_RE = re.compile(r"\[/?[A-Za-z*][^\]]*\]")
+_TAG_RE = re.compile(r"\[/?[A-Za-z*][A-Za-z0-9]{0,15}(?:=[^\]\n]*)?\]")
 _OPEN_TAG_NAME_RE = re.compile(r"^\[(?P<name>[A-Za-z*]+)")
 _CLOSE_TAG_NAME_RE = re.compile(r"^\[/(?P<name>[A-Za-z*]+)\]")
 _SKIP_BLOCK_TAGS = {"quote", "fquote", "bible", "ai", "code"}
@@ -26,7 +26,11 @@ def normalize_search_text(text: str) -> str:
     return text
 
 
-def extract_author_search_text(content_bbcode: str) -> str:
+def _strip_block_tags(content_bbcode: str) -> str:
+    """
+    Zwraca tekst autora — usuwa bloki [quote]/[fquote]/[bible]/[ai]/[code]
+    (z zagnieżdżeniami). Zachowuje oryginalne białe znaki (w tym newliny).
+    """
     content = content_bbcode or ""
     parts = []
     stack = []
@@ -57,9 +61,27 @@ def extract_author_search_text(content_bbcode: str) -> str:
     if pos < len(content) and not stack:
         parts.append(content[pos:])
 
-    text = "".join(parts)
+    return "".join(parts)
+
+
+def extract_author_search_text(content_bbcode: str) -> str:
+    text = _strip_block_tags(content_bbcode)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def extract_content_user(content_bbcode: str) -> str:
+    """
+    Jak extract_author_search_text, ale zachowuje strukturę akapitów:
+    wiele pustych linii → jedna pusta linia, pozostałe białe znaki normalizuje
+    w obrębie linii.
+    """
+    text = _strip_block_tags(content_bbcode)
+    # Normalizuj spacje/taby w obrębie każdej linii, zachowaj newliny
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+    # Złącz linie z powrotem, spakuj serie pustych linii do jednej pustej
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
+    return text.strip()
 
 
 def detect_search_features(content_bbcode: str) -> tuple[bool, bool]:

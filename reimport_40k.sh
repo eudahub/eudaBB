@@ -1,90 +1,48 @@
 #!/usr/bin/env bash
 # Partial reimport — pełna struktura i userzy, ale tylko pierwsze 40 000 postów.
+# Słownik morfologiczny jest zachowany (flush_except_morph).
+# Aby przebudować morfologię: ./rebuild_morph.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCHIVER_DIR="${SCRIPT_DIR}/../phpbb-archiver"
 VENV_ACTIVATE="${SCRIPT_DIR}/venv/bin/activate"
 
-ADMIN_DB="${ARCHIVER_DIR}/sfinia_users_admin.db"
-REAL_DB="${ARCHIVER_DIR}/sfinia_users_real.db"
-IMPORT_DB="${ARCHIVER_DIR}/sfinia_import.db"
-ARCHIVE_DB="${ARCHIVER_DIR}/sfiniabb.db"
-PUBLIC_DB="${ARCHIVER_DIR}/sfinia_users_public.db"
-AVATARS_DIR="${ARCHIVER_DIR}/admin_avatars"
-
-require_file() {
-  local path="$1"
-  if [[ ! -f "$path" ]]; then
-    echo "Brak pliku: $path" >&2
-    exit 1
-  fi
-}
+SFINIA_FULL="${ARCHIVER_DIR}/sfinia_full.db"
 
 if [[ ! -f "${VENV_ACTIVATE}" ]]; then
   echo "Brak virtualenv: ${VENV_ACTIVATE}" >&2
   exit 1
 fi
 
-require_file "${ADMIN_DB}"
-require_file "${REAL_DB}"
-require_file "${ARCHIVE_DB}"
+if [[ ! -f "${SFINIA_FULL}" ]]; then
+  echo "Brak pliku: ${SFINIA_FULL}" >&2
+  exit 1
+fi
 
 source "${VENV_ACTIVATE}"
-
 cd "${SCRIPT_DIR}"
-
-echo "==> Flush bazy"
-python manage.py flush --no-input
 
 echo "==> Migracje"
 python manage.py migrate
 
-echo "==> Import słownika morfologicznego (formy odmiany)"
-MORPH_CSV="${SCRIPT_DIR}/morph_families.csv"
-if [[ -f "${MORPH_CSV}" ]]; then
-  python manage.py import_morph_csv "${MORPH_CSV}"
-else
-  echo "Uwaga: brak ${MORPH_CSV} — szukanie z + nie będzie działać." >&2
-  echo "Pobierz plik z Google Drive i umieść jako morph_families.csv w katalogu projektu." >&2
-fi
+echo "==> Czyszczenie bazy (morfologia zostaje)"
+python manage.py flush_except_morph --no-input
 
-echo "==> Import sufiksów morfologicznych (analogia dla słów spoza słownika)"
-MORPH_SUF="${SCRIPT_DIR}/morph_suffixes.csv"
-if [[ -f "${MORPH_SUF}" ]]; then
-  python manage.py import_morph_suffix "${MORPH_SUF}"
-else
-  echo "Uwaga: brak ${MORPH_SUF} — analogia sufiksowa (słowo+) nie będzie działać." >&2
-  echo "Pobierz plik z Google Drive i umieść jako morph_suffixes.csv w katalogu projektu." >&2
-fi
-
-
-echo "==> Budowa bazy importowej userów"
-python manage.py build_import_db \
-  "${ADMIN_DB}" \
-  "${REAL_DB}" \
-  "${IMPORT_DB}" \
-  --public-db "${PUBLIC_DB}"
-
-echo "==> Import userów"
-if [[ -d "${AVATARS_DIR}" ]]; then
-  python manage.py import_from_sfinia "${IMPORT_DB}" --avatars-dir "${AVATARS_DIR}"
-else
-  echo "Uwaga: brak katalogu awatarów ${AVATARS_DIR}, import bez awatarów." >&2
-  python manage.py import_from_sfinia "${IMPORT_DB}"
-fi
+echo "==> Import użytkowników"
+python manage.py import_from_sfinia "${SFINIA_FULL}"
 
 echo "==> Import spam_class"
-python manage.py import_spam_classes "${REAL_DB}"
+python manage.py import_spam_classes "${SFINIA_FULL}"
 
 echo "==> Import struktury forum (pełna)"
-python manage.py import_forums "${ARCHIVE_DB}"
+python manage.py import_forums "${SFINIA_FULL}"
 
 echo "==> Import postów (pierwsze 40 000)"
-python manage.py import_posts "${ARCHIVE_DB}" --first 40000 --import-db "${IMPORT_DB}"
+python manage.py import_posts "${SFINIA_FULL}" --first 40000 --import-db "${SFINIA_FULL}"
 
 echo "==> Import ankiet"
-python manage.py import_polls "${ARCHIVE_DB}"
+python manage.py import_polls "${SFINIA_FULL}"
 
 echo "==> Tworzenie konta root"
 python manage.py create_root

@@ -2561,3 +2561,75 @@ def goto_post(request, post_id):
     url = f"/topic/{post.topic_id}/?page={_post_page(post)}#post-{post_id}"
     from django.http import HttpResponseRedirect
     return HttpResponseRedirect(url)
+
+
+# ---------------------------------------------------------------------------
+# Admin: forum/section order management (root only)
+# ---------------------------------------------------------------------------
+
+def _swap_order(model_class, pk, direction, filter_kwargs):
+    """Swap 'order' of item pk with the adjacent item (up/down) in the given queryset."""
+    items = list(model_class.objects.filter(**filter_kwargs).order_by("order"))
+    idx = next((i for i, x in enumerate(items) if x.pk == pk), None)
+    if idx is None:
+        return
+    if direction == "up" and idx > 0:
+        other_idx = idx - 1
+    elif direction == "down" and idx < len(items) - 1:
+        other_idx = idx + 1
+    else:
+        return
+    a, b = items[idx], items[other_idx]
+    a.order, b.order = b.order, a.order
+    model_class.objects.bulk_update([a, b], ["order"])
+
+
+@login_required
+def admin_order(request):
+    if not request.user.is_root:
+        return HttpResponseForbidden()
+    sections = Section.objects.order_by("order")
+    top_forums = Forum.objects.filter(parent__isnull=True).order_by("order").select_related("section")
+    return render(request, "board/admin_order.html", {
+        "sections": sections,
+        "top_forums": top_forums,
+        "parent_forum": None,
+    })
+
+
+@login_required
+def admin_order_children(request, forum_id):
+    if not request.user.is_root:
+        return HttpResponseForbidden()
+    parent = get_object_or_404(Forum, pk=forum_id)
+    children = Forum.objects.filter(parent=parent).order_by("order")
+    return render(request, "board/admin_order.html", {
+        "sections": None,
+        "top_forums": children,
+        "parent_forum": parent,
+    })
+
+
+@login_required
+def admin_order_move_section(request, pk, direction):
+    if not request.user.is_root:
+        return HttpResponseForbidden()
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    _swap_order(Section, pk, direction, {})
+    return redirect("admin_order")
+
+
+@login_required
+def admin_order_move_forum(request, pk, direction):
+    if not request.user.is_root:
+        return HttpResponseForbidden()
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    forum = get_object_or_404(Forum, pk=pk)
+    parent_id = forum.parent_id
+    _swap_order(Forum, pk, direction, {"parent_id": parent_id})
+    # redirect back to the right page
+    if parent_id:
+        return redirect("admin_order_children", forum_id=parent_id)
+    return redirect("admin_order")

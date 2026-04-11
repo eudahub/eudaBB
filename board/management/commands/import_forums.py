@@ -44,22 +44,34 @@ class Command(BaseCommand):
             self.stdout.write("Cleared existing sections and forums.")
 
         # --- Sections ---
-        rows = conn.execute("SELECT section_id, title FROM sections ORDER BY section_id").fetchall()
+        # Używamy kolumny "order" jeśli istnieje, fallback na section_id
+        section_cols = {r[1] for r in conn.execute("PRAGMA table_info(sections)").fetchall()}
+        if "order" in section_cols:
+            sections_sql = 'SELECT section_id, title, "order" FROM sections ORDER BY "order"'
+        else:
+            sections_sql = "SELECT section_id, title, section_id AS \"order\" FROM sections ORDER BY section_id"
+        rows = conn.execute(sections_sql).fetchall()
         section_map = {}  # source section_id → Section instance
-        for i, row in enumerate(rows):
+        for row in rows:
             section, created = Section.objects.get_or_create(
                 title=row["title"],
-                defaults={"order": i},
+                defaults={"order": row["order"]},
             )
+            if not created and section.order != row["order"]:
+                section.order = row["order"]
+                section.save(update_fields=["order"])
             section_map[row["section_id"]] = section
 
         self.stdout.write(f"Sections: {len(section_map)}")
 
         # --- Forums (two passes for parent/child) ---
+        # Używamy kolumny "order" jeśli istnieje, fallback na forum_id
+        forum_cols = {r[1] for r in conn.execute("PRAGMA table_info(forums)").fetchall()}
+        order_col = '"order"' if "order" in forum_cols else "forum_id"
         forums = conn.execute(
-            "SELECT forum_id, section_id, parent_forum_id, title, description, "
-            "topic_count, post_count, visibility AS visibility_class "
-            "FROM forums ORDER BY forum_id"
+            f"SELECT forum_id, section_id, parent_forum_id, title, description, "
+            f"topic_count, post_count, visibility AS visibility_class, {order_col} AS display_order "
+            f"FROM forums ORDER BY forum_id"
         ).fetchall()
 
         forum_map = {}  # source forum_id → Forum instance
@@ -87,13 +99,16 @@ class Command(BaseCommand):
                 defaults={
                     "description": row["description"] or "",
                     "parent": parent,
-                    "order": row["forum_id"],
+                    "order": row["display_order"],
                     # visibility_class from phpBB: 0=public, 1=registered, 2=admin
                     "access_level": row["visibility_class"] or 0,
                     "topic_count": row["topic_count"] or 0,
                     "post_count": row["post_count"] or 0,
                 },
             )
+            if not created and forum.order != row["display_order"]:
+                forum.order = row["display_order"]
+                forum.save(update_fields=["order"])
             forum_map[row["forum_id"]] = forum
             return True
 

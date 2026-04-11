@@ -28,8 +28,21 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Cannot open {options['real_db']}: {e}")
 
+        # Auto-detekcja: sfinia_users_real.db ma kolumnę "spam",
+        # sfinia_full.db ma "spam_class" — obsługujemy oba.
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "spam" in columns:
+            spam_col = "spam"
+        elif "spam_class" in columns:
+            spam_col = "spam_class"
+        else:
+            conn.close()
+            raise CommandError("Tabela users nie ma kolumny spam ani spam_class.")
+
         rows = conn.execute(
-            "SELECT username, spam FROM users WHERE spam != 0 ORDER BY spam"
+            f"SELECT username, {spam_col} AS spam FROM users WHERE {spam_col} != 0 ORDER BY {spam_col}"
         ).fetchall()
         conn.close()
 

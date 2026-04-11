@@ -198,6 +198,62 @@ python manage.py migrate
 python manage.py rebuild_quote_refs
 ```
 
+### Wzbogacanie cytowań (enrich_quotes.py)
+
+Skrypt `enrich_quotes.py` działa bezpośrednio na SQLite (`sfinia_full.db`), poza Django.
+Uruchamia się przez `python enrich_quotes.py --db sfinia_full.db --pass <PASS>`.
+
+Poniżej prawidłowa kolejność passów:
+
+#### Faza 0 — Pre-processing (przed właściwym wzbogacaniem)
+
+| Pass | Co robi |
+|------|---------|
+| `mark-broken` | Oznacza posty z niezbalansowanymi `[quote]`/`[/quote]` jako `quote_status=4`; wyklucza je z dalszego przetwarzania |
+
+#### Faza 1 — Resolving `[quote]` → konkretny post źródłowy
+
+Passy działają w kolejności od najpewniejszych do najbardziej przybliżonych.
+`known-user` przetwarza `quote_status=0`; pozostałe — `quote_status IN (2,3)`.
+
+| Pass | Co robi |
+|------|---------|
+| `known-user` | Szuka N poprzednich postów **tego samego autora w tym samym wątku** |
+| `known-user-global` | Jak wyżej, ale przeszukuje **całą bazę** (autor znany) |
+| `anon-topic` | Szuka N poprzednich postów **w tym samym wątku** (autor nieznany/dowolny) |
+| `anon-global` | Szuka N poprzednich postów **w całej bazie** (autor dowolny) |
+| `ngram` | Głosowanie 5-gramowe po `content_user` — ostatnia deska ratunku |
+
+#### Faza 2 — Korekty po wzbogaceniu
+
+| Pass | Co robi |
+|------|---------|
+| `propagate` | Propaguje `post_id` do zagnieżdżonych cytatów na podstawie tabeli `quotes` |
+| `fix-quote-authors` | Naprawia imię autora w `[quote ... post_id=N]` na autora posta N |
+| `fix-quote-post-ids` | Cofa błędne `post_id`, gdy tekst cytatu pochodzi wyłącznie z innego cytatu |
+| `mark-not-found` | Finalizuje: oznacza nierozwiązane cytaty znanych autorów jako `post_id=not_found` |
+
+#### Faza 3 — Cytaty biblijne (wymaga `--bible-index`)
+
+| Pass | Co robi |
+|------|---------|
+| `bible` | Wykrywa cytaty biblijne n-gramami, zamienia `[quote]` na `[Bible=ref]`; opcjonalnie zapisuje plik review |
+| `bible-review-apply` | (opcjonalny) Stosuje ręczne korekty z pliku review (`--bible-review`) |
+| `bible-filter` | Cofa false-positive wpisy `[Bible=]` poniżej progu pokrycia (`--bible-coverage-min`) |
+
+#### Faza 4 — Sprzątanie i finalizacja
+
+| Pass | Co robi |
+|------|---------|
+| `to-fquote` | Zamienia pozostałe nierozwiązane `[quote]` na `[fquote]` (brak dalszego enrichmentu) |
+| `fix-status` | Przelicza `quote_status` i `nested_status` z aktualnej treści `content_quotes` |
+
+#### Diagnostyka (w dowolnym momencie, bez zmian w danych)
+
+| Pass | Co robi |
+|------|---------|
+| `analyze-depth` | Analizuje maksymalne zagnieżdżenie tagów dla `quote_status=1`; tylko raport |
+
 ### Indeks wyszukiwania
 
 Najpierw dla jednego forum testowego:
