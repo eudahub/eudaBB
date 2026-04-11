@@ -34,6 +34,7 @@ class User(AbstractUser):
     Email is never stored in plaintext. AbstractUser.email is kept blank always.
     Use email_hash (Argon2) for verification and email_mask for display.
     """
+    username = models.CharField(max_length=31, unique=True)
     email = models.EmailField(blank=True, default="")
 
     signature = models.TextField(blank=True, default="")
@@ -61,7 +62,7 @@ class User(AbstractUser):
     )
 
     username_normalized = models.CharField(
-        max_length=150, blank=True, default="", db_index=True,
+        max_length=31, blank=True, default="", db_index=True,
         help_text="Lowercase, no diacritics, alphanumeric only. Used for uniqueness checks.",
     )
 
