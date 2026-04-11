@@ -28,10 +28,7 @@ def _check_email_domain(email: str) -> str | None:
             return "Adres email pochodzi z domeny o podejrzanie długiej nazwie."
         base = f"{name}.{ext.suffix}"
         if SpamDomain.objects.filter(domain=base, spam=1).exists():
-            return (
-                "Adres skrzynki pocztowej wygląda na jednorazowy, tymczasowy lub spambox. "
-                "Użyj stałego adresu email."
-            )
+            return "Adres email wygląda na tymczasowy lub spambox. Użyj stałego adresu email."
     except Exception:
         pass
     return None
