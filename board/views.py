@@ -2173,8 +2173,8 @@ def spam_action(request, post_id):
         do_block_domain = request.POST.get("do_block_domain") == "1"
 
         with transaction.atomic():
-            # 1. Delete post
-            if do_delete:
+            # 1. Delete post (skip if releasing nick — that deletes all posts anyway)
+            if do_delete and not do_release_nick:
                 deleted_order = post.post_order
                 if author:
                     User.objects.filter(pk=author.pk, post_count__gt=0).update(
@@ -2221,9 +2221,10 @@ def spam_action(request, post_id):
                     author.banned_until = timezone.now() + timedelta(days=days)
                 author.save(update_fields=["is_banned", "banned_until"])
 
-            # 4. Release nick (delete user account)
+            # 4. Release nick (delete user account + all posts + quote cleanup)
             if author and do_release_nick:
-                author.delete()
+                from .user_delete import delete_user_and_cleanup
+                delete_user_and_cleanup(author)
 
             # 5. Block email domain
             if do_block_domain and email_domain:
