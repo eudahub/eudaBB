@@ -10,9 +10,26 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AlterUniqueTogether(
-            name='morphform',
-            unique_together=set(),
+        # Drop unique_together constraint if it exists.
+        # Some DBs may have had it removed already (e.g. by import_morph_csv --clear),
+        # so we use IF EXISTS via SeparateDatabaseAndState to avoid "0 constraints found".
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE forum_morph_form "
+                        "DROP CONSTRAINT IF EXISTS "
+                        "forum_morph_form_form_norm_lemma_norm_family_id_6633bba1_uniq"
+                    ),
+                    reverse_sql="",
+                ),
+            ],
+            state_operations=[
+                migrations.AlterUniqueTogether(
+                    name='morphform',
+                    unique_together=set(),
+                ),
+            ],
         ),
         migrations.AddField(
             model_name='morphform',
@@ -24,8 +41,20 @@ class Migration(migrations.Migration):
             name='id',
         ),
         # Django's CompositePrimaryKey doesn't emit ADD PRIMARY KEY DDL — add it manually.
+        # Some DBs may already have this PK (e.g. after import_morph_csv --clear), so guard.
         migrations.RunSQL(
-            sql="ALTER TABLE forum_morph_form ADD PRIMARY KEY (form_norm, lemma_norm, family_id);",
+            sql="""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conrelid = 'forum_morph_form'::regclass AND contype = 'p'
+                    ) THEN
+                        ALTER TABLE forum_morph_form
+                            ADD PRIMARY KEY (form_norm, lemma_norm, family_id);
+                    END IF;
+                END$$;
+            """,
             reverse_sql="ALTER TABLE forum_morph_form DROP CONSTRAINT IF EXISTS forum_morph_form_pkey;",
         ),
     ]

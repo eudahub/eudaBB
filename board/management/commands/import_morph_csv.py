@@ -139,7 +139,16 @@ class Command(BaseCommand):
             )
             self._dropped_indexes = [r[0] for r in cur.fetchall()]
             for idx in self._dropped_indexes:
-                cur.execute(f"DROP INDEX IF EXISTS {idx}")
+                # Unique constraints back their index — must drop constraint, not index
+                cur.execute(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid=%s::regclass AND conname=%s",
+                    [table, idx],
+                )
+                if cur.fetchone():
+                    cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {idx}")
+                else:
+                    cur.execute(f"DROP INDEX IF EXISTS {idx}")
             # Drop PK constraint
             cur.execute(
                 f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_pkey"
