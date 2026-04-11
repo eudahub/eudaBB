@@ -165,7 +165,30 @@
     </div>
     <div>
       {% if user.is_authenticated %}
-        <span>{{ user.username }}</span>
+        <span>
+          {%- if request.session.maintenance_user -%}
+            <span style="color:#888;font-size:11px;">{{ request.session.maintenance_user }}
+              {%- if maint_ip_count > 1 %}
+                <details style="display:inline-block;position:relative;vertical-align:middle;">
+                  <summary style="color:#c00;font-size:10px;cursor:pointer;list-style:none;">({{ maint_ip_count }} IP)</summary>
+                  <div style="position:absolute;left:0;top:1.4em;background:#fff;border:1px solid #ccc;padding:.3rem .5rem;z-index:200;white-space:nowrap;font-size:11px;box-shadow:0 2px 6px rgba(0,0,0,.15);">
+                    {% for ip in maint_ips %}<div>{{ ip }}</div>{% endfor %}
+                  </div>
+                </details>
+              {%- endif %}
+            </span>
+            <span style="color:#aaa;font-size:11px;">&rsaquo;</span>
+          {%- endif %}
+          {{ user.username }}
+          {%- if user_ip_count > 1 %}
+            <details style="display:inline-block;position:relative;vertical-align:middle;">
+              <summary style="color:#c00;font-size:10px;cursor:pointer;list-style:none;">({{ user_ip_count }} IP)</summary>
+              <div style="position:absolute;left:0;top:1.4em;background:#fff;border:1px solid #ccc;padding:.3rem .5rem;z-index:200;white-space:nowrap;font-size:11px;box-shadow:0 2px 6px rgba(0,0,0,.15);">
+                {% for ip in user_ips %}<div>{{ ip }}</div>{% endfor %}
+              </div>
+            </details>
+          {%- endif %}
+        </span>
         <a href="{% url 'new_posts' %}">Nowe posty</a>
         <a href="{% url 'my_topics' %}">Twoje posty</a>
         <a href="{% url 'unread_topics' %}">Nieprzeczytane</a>
@@ -178,7 +201,20 @@
         {% if user.is_root %}<a href="{% url 'root_config' %}">Konfiguracja</a>{% endif %}
         <form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Wyloguj</button></form>
         {% if site_config.show_switch_link %}<form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<input type="hidden" name="next" value="{% url 'login' %}"><button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Przełącz</button></form>{% endif %}
+        {% if request.session.maintenance_access %}<form method="post" action="{% url 'maintenance_logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:#c00;cursor:pointer;font-size:inherit;font-weight:bold;">Wyloguj z serwisu</button></form>{% endif %}
       {% else %}
+        {% if request.session.maintenance_user %}
+          <span style="color:#888;font-size:11px;">{{ request.session.maintenance_user }}
+            {% if maint_ip_count > 1 %}
+              <details style="display:inline-block;position:relative;vertical-align:middle;">
+                <summary style="color:#c00;font-size:10px;cursor:pointer;list-style:none;">({{ maint_ip_count }} IP)</summary>
+                <div style="position:absolute;left:0;top:1.4em;background:#fff;border:1px solid #ccc;padding:.3rem .5rem;z-index:200;white-space:nowrap;font-size:11px;box-shadow:0 2px 6px rgba(0,0,0,.15);">
+                  {% for ip in maint_ips %}<div>{{ ip }}</div>{% endfor %}
+                </div>
+              </details>
+            {% endif %}
+          </span>
+        {% endif %}
         <a href="{% url 'new_posts' %}">Nowe posty</a>
         <a href="{% url 'new_topics' %}">Nowe wątki</a>
         <a href="{% url 'unanswered_topics' %}">Bez odpowiedzi</a>
@@ -186,6 +222,7 @@
         <a href="{% url 'login' %}">Zaloguj</a>
         <a href="{% url 'register' %}">Rejestracja</a>
         {% if site_config.show_switch_link %}<span style="color:#c00;font-weight:bold;font-size:10px;">[popup]</span>{% endif %}
+        {% if request.session.maintenance_access %}<form method="post" action="{% url 'maintenance_logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:#c00;cursor:pointer;font-size:inherit;font-weight:bold;">Wyloguj z serwisu</button></form>{% endif %}
       {% endif %}
     </div>
   </nav>

@@ -14,6 +14,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import HttpResponseForbidden
 from django.core.mail import send_mail
+import datetime as _dt
 from django.core.paginator import Paginator
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -1799,8 +1800,8 @@ def register(request):
             test_code = code
             return
 
-        sent_str   = timezone.localtime(now).strftime("%Y-%m-%d %H:%M")
-        valid_str  = timezone.localtime(expires).strftime("%Y-%m-%d %H:%M")
+        sent_str   = now.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        valid_str  = expires.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         from_addr  = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
         send_mail(
             subject="[eudaHub] Kod rejestracyjny",
@@ -1910,9 +1911,11 @@ def register(request):
         raw = request.session.get("register_code_expires_at")
         if raw:
             try:
-                code_valid_until = timezone.localtime(
+                code_valid_until = (
                     timezone.datetime.fromisoformat(raw)
-                ).strftime("%H:%M")
+                    .astimezone(_dt.timezone.utc)
+                    .strftime("%H:%M UTC")
+                )
             except ValueError:
                 pass
 
@@ -2385,10 +2388,10 @@ def _from_email() -> str:
 
 
 def _send_reset_code_email(user, code: str, recipient_email: str) -> None:
-    now     = timezone.localtime(timezone.now())
+    now     = timezone.now()
     expires = now + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
-    sent_str  = now.strftime("%Y-%m-%d %H:%M")
-    valid_str = expires.strftime("%Y-%m-%d %H:%M")
+    sent_str  = now.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    valid_str = expires.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
     send_mail(
         subject="[eudaHub] Kod do resetowania hasła",
@@ -2506,6 +2509,17 @@ def request_reset(request):
             return render(request, "registration/request_reset.html", {
                 "error": "Nie znaleziono konta o tym nicku.",
                 "reason": reason, "prefill_username": username,
+            })
+
+        if user.is_ghost:
+            if user.email:
+                msg = "To konto nie ma hasła — nigdy nie było aktywowane. Na stronie logowania użyj opcji 'Nie pamiętasz nicka? Podaj email → odzyskaj konto'."
+            else:
+                msg = "To konto nie ma hasła ani adresu email. Wybierz inny nick lub skontaktuj się z administratorem."
+            if is_ajax:
+                return ajax_err(msg)
+            return render(request, "registration/request_reset.html", {
+                "error": msg, "reason": reason, "prefill_username": username,
             })
 
         if not user.email:
@@ -3278,3 +3292,50 @@ def lock_topic(request, topic_id):
     topic.is_locked = not topic.is_locked
     topic.save(update_fields=["is_locked"])
     return redirect("topic_detail", topic_id=topic_id)
+
+
+def maintenance_gate(request):
+    """Stage-1 gate for closed maintenance mode.
+
+    Verifies nick+password (NO TOR check) and checks the MaintenanceAllowedUser
+    list (or staff).  On success sets session['maintenance_access'] = True but
+    does NOT log the user into the forum — they remain anonymous and may then
+    use the normal login flow (/login/) independently.
+    """
+    from django.contrib.auth import authenticate
+    from .models import SiteConfig, MaintenanceAllowedUser
+
+    # Already past the gate
+    if request.session.get("maintenance_access"):
+        return redirect("/")
+
+    cfg = SiteConfig.get()
+    message = cfg.maintenance_message or "Trwa przerwa techniczna."
+    error = None
+
+    if request.method == "POST":
+        username = request.POST.get("username", "").strip()
+        password = request.POST.get("password", "")
+
+        user = authenticate(request, username=username, password=password)
+        if user is None:
+            error = "Nieprawidłowy nick lub hasło."
+        elif not (user.is_staff or MaintenanceAllowedUser.objects.filter(username=user.username).exists()):
+            error = "Ten nick nie jest na liście serwisowej."
+        else:
+            request.session["maintenance_access"] = True
+            request.session["maintenance_user"] = user.username
+            return redirect("/")
+
+    return render(request, "board/maintenance_gate.html", {
+        "message": message,
+        "error": error,
+    })
+
+
+def maintenance_logout(request):
+    """Clear maintenance_access session flag and log out from forum."""
+    request.session.pop("maintenance_access", None)
+    request.session.pop("maintenance_user", None)
+    logout(request)
+    return redirect("maintenance_gate")

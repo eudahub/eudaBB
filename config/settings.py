@@ -34,6 +34,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "board.middleware.MaintenanceModeMiddleware",
+    "board.middleware.SessionTrackingMiddleware",
     "board.middleware.TorBlockMiddleware",
 ]
 
@@ -57,6 +59,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "board.context_processors.test_mode",
                 "board.context_processors.pm_unread_count",
+                "board.context_processors.user_session_info",
             ],
         },
     },

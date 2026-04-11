@@ -1268,3 +1268,23 @@ Uwagi:
 - Uważać na kolizję: `**` musi być rozpoznany przed `*`
 - Rozważyć czy `*` w środku słowa (np. `foo*bar`) ma być ignorowany (Markdown tak robi)
 - Dotyczy parsera w `board/bbcode_parser.py` (lub odpowiedniku)
+
+---
+
+## Rename: Forum → Board (dział)
+
+Zmiana nazewnictwa: "forum" (dział) → "board", żeby odróżnić dział od całości forum.
+
+### Zakres zmian
+- Tabele w PostgreSQL i SQLite: `forum_forum` → `forum_board` (lub nowa nazwa prefixu)
+- Model Django: `class Forum` → `class Board`, `db_table` jeśli trzeba
+- Kolumny FK: `forum_id` → `board_id` we wszystkich tabelach (Topic, Moderator, itd.)
+- URL-e: `/forum/<pk>/` → `/board/<pk>/`
+- Nazwy widoków, szablonów, URL patterns
+- Etykiety w szablonach: "Forum" → "Dział", "Fora" → "Działy"
+
+### Kolejność
+1. Migracja Django (`RenameModel`, `RenameField`, `AlterField db_table`)
+2. Aktualizacja widoków i URL patterns
+3. Aktualizacja szablonów
+4. Sprawdzić czy `app_label = 'board'` nie koliduje z nową nazwą modelu

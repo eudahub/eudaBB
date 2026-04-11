@@ -100,6 +100,11 @@ class RegisterStartForm(forms.Form):
         if not conflict:
             return proposed
         if conflict.is_ghost:
+            if not conflict.email:
+                raise forms.ValidationError(
+                    f"Nick '{conflict.username}' jest zajęty przez konto archiwalne "
+                    "bez adresu email. Wybierz inny nick."
+                )
             raise forms.ValidationError(
                 f"To konto już istnieje w archiwum jako '{conflict.username}'. "
                 "Użyj odzyskiwania konta zamiast nowej rejestracji."

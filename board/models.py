@@ -800,6 +800,22 @@ class SiteConfig(models.Model):
         help_text="Miękki limit opcji ankiety (max = twardy limit z settings POLL_OPTIONS_HARD_MAX, domyślnie 64).",
     )
 
+    MODE_NORMAL   = "normal"
+    MODE_READONLY = "readonly"
+    MODE_CLOSED   = "closed"
+    SITE_MODE_CHOICES = [
+        (MODE_NORMAL,   "Normalny"),
+        (MODE_READONLY, "Tylko do odczytu"),
+        (MODE_CLOSED,   "Zamknięte (tylko lista serwisowa)"),
+    ]
+    site_mode = models.CharField(
+        max_length=10, choices=SITE_MODE_CHOICES, default=MODE_NORMAL
+    )
+    maintenance_message = models.TextField(
+        blank=True, default="",
+        help_text="Komunikat wyświetlany podczas przerwy technicznej.",
+    )
+
     class Meta:
         db_table = "forum_siteconfig"
 
@@ -810,6 +826,35 @@ class SiteConfig(models.Model):
 
     def __str__(self):
         return "SiteConfig"
+
+
+class UserSession(models.Model):
+    """Tracks active sessions per user for concurrent-login detection."""
+    user = models.ForeignKey(
+        "User", on_delete=models.CASCADE, related_name="active_sessions"
+    )
+    session_key = models.CharField(max_length=40, unique=True)
+    ip_address = models.GenericIPAddressField()
+    last_seen = models.DateTimeField()
+
+    class Meta:
+        db_table = "forum_user_session"
+        indexes = [models.Index(fields=["user", "last_seen"])]
+
+    def __str__(self):
+        return f"{self.user_id}@{self.ip_address}"
+
+
+class MaintenanceAllowedUser(models.Model):
+    """Users allowed to log in during closed maintenance mode."""
+    username = models.CharField(max_length=31, unique=True)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "forum_maintenance_allowed_user"
+
+    def __str__(self):
+        return self.username
 
 
 @receiver(post_save, sender=Post)

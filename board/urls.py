@@ -3,6 +3,8 @@ from . import views
 
 urlpatterns = [
     path("login/", views.login_view, name="login"),
+    path("przerwa/", views.maintenance_gate, name="maintenance_gate"),
+    path("przerwa/wyloguj/", views.maintenance_logout, name="maintenance_logout"),
     path("reset-hasla/", views.request_reset, name="request_reset"),
     path("ustaw-haslo/", views.do_reset, name="do_reset"),
     path("", views.index, name="index"),
