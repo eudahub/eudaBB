@@ -2129,6 +2129,135 @@ def flag_post_ip(request, post_id):
 
 
 # ---------------------------------------------------------------------------
+# Moderator: spam action panel
+# ---------------------------------------------------------------------------
+
+@login_required
+def spam_action(request, post_id):
+    """Moderator spam panel: delete post, ban user, release nick, flag IP, block domain."""
+    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    topic = post.topic
+    forum = topic.forum
+    user = request.user
+
+    if not _is_moderator(user, forum):
+        return HttpResponseForbidden()
+
+    author = post.author
+
+    # Email domain info
+    email_domain = None
+    domain_user_count = 0
+    domain_already_blocked = False
+    if author and author.email:
+        try:
+            import tldextract
+            from .models import SpamDomain
+            ext = tldextract.extract(author.email.split("@")[-1])
+            if ext.domain and ext.suffix:
+                email_domain = f"{ext.domain}.{ext.suffix}"
+                domain_user_count = User.objects.filter(
+                    email__iendswith=f"@{email_domain}"
+                ).count()
+                domain_already_blocked = SpamDomain.objects.filter(
+                    domain=email_domain, spam=1
+                ).exists()
+        except Exception:
+            pass
+
+    if request.method == "POST":
+        do_delete = request.POST.get("do_delete") == "1"
+        ban_duration = request.POST.get("ban_duration", "0")
+        do_release_nick = request.POST.get("do_release_nick") == "1"
+        do_flag_ip = request.POST.get("do_flag_ip") == "1"
+        do_block_domain = request.POST.get("do_block_domain") == "1"
+
+        with transaction.atomic():
+            # 1. Delete post
+            if do_delete:
+                deleted_order = post.post_order
+                if author:
+                    User.objects.filter(pk=author.pk, post_count__gt=0).update(
+                        post_count=django_models.F("post_count") - 1
+                    )
+                post.delete()
+                topic.posts.filter(post_order__gt=deleted_order).update(
+                    post_order=django_models.F("post_order") - 1
+                )
+                new_last = topic.posts.order_by("-created_at").first()
+                if new_last:
+                    topic.reply_count = topic.posts.count() - 1
+                    topic.last_post = new_last
+                    topic.last_post_at = new_last.created_at
+                    topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
+                forum.post_count = Post.objects.filter(topic__forum=forum).count()
+                new_forum_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
+                forum.last_post = new_forum_last
+                forum.last_post_at = new_forum_last.created_at if new_forum_last else None
+                forum.save(update_fields=["post_count", "last_post", "last_post_at"])
+
+            # 2. Flag IP as dangerous
+            if do_flag_ip and not do_delete:
+                # post was not deleted — update ip fields on it
+                post.ip_flagged = True
+                post.ip_retain_until = _retain_until(flagged=True)
+                post.save(update_fields=["ip_flagged", "ip_retain_until"])
+            elif do_flag_ip and do_delete:
+                # post deleted — flag all remaining posts by this IP
+                if post.author_ip:
+                    Post.objects.filter(author_ip=post.author_ip).update(
+                        ip_flagged=True,
+                        ip_retain_until=_retain_until(flagged=True),
+                    )
+
+            # 3. Ban user
+            if author and ban_duration != "0":
+                if ban_duration == "forever":
+                    author.is_banned = True
+                    author.banned_until = None
+                else:
+                    days = int(ban_duration)
+                    author.is_banned = True
+                    author.banned_until = timezone.now() + timedelta(days=days)
+                author.save(update_fields=["is_banned", "banned_until"])
+
+            # 4. Release nick (delete user account)
+            if author and do_release_nick:
+                author.delete()
+
+            # 5. Block email domain
+            if do_block_domain and email_domain:
+                from .models import SpamDomain
+                SpamDomain.objects.update_or_create(
+                    domain=email_domain,
+                    defaults={"spam": 1, "added_at": timezone.now()},
+                )
+
+        messages.success(request, "Akcja antyspamowa wykonana.")
+        return redirect("topic_detail", topic_id=topic.pk)
+
+    ban_choices = [
+        ("0",       "Nie blokuj"),
+        ("1",       "1 dzień"),
+        ("7",       "7 dni"),
+        ("30",      "30 dni"),
+        ("90",      "90 dni"),
+        ("forever", "Na zawsze"),
+    ]
+
+    return render(request, "board/spam_action.html", {
+        "post": post,
+        "topic": topic,
+        "author": author,
+        "email_domain": email_domain,
+        "domain_user_count": domain_user_count,
+        "domain_already_blocked": domain_already_blocked,
+        "dangerous_days": getattr(settings, "IP_RETAIN_DANGEROUS_DAYS", 90),
+        "ban_choices": ban_choices,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Auth: custom login (detects invalidated password) + password reset via code
 # ---------------------------------------------------------------------------
 

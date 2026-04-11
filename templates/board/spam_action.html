@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Akcja antyspamowa — post #{{ post.post_order }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
+  Akcja antyspamowa
+</p>
+
+<h2>Akcja antyspamowa — post #{{ post.post_order }}{% if author %} od {{ author.username }}{% endif %}</h2>
+
+<form method="post" style="max-width:560px;">
+  {% csrf_token %}
+
+  <fieldset style="margin-bottom:1rem;padding:.6rem .8rem;border:1px solid #c88;">
+    <legend style="font-size:12px;font-weight:bold;color:#900;">Post</legend>
+    <label style="display:flex;gap:.4rem;align-items:center;">
+      <input type="checkbox" name="do_delete" value="1" checked>
+      <span style="font-size:13px;">Usuń post</span>
+    </label>
+  </fieldset>
+
+  {% if author %}
+  <fieldset style="margin-bottom:1rem;padding:.6rem .8rem;border:1px solid #c88;">
+    <legend style="font-size:12px;font-weight:bold;color:#900;">Użytkownik: {{ author.username }}</legend>
+
+    <div style="font-size:12px;margin-bottom:.5rem;">Zablokuj użytkownika:</div>
+    {% for val, label in ban_choices %}
+      <label style="display:flex;gap:.4rem;align-items:center;margin-bottom:.25rem;">
+        <input type="radio" name="ban_duration" value="{{ val }}"{% if val == "0" %} checked{% endif %}>
+        <span style="font-size:13px;">{{ label }}</span>
+      </label>
+    {% endfor %}
+
+    <label style="display:flex;gap:.4rem;align-items:center;margin-top:.6rem;">
+      <input type="checkbox" name="do_release_nick" value="1">
+      <span style="font-size:13px;">Zwolnij nick — usuń konto (posty pozostaną bez autora)</span>
+    </label>
+  </fieldset>
+  {% endif %}
+
+  {% if post.author_ip %}
+  <fieldset style="margin-bottom:1rem;padding:.6rem .8rem;border:1px solid #c88;">
+    <legend style="font-size:12px;font-weight:bold;color:#900;">Adres IP</legend>
+    <label style="display:flex;gap:.4rem;align-items:center;">
+      <input type="checkbox" name="do_flag_ip" value="1" checked>
+      <span style="font-size:13px;">Oznacz IP jako groźne (retencja {{ dangerous_days }} dni)</span>
+    </label>
+  </fieldset>
+  {% endif %}
+
+  {% if email_domain %}
+  <fieldset style="margin-bottom:1rem;padding:.6rem .8rem;border:1px solid #c88;">
+    <legend style="font-size:12px;font-weight:bold;color:#900;">Domena email: {{ email_domain }}</legend>
+    <div style="font-size:12px;color:#555;margin-bottom:.4rem;">
+      Użytkowników z tej domeny: {{ domain_user_count }}
+      {% if domain_already_blocked %}
+        — <span style="color:#900;font-weight:bold;">domena już zablokowana</span>
+      {% endif %}
+    </div>
+    {% if not domain_already_blocked %}
+      <label style="display:flex;gap:.4rem;align-items:center;">
+        <input type="checkbox" name="do_block_domain" value="1">
+        <span style="font-size:13px;">Dodaj domenę do spamboxes (spam=1)</span>
+      </label>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+
+  <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem;">
+    <button type="submit" style="background:#900;color:#fff;border:none;padding:.3rem .8rem;cursor:pointer;">Wykonaj</button>
+    <a href="{% url 'topic_detail' topic.pk %}#post-{{ post.pk }}">Anuluj</a>
+  </div>
+</form>
+{% endblock %}

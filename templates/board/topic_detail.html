@@ -223,6 +223,10 @@
           <button type="submit" class="bbsrc-btn" style="color:#900;">Usuń</button>
         </form>
       {% endif %}
+      {% if is_moderator and post.author and not post.author.is_staff %}
+        <a href="{% url 'spam_action' post.pk %}" class="bbsrc-btn"
+           style="color:#900;border-color:#c88;">Spam</a>
+      {% endif %}
     </span>
   </div>
   <table style="width:100%; border-collapse: collapse;">
@@ -270,20 +274,10 @@
             </form>
           {% endif %}
         </div>
-        {% if is_moderator and post.author_ip %}
+        {% if is_moderator and post.ip_flagged %}
           <div style="text-align:right; margin-top:.4rem;">
-            {% if post.ip_flagged %}
-              <span title="Post oznaczony jako groźny — retencja IP {{ dangerous_days }}d"
-                    style="color:#c00; font-size:.8em; font-weight:bold;">&#9888;</span>
-            {% else %}
-              <form method="post" action="{% url 'flag_post_ip' post.pk %}" style="display:inline;"
-                    onsubmit="return confirm('Oznaczyć post jako groźny?\nRetencja IP wydłużona do {{ dangerous_days }} dni.');">
-                {% csrf_token %}
-                <button type="submit" title="Oznacz jako groźny — retencja IP {{ dangerous_days }}d"
-                        style="background:none; border:1px solid #c00; color:#c00; border-radius:3px;
-                               padding:1px 6px; cursor:pointer; font-size:.8em;">&#33;</button>
-              </form>
-            {% endif %}
+            <span title="Post oznaczony jako groźny — retencja IP {{ dangerous_days }}d"
+                  style="color:#c00; font-size:.8em; font-weight:bold;">&#9888; groźne IP</span>
           </div>
         {% endif %}
       </td>

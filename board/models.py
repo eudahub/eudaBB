@@ -67,6 +67,7 @@ class User(AbstractUser):
     )
 
     is_banned = models.BooleanField(default=False)
+    banned_until = models.DateTimeField(null=True, blank=True)
     ban_reason = models.TextField(blank=True, default="")
     archive_access = models.SmallIntegerField(
         default=0,
