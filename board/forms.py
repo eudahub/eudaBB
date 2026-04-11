@@ -211,26 +211,19 @@ class NewTopicForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
+        # Poll is requested ONLY when the hidden poll_enabled input is literally "1".
+        # We read raw POST data because BooleanField uses CheckboxInput widget,
+        # which returns bool("0") == True for non-empty string "0" — wrong here.
+        if self.data.get("poll_enabled") != "1":
+            cleaned["poll_data"] = None
+            return cleaned
+
         raw_options = [value.strip() for value in self.data.getlist("poll_options")]
         poll_options = [value for value in raw_options if value]
-        poll_enabled = cleaned.get("poll_enabled")
         poll_question = (cleaned.get("poll_question") or "").strip()
         duration = cleaned.get("poll_duration_days")
         allow_vote_change = bool(cleaned.get("poll_allow_vote_change"))
         allow_multiple_choice = bool(cleaned.get("poll_allow_multiple_choice"))
-
-        requested = bool(
-            poll_enabled
-            or poll_question
-            or any(raw_options)
-            or duration
-            or allow_vote_change
-            or allow_multiple_choice
-        )
-
-        if not requested:
-            cleaned["poll_data"] = None
-            return cleaned
 
         errors = []
         if not poll_question:

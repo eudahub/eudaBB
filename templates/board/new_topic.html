@@ -76,7 +76,7 @@
         <span>Czas trwania</span>
         <div style="display:flex;gap:.35rem;align-items:center;">
           <input type="number" min="1" name="poll_duration_days" id="poll-duration-days"
-                 value="{{ form.poll_duration_days.value|default_if_none:'14' }}">
+                 value="{{ form.poll_duration_days.value|default_if_none:'' }}" placeholder="14">
           <span>dni</span>
         </div>
       </label>

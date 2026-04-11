@@ -98,6 +98,43 @@
   </form>
 </article>
 
+<article style="max-width:720px;margin:1.5rem auto;">
+  <fieldset>
+    <legend>Zarządzanie rolami</legend>
+    <p style="font-size:11px;color:#555;margin:.3rem 0 .6rem 0;">
+      Pełna lista dostępna na stronie <a href="{% url 'admin_roles' %}">zarządzania rolami</a>.
+      Tutaj możesz szybko zmienić rolę wybranego użytkownika.
+    </p>
+    <form method="post" action="{% url 'set_role' %}" style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="root_config">
+      <div>
+        <label for="role_user_id" style="font-size:12px;">Użytkownik</label>
+        <select name="user_id" id="role_user_id" required style="font-size:13px;">
+          <option value="">Wybierz</option>
+          {% for user_obj in all_users %}
+            {% if not user_obj.is_root %}
+            <option value="{{ user_obj.id }}">
+              {{ user_obj.username }}
+              {% if user_obj.role == 2 %}[admin]{% elif user_obj.role == 1 %}[mod]{% endif %}
+            </option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="role_value" style="font-size:12px;">Rola</label>
+        <select name="role" id="role_value" style="font-size:13px;">
+          <option value="0">Użytkownik</option>
+          <option value="1">Moderator</option>
+          <option value="2">Administrator</option>
+        </select>
+      </div>
+      <button type="submit">Ustaw</button>
+    </form>
+  </fieldset>
+</article>
+
 <article style="max-width:720px;margin:1.5rem auto 2rem auto;">
   <form method="post" onsubmit="return confirm('Usunąć zaznaczone puste konta?');">
     {% csrf_token %}

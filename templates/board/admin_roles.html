@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Zarządzanie rolami{% endblock %}
+
+{% block content %}
+<article style="max-width:720px;margin:1.5rem auto;">
+  <h2>Zarządzanie rolami użytkowników</h2>
+  {% if messages %}
+    {% for msg in messages %}
+      <p style="color:{% if msg.tags == 'error' %}#c00{% else %}#060{% endif %};">{{ msg }}</p>
+    {% endfor %}
+  {% endif %}
+
+  <p style="font-size:12px;color:#555;">
+    {% if is_root %}Root może ustawiać wszystkie role (użytkownik / moderator / administrator).{% else %}Administrator może ustawiać role użytkownik / moderator (nie może modyfikować innych administratorów).{% endif %}
+  </p>
+
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead>
+      <tr style="background:#f0e8d0;">
+        <th style="padding:4px 8px;text-align:left;">Użytkownik</th>
+        <th style="padding:4px 8px;text-align:left;">Aktualna rola</th>
+        <th style="padding:4px 8px;text-align:left;">Zmień na</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      {% if is_root or u.role != Role.ROLE_ADMIN %}
+      <tr style="border-bottom:1px solid #e0d8c8;">
+        <td style="padding:3px 8px;">
+          {{ u.username }}
+          {% if u.is_ghost %}<span style="color:#999;font-size:11px;">(duch)</span>{% endif %}
+        </td>
+        <td style="padding:3px 8px;">
+          {% if u.role == Role.ROLE_ADMIN %}
+            <strong style="color:#900;">Administrator</strong>
+          {% elif u.role == Role.ROLE_MODERATOR %}
+            <strong style="color:#060;">Moderator</strong>
+          {% else %}
+            Użytkownik
+          {% endif %}
+        </td>
+        <td style="padding:3px 8px;">
+          <form method="post" action="{% url 'set_role' %}" style="display:inline;">
+            {% csrf_token %}
+            <input type="hidden" name="user_id" value="{{ u.id }}">
+            <input type="hidden" name="next" value="admin_roles">
+            <select name="role" style="font-size:12px;padding:2px;">
+              <option value="0" {% if u.role == 0 %}selected{% endif %}>Użytkownik</option>
+              <option value="1" {% if u.role == 1 %}selected{% endif %}>Moderator</option>
+              {% if is_root %}<option value="2" {% if u.role == 2 %}selected{% endif %}>Administrator</option>{% endif %}
+            </select>
+            <button type="submit" style="font-size:12px;padding:2px 8px;">Zmień</button>
+          </form>
+        </td>
+      </tr>
+      {% endif %}
+      {% empty %}
+      <tr><td colspan="3" style="padding:8px;">Brak użytkowników.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}

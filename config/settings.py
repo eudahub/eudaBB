@@ -64,10 +64,20 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
+# FORUM selects which PostgreSQL database to use.
+# Set via environment variable FORUM=sfinia|eudahub, or pass --forum to runserver.sh.
+# DB_NAME_SFINIA / DB_NAME_EUDAHUB override the default names per forum.
+FORUM = config("FORUM", default="sfinia")
+_FORUM_DB_DEFAULTS = {
+    "sfinia":  config("DB_NAME_SFINIA",  default="forum_db"),
+    "eudahub": config("DB_NAME_EUDAHUB", default="eudahub_db"),
+}
+_DB_NAME = _FORUM_DB_DEFAULTS.get(FORUM) or config("DB_NAME", default="forum_db")
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("DB_NAME", default="forum_db"),
+        "NAME": _DB_NAME,
         "USER": config("DB_USER", default="postgres"),
         "PASSWORD": config("DB_PASSWORD", default=""),
         "HOST": config("DB_HOST", default="localhost"),

@@ -80,6 +80,18 @@ class User(AbstractUser):
         help_text="Superadmin: manages users and forum structure. Cannot post, has no email, no password reset.",
     )
 
+    ROLE_USER      = 0
+    ROLE_MODERATOR = 1
+    ROLE_ADMIN     = 2
+    ROLE_CHOICES   = [(0, "Użytkownik"), (1, "Moderator"), (2, "Administrator")]
+
+    role = models.SmallIntegerField(
+        default=0,
+        choices=ROLE_CHOICES,
+        db_index=True,
+        help_text="0=użytkownik, 1=moderator, 2=administrator. Root jest osobnym kontem (is_root).",
+    )
+
     def save(self, *args, **kwargs):
         from .username_utils import normalize
         self.username_normalized = normalize(self.username)

@@ -568,12 +568,12 @@ def new_topic(request, forum_id):
         poll_option_values.append("")
     poll_panel_open = bool(
         request.method == "POST" and (
-            request.POST.get("poll_enabled")
+            request.POST.get("poll_enabled") == "1"  # "0" is falsy but "0" as str is truthy — compare explicitly
             or (request.POST.get("poll_question") or "").strip()
             or any(v.strip() for v in raw_poll_options)
             or request.POST.get("poll_duration_days")
-            or request.POST.get("poll_allow_vote_change")
-            or request.POST.get("poll_allow_multiple_choice")
+            or request.POST.get("poll_allow_vote_change") == "1"
+            or request.POST.get("poll_allow_multiple_choice") == "1"
             or form.non_field_errors()
         )
     )
@@ -1769,7 +1769,14 @@ def _retain_until(flagged: bool) -> "datetime":
 
 
 def _is_moderator(user, forum) -> bool:
-    return user.is_root or forum.moderators.filter(pk=user.pk).exists()
+    """True for root, global admins/moderators (role≥1), and forum-specific moderators."""
+    if not user.is_authenticated:
+        return False
+    return (
+        user.is_root
+        or user.role >= User.ROLE_MODERATOR
+        or forum.moderators.filter(pk=user.pk).exists()
+    )
 
 
 def _post_page(post: Post) -> int:
@@ -2633,3 +2640,128 @@ def admin_order_move_forum(request, pk, direction):
     if parent_id:
         return redirect("admin_order_children", forum_id=parent_id)
     return redirect("admin_order")
+
+
+# ---------------------------------------------------------------------------
+# Role management
+# ---------------------------------------------------------------------------
+
+def _role_actor_check(user):
+    """Return (is_root, is_admin) or raise HttpResponseForbidden."""
+    if not user.is_authenticated:
+        return None, None
+    return user.is_root, (user.role == User.ROLE_ADMIN)
+
+
+@login_required
+def set_role(request):
+    """POST-only endpoint to change a user's role.
+    Root can set 0/1/2. Admin (role=2) can set 0/1 for non-admins only.
+    """
+    is_root = request.user.is_root
+    is_admin = request.user.role == User.ROLE_ADMIN
+    if not is_root and not is_admin:
+        return HttpResponseForbidden()
+    if request.method != "POST":
+        return HttpResponseForbidden()
+
+    next_url = request.POST.get("next") or ("root_config" if is_root else "admin_roles")
+    try:
+        target = User.objects.get(pk=int(request.POST["user_id"]))
+        new_role = int(request.POST["role"])
+    except (KeyError, ValueError, User.DoesNotExist):
+        messages.error(request, "Nieprawidłowy użytkownik lub rola.")
+        return redirect(next_url)
+
+    if target.is_root:
+        messages.error(request, "Nie można zmieniać roli roota.")
+        return redirect(next_url)
+
+    if new_role not in (User.ROLE_USER, User.ROLE_MODERATOR, User.ROLE_ADMIN):
+        messages.error(request, "Nieprawidłowa rola.")
+        return redirect(next_url)
+
+    if is_admin and not is_root:
+        if new_role == User.ROLE_ADMIN:
+            messages.error(request, "Administratorzy nie mogą nadawać uprawnień administratora.")
+            return redirect(next_url)
+        if target.role == User.ROLE_ADMIN:
+            messages.error(request, "Administratorzy nie mogą zmieniać roli innych administratorów.")
+            return redirect(next_url)
+
+    role_labels = dict(User.ROLE_CHOICES)
+    old_label = role_labels.get(target.role, target.role)
+    new_label = role_labels.get(new_role, new_role)
+    target.role = new_role
+    target.save(update_fields=["role"])
+    messages.success(request, f"'{target.username}': {old_label} → {new_label}.")
+    return redirect(next_url)
+
+
+@login_required
+def admin_roles(request):
+    """Admin view for managing moderator assignments."""
+    is_root = request.user.is_root
+    is_admin = request.user.role == User.ROLE_ADMIN
+    if not is_root and not is_admin:
+        return HttpResponseForbidden()
+
+    users = (
+        User.objects.filter(is_root=False)
+        .order_by("-role", "username")
+        .only("id", "username", "role", "is_ghost")
+    )
+    return render(request, "board/admin_roles.html", {
+        "users": users,
+        "is_root": is_root,
+        "Role": User,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Moderator topic controls: sticky / announcement / lock
+# ---------------------------------------------------------------------------
+
+@login_required
+def set_topic_type(request, topic_id):
+    """POST: set topic_type to NORMAL/STICKY/ANNOUNCEMENT.
+    Moderators can set NORMAL or STICKY.
+    Admins and root can also set ANNOUNCEMENT.
+    """
+    topic = get_object_or_404(Topic, pk=topic_id)
+    if not _is_moderator(request.user, topic.forum):
+        return HttpResponseForbidden()
+    if request.method != "POST":
+        return HttpResponseForbidden()
+
+    try:
+        new_type = int(request.POST["topic_type"])
+    except (KeyError, ValueError):
+        messages.error(request, "Nieprawidłowy typ wątku.")
+        return redirect("topic_detail", topic_id=topic_id)
+
+    allowed = {Topic.TopicType.NORMAL, Topic.TopicType.STICKY}
+    if request.user.is_root or request.user.role >= User.ROLE_ADMIN:
+        allowed.add(Topic.TopicType.ANNOUNCEMENT)
+
+    if new_type not in allowed:
+        messages.error(request, "Brak uprawnień do ustawienia tego typu wątku.")
+        return redirect("topic_detail", topic_id=topic_id)
+
+    topic.topic_type = new_type
+    topic.save(update_fields=["topic_type"])
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def lock_topic(request, topic_id):
+    """POST: toggle is_locked on a topic. Moderators and above."""
+    topic = get_object_or_404(Topic, pk=topic_id)
+    if not _is_moderator(request.user, topic.forum):
+        return HttpResponseForbidden()
+    if request.method != "POST":
+        return HttpResponseForbidden()
+
+    topic.is_locked = not topic.is_locked
+    topic.save(update_fields=["is_locked"])
+    return redirect("topic_detail", topic_id=topic_id)

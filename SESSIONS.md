@@ -1,5 +1,49 @@
 # Log sesji roboczych
 
+## 2026-04-11 (sesja 2)
+
+### Kolumna blog_of w sfinia_full.db
+
+- Dodano kolumnę `blog_of TEXT` do tabeli `forums` w `sfinia_full.db`
+- Dla 30 forów "Blog: <username>" wypełniono `blog_of` dopasowując (case-insensitive) do `users.username`
+- Dwa wyjątki ręczne: forum 123 "Blog: Biuro Kretowiska" → `blog_of='sfinia'`, forum 189 "Blog: Czytanki starożytne" → `blog_of='Pytanie'`
+
+### Obsługa wielu forów (sfinia / eudahub)
+
+- `config/settings.py` — FORUM env var wybiera bazę PostgreSQL: `DB_NAME_SFINIA` / `DB_NAME_EUDAHUB`
+- `.env` — dodano `DB_NAME_SFINIA=forum_db`, `DB_NAME_EUDAHUB=eudahub_db`
+- `runserver.sh` — dodano parametr `--forum sfinia|eudahub`; `export FORUM` przekazuje var do Django
+- Utworzono bazę PostgreSQL `eudahub_db` (`createdb eudahub_db`) i zastosowano migracje
+
+### eudaHub.db — schemat + dane forów
+
+- Utworzono `phpbb-archiver/eudaHub.db` — schemat z `sfinia_full.db` bez rekordów (bez tabel: `all_registered_users`, `all_registered_users_visited`, `refetch_batch_failures`, `sqlite_sequence`, `visited_admin`)
+- Wypełniono tabele `sections` (9) i `forums` (30) z pliku `fora_eudahub_2.txt`; separator działów: em-dash `—` (U+2014); `forum_id` i `order` od 1, `parent_forum_id=NULL`, `blog_of=NULL`
+- Usunięto kolumny `need_norm`, `new_name`, `new_norm` z `eudaHub.db.users`
+
+### rebuild_morph.sh — parametr --forum
+
+- Dodano `--forum sfinia|eudahub` (domyślnie sfinia); `export FORUM` przed wywołaniem manage.py
+
+### reimport_eudahub.sh
+
+- Nowy skrypt: migracje → `flush_except_morph` → `import_forums eudaHub.db --clear` → `create_root`
+- Na razie tylko struktura forów, bez użytkowników i postów
+
+### Role użytkowników
+
+- `User.role` (SmallIntegerField): 0=użytkownik, 1=moderator, 2=administrator; stałe `ROLE_USER/MODERATOR/ADMIN`
+- Migracja `0043_user_role` zastosowana na obu bazach
+- Widok `POST /admin/set-role/` — root ustawia 0/1/2; admin ustawia 0/1 (nie może dotykać innych adminów)
+- Widok `GET /admin/role/` (`admin_roles`) — tabela użytkowników z formami zmiany roli
+- `root_config.html` — nowa sekcja "Zarządzanie rolami" z quick-dropdownem
+
+### import_from_sfinia — flaga --need-rename
+
+- Czyta `new_name` z kolumny `users.new_name` w sfinia_full.db (priorytet nad `username_aliases`)
+- Po imporcie przepisuje `[quote author="stary_nick"]` → `[quote author="nowy_nick"]` we wszystkich postach
+- Używa `_rewrite_named_quotes_only` + `_rewrite_enriched_quotes` z `user_rename.py`; src_ids prekomputowane przed pętlą
+
 ## 2026-04-11
 
 ### Integracja postów adminów z główną bazą (sfinia_full.db)

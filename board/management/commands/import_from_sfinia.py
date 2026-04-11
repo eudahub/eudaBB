@@ -39,6 +39,15 @@ class Command(BaseCommand):
             default=False,
             help="Delete existing ghost accounts before import (breaks post references!)",
         )
+        parser.add_argument(
+            "--need-rename",
+            action="store_true",
+            default=False,
+            help=(
+                "Use new_name column from users table as the target username. "
+                "After import, updates [quote author=...] tags in posts for renamed users."
+            ),
+        )
 
     def handle(self, *args, **options):
         db_path = options["import_db"]
@@ -94,13 +103,28 @@ class Command(BaseCommand):
         except Exception:
             pass  # table may not exist in older DBs
 
+        # --need-rename: also read new_name column directly from users table
+        need_rename_map = {}
+        if options.get("need_rename"):
+            user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if "new_name" in user_cols:
+                nr_rows = conn.execute(
+                    "SELECT username, new_name FROM users "
+                    "WHERE new_name IS NOT NULL AND new_name != ''"
+                ).fetchall()
+                need_rename_map = {r["username"]: r["new_name"] for r in nr_rows}
+                self.stdout.write(f"Wczytano {len(need_rename_map)} wpisów new_name.")
+            else:
+                self.stderr.write("Kolumna new_name nie istnieje w users — --need-rename ignorowane.")
+
         conn.close()
 
         avatars_dir = options["avatars_dir"]
 
         created = updated = avatars_set = renamed = 0
         for row in rows:
-            username = rename_map.get(row["username"], row["username"])
+            # need_rename_map takes precedence over username_aliases
+            username = need_rename_map.get(row["username"]) or rename_map.get(row["username"], row["username"])
             if username != row["username"]:
                 renamed += 1
 
@@ -169,3 +193,68 @@ class Command(BaseCommand):
             + (f", przemianowano: {renamed}" if renamed else "")
             + (f", awatary: {avatars_set}" if avatars_set else "")
         ))
+
+        # --need-rename: update [quote author=...] in posts for renamed users.
+        # At this point users already have new_name as username, so we only
+        # rewrite BBCode in posts: old_name → new_name.
+        if need_rename_map:
+            from board.models import Post
+            from board.user_rename import (
+                _rewrite_named_quotes_only,
+                _rewrite_enriched_quotes,
+            )
+            from board.quote_refs import rebuild_quote_references_for_posts
+            from django.db import transaction
+
+            # Build map: old_name → (new_name, frozenset of post_ids authored by new-user)
+            rename_pairs = [
+                (old, new)
+                for old, new in need_rename_map.items()
+                if old != new
+            ]
+            if rename_pairs:
+                self.stdout.write(f"Przepisuję cytaty dla {len(rename_pairs)} przemianowanych użytkowników…")
+                quotes_posts = quotes_tags = 0
+                changed_post_ids = []
+                batch = []
+
+                # Precompute source post IDs per renamed user
+                rename_pairs_with_ids = []
+                for old_name, new_name_val in rename_pairs:
+                    try:
+                        user_obj = User.objects.get(username=new_name_val)
+                        src_ids = frozenset(
+                            Post.objects.filter(author=user_obj).values_list("pk", flat=True)
+                        )
+                    except User.DoesNotExist:
+                        src_ids = frozenset()
+                    rename_pairs_with_ids.append((old_name, new_name_val, src_ids))
+
+                # Load all posts once; iterate and apply all renames
+                all_posts = list(Post.objects.only("pk", "content_bbcode"))
+                with transaction.atomic():
+                    for post in all_posts:
+                        content = post.content_bbcode
+                        total_changed = 0
+                        for old_name, new_name_val, src_ids in rename_pairs_with_ids:
+                            content, c1 = _rewrite_named_quotes_only(content, old_name, new_name_val)
+                            content, c2 = _rewrite_enriched_quotes(content, old_name, new_name_val, src_ids)  # noqa: E501
+                            total_changed += c1 + c2
+                        if total_changed:
+                            post.content_bbcode = content
+                            batch.append(post)
+                            changed_post_ids.append(post.pk)
+                            quotes_posts += 1
+                            quotes_tags  += total_changed
+                            if len(batch) >= 500:
+                                Post.objects.bulk_update(batch, ["content_bbcode"])
+                                batch.clear()
+                    if batch:
+                        Post.objects.bulk_update(batch, ["content_bbcode"])
+                    if changed_post_ids:
+                        rebuild_quote_references_for_posts(
+                            Post.objects.filter(pk__in=changed_post_ids).only("pk", "content_bbcode")
+                        )
+                self.stdout.write(
+                    f"Cytaty: przepisano {quotes_tags} tagów w {quotes_posts} postach."
+                )

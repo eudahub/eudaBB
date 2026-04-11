@@ -10,7 +10,29 @@
 </p>
 
 <h2>{{ topic.title }}</h2>
-{% if topic.is_locked %}<p class="locked-notice">🔒 Wątek zamknięty — odpowiadanie wyłączone.</p>{% endif %}
+{% if topic.is_locked %}<p class="locked-notice">Wątek zamknięty — odpowiadanie wyłączone.</p>{% endif %}
+
+{% if is_moderator %}
+<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.6rem;font-size:12px;">
+  <form method="post" action="{% url 'set_topic_type' topic.pk %}" style="display:inline;">
+    {% csrf_token %}
+    <select name="topic_type" style="font-size:12px;padding:2px;">
+      <option value="0" {% if topic.topic_type == 0 %}selected{% endif %}>Normalny</option>
+      <option value="1" {% if topic.topic_type == 1 %}selected{% endif %}>Przyklejony</option>
+      {% if request.user.is_root or request.user.role >= 2 %}
+      <option value="2" {% if topic.topic_type == 2 %}selected{% endif %}>Ogłoszenie</option>
+      {% endif %}
+    </select>
+    <button type="submit" style="font-size:12px;padding:2px 8px;">Ustaw</button>
+  </form>
+  <form method="post" action="{% url 'lock_topic' topic.pk %}" style="display:inline;">
+    {% csrf_token %}
+    <button type="submit" style="font-size:12px;padding:2px 8px;">
+      {% if topic.is_locked %}Odblokuj wątek{% else %}Zamknij wątek{% endif %}
+    </button>
+  </form>
+</div>
+{% endif %}
 {% if topic_participants %}
   <p style="font-size:11px;color:#555;margin-top:-.1rem;margin-bottom:.5rem;">
     Uczestnicy:

@@ -47,4 +47,8 @@ urlpatterns = [
     path("admin/kolejnosc/subfora/<int:forum_id>/", views.admin_order_children, name="admin_order_children"),
     path("admin/kolejnosc/sekcja/<int:pk>/przesun/<str:direction>/", views.admin_order_move_section, name="admin_order_move_section"),
     path("admin/kolejnosc/forum/<int:pk>/przesun/<str:direction>/", views.admin_order_move_forum, name="admin_order_move_forum"),
+    path("topic/<int:topic_id>/set-type/", views.set_topic_type, name="set_topic_type"),
+    path("topic/<int:topic_id>/lock/", views.lock_topic, name="lock_topic"),
+    path("zarzadzanie/role/", views.admin_roles, name="admin_roles"),
+    path("zarzadzanie/set-role/", views.set_role, name="set_role"),
 ]
