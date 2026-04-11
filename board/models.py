@@ -69,6 +69,10 @@ class User(AbstractUser):
     is_banned = models.BooleanField(default=False)
     banned_until = models.DateTimeField(null=True, blank=True)
     ban_reason = models.TextField(blank=True, default="")
+    is_processing = models.BooleanField(
+        default=False,
+        help_text="Locked during rename/delete — blocks posting, quoting, editing.",
+    )
     archive_access = models.SmallIntegerField(
         default=0,
         help_text="Max archive_level user can see: 0=normal, 1=soft darkweb, 2=hard darkweb (admin-granted)",

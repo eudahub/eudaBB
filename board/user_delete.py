@@ -11,6 +11,7 @@ from django.db.models import F, Q
 
 from .models import Post, QuoteReference, Topic, Forum, User
 from .quote_refs import rebuild_quote_references_for_posts
+from .user_lock import user_processing_lock
 
 
 DELETED_LABEL = "[usunięty]"
@@ -81,7 +82,7 @@ def delete_user_and_cleanup(user: User) -> dict:
     batch = []
     changed_post_ids = []
 
-    with transaction.atomic():
+    with user_processing_lock(user), transaction.atomic():
         # 1. Rewrite quotes in other posts
         posts_qs = (
             Post.objects.filter(pk__in=quote_post_ids)

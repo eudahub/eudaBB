@@ -6,6 +6,7 @@ from django.db.models import Q
 
 from .models import Post, QuoteReference, User
 from .quote_refs import rebuild_quote_references_for_posts
+from .user_lock import user_processing_lock
 from .username_utils import normalize
 
 
@@ -111,7 +112,7 @@ def rename_user_and_update_quotes(user: User, new_username: str) -> dict:
     batch = []
     changed_post_ids = []
 
-    with transaction.atomic():
+    with user_processing_lock(user), transaction.atomic():
         for post in posts_qs.iterator(chunk_size=500):
             updated_content, changed_named = _rewrite_named_quotes_only(
                 post.content_bbcode, old_username, new_username

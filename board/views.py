@@ -649,6 +649,10 @@ def reply(request, topic_id):
     """Add a reply post to an existing topic."""
     if request.user.is_root:
         return HttpResponseForbidden("Konto root nie może tworzyć postów.")
+    from .user_lock import user_is_locked
+    if user_is_locked(request.user):
+        messages.error(request, "Twoje konto jest chwilowo zablokowane — trwa operacja systemowa. Spróbuj za chwilę.")
+        return redirect("topic_detail", topic_id=topic_id)
     topic = get_object_or_404(Topic, pk=topic_id)
 
     if topic.is_locked:
@@ -833,6 +837,12 @@ def edit_post(request, post_id):
     topic = post.topic
     forum = topic.forum
     user = request.user
+
+    from .user_lock import user_is_locked
+    # Block edit if the requesting user or the post's author is being processed
+    if user_is_locked(user) or (post.author and user_is_locked(post.author)):
+        messages.error(request, "Edycja chwilowo niedostępna — trwa operacja systemowa. Spróbuj za chwilę.")
+        return redirect("topic_detail", topic_id=topic.pk)
 
     is_admin = user.role >= User.ROLE_ADMIN
     is_mod = _is_moderator(user, forum)
@@ -1026,7 +1036,10 @@ def quote_fragment(request, post_id):
     if request.method != "POST":
         return JsonResponse({"ok": False, "error": "POST only"}, status=405)
 
-    post = get_object_or_404(Post.objects.only("pk", "content_bbcode"), pk=post_id)
+    post = get_object_or_404(Post.objects.select_related("author").only("pk", "content_bbcode", "author_id"), pk=post_id)
+    from .user_lock import user_is_locked
+    if post.author and user_is_locked(post.author):
+        return JsonResponse({"ok": False, "error": "Cytowanie chwilowo niedostępne — trwa operacja systemowa."}, status=503)
     selected_text = normalize_selected_text(request.POST.get("selected_text", ""))
     fragment = extract_exact_quote_fragment(post.content_bbcode or "", selected_text)
 
