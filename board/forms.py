@@ -38,6 +38,11 @@ def _check_email_domain(email: str) -> str | None:
 
 TOPIC_TITLE_MAX_LENGTH = 70
 
+# Normalized usernames permanently reserved by the system
+_RESERVED_USERNAME_NORMS = frozenset({
+    "usuniety",   # display label for deleted accounts in quotes
+})
+
 
 class RegisterForm(UserCreationForm):
     email = forms.EmailField(required=True)
@@ -65,6 +70,9 @@ class RegisterForm(UserCreationForm):
         proposed = self.cleaned_data["username"]
         norm_proposed = normalize(proposed)
 
+        if norm_proposed in _RESERVED_USERNAME_NORMS:
+            raise forms.ValidationError("Ta nazwa użytkownika jest zarezerwowana przez system.")
+
         # O(1) lookup via indexed username_normalized column
         conflict = User.objects.filter(username_normalized=norm_proposed).first()
         if conflict:
@@ -89,6 +97,8 @@ class RegisterStartForm(forms.Form):
     def clean_username(self):
         proposed = self.cleaned_data["username"]
         norm_proposed = normalize(proposed)
+        if norm_proposed in _RESERVED_USERNAME_NORMS:
+            raise forms.ValidationError("Ta nazwa użytkownika jest zarezerwowana przez system.")
         conflict = User.objects.filter(username_normalized=norm_proposed).first()
         if not conflict:
             return proposed
