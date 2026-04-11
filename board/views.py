@@ -2189,29 +2189,40 @@ def spam_action(request, post_id):
         do_flag_ip = request.POST.get("do_flag_ip") == "1"
         do_block_domain = request.POST.get("do_block_domain") == "1"
 
+        topic_deleted = False
         with transaction.atomic():
             # 1. Delete post (skip if releasing nick — that deletes all posts anyway)
             if do_delete and not do_release_nick:
-                deleted_order = post.post_order
-                if author:
-                    User.objects.filter(pk=author.pk, post_count__gt=0).update(
-                        post_count=django_models.F("post_count") - 1
+                if topic.posts.count() == 1:
+                    # Last post — delete entire topic
+                    if author:
+                        User.objects.filter(pk=author.pk, post_count__gt=0).update(
+                            post_count=django_models.F("post_count") - 1
+                        )
+                    topic.delete()
+                    topic_deleted = True
+                else:
+                    deleted_order = post.post_order
+                    if author:
+                        User.objects.filter(pk=author.pk, post_count__gt=0).update(
+                            post_count=django_models.F("post_count") - 1
+                        )
+                    post.delete()
+                    topic.posts.filter(post_order__gt=deleted_order).update(
+                        post_order=django_models.F("post_order") - 1
                     )
-                post.delete()
-                topic.posts.filter(post_order__gt=deleted_order).update(
-                    post_order=django_models.F("post_order") - 1
-                )
-                new_last = topic.posts.order_by("-created_at").first()
-                if new_last:
-                    topic.reply_count = topic.posts.count() - 1
-                    topic.last_post = new_last
-                    topic.last_post_at = new_last.created_at
-                    topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
+                    new_last = topic.posts.order_by("-created_at").first()
+                    if new_last:
+                        topic.reply_count = topic.posts.count() - 1
+                        topic.last_post = new_last
+                        topic.last_post_at = new_last.created_at
+                        topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
                 forum.post_count = Post.objects.filter(topic__forum=forum).count()
+                forum.topic_count = forum.topics.count()
                 new_forum_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
                 forum.last_post = new_forum_last
                 forum.last_post_at = new_forum_last.created_at if new_forum_last else None
-                forum.save(update_fields=["post_count", "last_post", "last_post_at"])
+                forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
 
             # 2. Flag IP as dangerous
             if do_flag_ip and not do_delete:
@@ -2252,6 +2263,8 @@ def spam_action(request, post_id):
                 )
 
         messages.success(request, "Akcja antyspamowa wykonana.")
+        if topic_deleted or do_release_nick:
+            return redirect("forum_detail", forum_id=forum.pk)
         return redirect("topic_detail", topic_id=topic.pk)
 
     ban_choices = [

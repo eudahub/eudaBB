@@ -117,30 +117,33 @@ def delete_user_and_cleanup(user: User) -> dict:
 
         Post.objects.filter(author=user).delete()
 
-        # Renumber posts and update topic stats for each affected topic
+        # Delete empty topics, renumber and update stats for the rest
         affected_forum_ids = set()
         for topic in Topic.objects.filter(pk__in=affected_topic_ids).select_related("forum"):
+            affected_forum_ids.add(topic.forum_id)
+            if topic.posts.count() == 0:
+                topic.delete()
+                continue
             # Renumber remaining posts sequentially
             for idx, p in enumerate(
                 topic.posts.order_by("created_at").values_list("pk", flat=True), start=1
             ):
                 Post.objects.filter(pk=p).update(post_order=idx)
-
             remaining = topic.posts.count()
             last_post = topic.posts.order_by("-created_at").first()
             topic.reply_count = max(0, remaining - 1)
             topic.last_post = last_post
             topic.last_post_at = last_post.created_at if last_post else None
             topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
-            affected_forum_ids.add(topic.forum_id)
 
         # Update forum stats
         for forum in Forum.objects.filter(pk__in=affected_forum_ids):
             forum.post_count = Post.objects.filter(topic__forum=forum).count()
+            forum.topic_count = forum.topics.count()
             last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
             forum.last_post = last
             forum.last_post_at = last.created_at if last else None
-            forum.save(update_fields=["post_count", "last_post", "last_post_at"])
+            forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
 
         # 3. Delete the user (SET_NULL on remaining post.author handled by DB)
         user.delete()
