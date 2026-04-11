@@ -1776,8 +1776,9 @@ def register(request):
         if last_sent_raw:
             try:
                 last_sent = timezone.datetime.fromisoformat(last_sent_raw)
-                if timezone.now() - last_sent < timedelta(minutes=30):
-                    wait = 30 - int((timezone.now() - last_sent).total_seconds() / 60)
+                elapsed = timezone.now() - last_sent
+                if elapsed < timedelta(minutes=30):
+                    wait = 30 - int(elapsed.total_seconds() / 60)
                     error = f"Kod już wysłany. Poczekaj jeszcze około {wait} min przed kolejnym wysłaniem."
                     return
             except ValueError:
@@ -1785,11 +1786,10 @@ def register(request):
 
         code = f"{secrets.randbelow(1_000_000):06d}"
         now = timezone.now()
+        expires = now + timedelta(hours=4)
         request.session["register_code"] = code
         request.session["register_code_sent_at"] = now.isoformat()
-        request.session["register_code_expires_at"] = (
-            now + timedelta(minutes=30)
-        ).isoformat()
+        request.session["register_code_expires_at"] = expires.isoformat()
         request.session["register_code_attempts"] = 0
         request.session.modified = True
 
@@ -1799,12 +1799,15 @@ def register(request):
             test_code = code
             return
 
-        from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
+        sent_str   = timezone.localtime(now).strftime("%Y-%m-%d %H:%M")
+        valid_str  = timezone.localtime(expires).strftime("%Y-%m-%d %H:%M")
+        from_addr  = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
         send_mail(
             subject="[eudaHub] Kod rejestracyjny",
             message=(
                 f"Twój kod rejestracyjny dla konta {username}: {code}\n\n"
-                f"Kod jest ważny przez 30 minut.\n\n"
+                f"Wysłano: {sent_str}\n"
+                f"Ważny do: {valid_str}\n\n"
                 f"Jeśli to nie Ty — zignoruj tę wiadomość.\n\n"
                 f"---\n"
                 f"Jak rozpoznać nasze maile: temat zaczyna się od \"[eudaHub]\", "
@@ -1902,6 +1905,17 @@ def register(request):
 
     email_mask = mask_email(pending["email"]) if pending else None
 
+    code_valid_until = None
+    if pending:
+        raw = request.session.get("register_code_expires_at")
+        if raw:
+            try:
+                code_valid_until = timezone.localtime(
+                    timezone.datetime.fromisoformat(raw)
+                ).strftime("%H:%M")
+            except ValueError:
+                pass
+
     return render(request, "registration/register.html", {
         "start_form": start_form,
         "finish_form": finish_form,
@@ -1910,6 +1924,7 @@ def register(request):
         "sent": sent,
         "test_code": test_code,
         "error": error,
+        "code_valid_until": code_valid_until,
     })
 
 
@@ -2370,15 +2385,18 @@ def _from_email() -> str:
 
 
 def _send_reset_code_email(user, code: str, recipient_email: str) -> None:
-    sent_at = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
+    now     = timezone.localtime(timezone.now())
+    expires = now + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
+    sent_str  = now.strftime("%Y-%m-%d %H:%M")
+    valid_str = expires.strftime("%Y-%m-%d %H:%M")
     from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
     send_mail(
         subject="[eudaHub] Kod do resetowania hasła",
         message=(
             f"Nick: {user.username}\n"
             f"Kod: {code}\n"
-            f"Wysłano: {sent_at}\n\n"
-            f"Kod jest ważny przez {PasswordResetCode.CODE_EXPIRY_HOURS} godziny.\n"
+            f"Wysłano: {sent_str}\n"
+            f"Ważny do: {valid_str}\n\n"
             f"Wejdź na forum → Zresetuj hasło i wpisz ten kod razem z nowym hasłem.\n\n"
             f"Jeśli to nie Ty prosiłeś — zignoruj tę wiadomość.\n\n"
             f"---\n"

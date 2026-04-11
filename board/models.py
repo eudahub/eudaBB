@@ -205,7 +205,7 @@ class PasswordResetCode(models.Model):
     expires_at = models.DateTimeField()
     is_used    = models.BooleanField(default=False)
 
-    CODE_EXPIRY_HOURS = 24
+    CODE_EXPIRY_HOURS = 4
     GRACE_MINUTES     = 7
     MAX_PER_HOUR      = 3
 

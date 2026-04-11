@@ -16,7 +16,7 @@
     {% if sent and test_code %}
       <p style="color:green;"><strong>Tryb testowy:</strong> kod to <strong>{{ test_code }}</strong>.</p>
     {% elif sent %}
-      <p style="color:green;">Kod został wysłany. Sprawdź skrzynkę i spam.</p>
+      <p style="color:green;">Kod został wysłany na {{ email_mask }}. Sprawdź skrzynkę i folder Spam.{% if code_valid_until %} Ważny do {{ code_valid_until }}.{% endif %}</p>
     {% endif %}
 
     <form method="post" style="margin-bottom:1rem;">
