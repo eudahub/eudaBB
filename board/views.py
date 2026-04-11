@@ -1769,7 +1769,20 @@ def register(request):
             request.session.pop(key, None)
 
     def send_registration_code(username: str, email: str):
-        nonlocal sent, test_code
+        nonlocal sent, test_code, error
+
+        # Rate limit: 1 code per 30 minutes
+        last_sent_raw = request.session.get("register_code_sent_at")
+        if last_sent_raw:
+            try:
+                last_sent = timezone.datetime.fromisoformat(last_sent_raw)
+                if timezone.now() - last_sent < timedelta(minutes=30):
+                    wait = 30 - int((timezone.now() - last_sent).total_seconds() / 60)
+                    error = f"Kod już wysłany. Poczekaj jeszcze około {wait} min przed kolejnym wysłaniem."
+                    return
+            except ValueError:
+                pass
+
         code = f"{secrets.randbelow(1_000_000):06d}"
         now = timezone.now()
         request.session["register_code"] = code
@@ -1786,13 +1799,19 @@ def register(request):
             test_code = code
             return
 
+        from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
         send_mail(
-            subject="Kod rejestracyjny",
+            subject="[eudaHub] Kod rejestracyjny",
             message=(
                 f"Twój kod rejestracyjny dla konta {username}: {code}\n\n"
-                f"Kod jest ważny przez 30 minut."
+                f"Kod jest ważny przez 30 minut.\n\n"
+                f"Jeśli to nie Ty — zignoruj tę wiadomość.\n\n"
+                f"---\n"
+                f"Jak rozpoznać nasze maile: temat zaczyna się od \"[eudaHub]\", "
+                f"nadawca to {from_addr}.\n"
+                f"Wiadomość mogła trafić do folderu Spam — sprawdź go jeśli nie widzisz maila."
             ),
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+            from_email=_from_email(),
             recipient_list=[email],
             fail_silently=False,
         )
@@ -2344,20 +2363,30 @@ def _find_valid_code(user, code_input: str):
     return None
 
 
+def _from_email() -> str:
+    name = getattr(settings, "EMAIL_FROM_NAME", "Forum")
+    addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
+    return f"{name} <{addr}>"
+
+
 def _send_reset_code_email(user, code: str, recipient_email: str) -> None:
-    from django.utils.formats import date_format
     sent_at = timezone.localtime(timezone.now()).strftime("%Y-%m-%d %H:%M")
+    from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
     send_mail(
-        subject="[Forum] Kod do resetowania hasła",
+        subject="[eudaHub] Kod do resetowania hasła",
         message=(
             f"Nick: {user.username}\n"
             f"Kod: {code}\n"
             f"Wysłano: {sent_at}\n\n"
             f"Kod jest ważny przez {PasswordResetCode.CODE_EXPIRY_HOURS} godziny.\n"
             f"Wejdź na forum → Zresetuj hasło i wpisz ten kod razem z nowym hasłem.\n\n"
-            f"Jeśli to nie Ty prosiłeś — zignoruj tę wiadomość."
+            f"Jeśli to nie Ty prosiłeś — zignoruj tę wiadomość.\n\n"
+            f"---\n"
+            f"Jak rozpoznać nasze maile: temat zaczyna się od \"[eudaHub]\", "
+            f"nadawca to {from_addr}.\n"
+            f"Wiadomość mogła trafić do folderu Spam — sprawdź go jeśli nie widzisz maila."
         ),
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+        from_email=_from_email(),
         recipient_list=[recipient_email],
         fail_silently=False,
     )

@@ -154,3 +154,13 @@ POLL_OPTIONS_SOFT_MAX = config("POLL_OPTIONS_SOFT_MAX", default=50, cast=int)
 
 # Search results snippet length (characters around the best hit)
 SEARCH_SNIPPET_CHARS = config("SEARCH_SNIPPET_CHARS", default=800, cast=int)
+
+# Email / SendGrid
+EMAIL_BACKEND   = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST      = config("EMAIL_HOST",    default="smtp.sendgrid.net")
+EMAIL_PORT      = config("EMAIL_PORT",    default=587, cast=int)
+EMAIL_USE_TLS   = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="apikey")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL",  default="noreply@eudahub.pl")
+EMAIL_FROM_NAME     = config("EMAIL_FROM_NAME",     default="Forum eudaHub")
