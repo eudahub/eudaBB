@@ -16,8 +16,14 @@ import sys
 from eq_common import *
 from eq_phase0 import run_mark_broken
 from eq_phase1 import run_phase1
-from eq_phase2 import run_propagate, run_mark_not_found, run_fix_quote_authors, run_fix_quote_post_ids
-from eq_phase3 import run_bible, run_bible_filter, run_bible_review_apply, load_bible_index
+from eq_phase2_1 import run_propagate
+from eq_phase2_2 import run_mark_not_found
+from eq_phase2_3 import run_fix_quote_authors
+from eq_phase2_4 import run_fix_quote_post_ids
+from eq_phase3 import load_bible_index
+from eq_phase3_1 import run_bible
+from eq_phase3_2 import run_bible_review_apply
+from eq_phase3_3 import run_bible_filter
 import eq_phase3
 from eq_phase4 import run_fix_status, run_to_fquote
 from eq_diag import run_analyze_depth
