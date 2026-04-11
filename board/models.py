@@ -532,6 +532,7 @@ class MorphForm(models.Model):
     form_norm  = models.CharField(max_length=120)
     lemma_norm = models.CharField(max_length=120)
     family_id  = models.IntegerField()
+    nom_form   = models.CharField(max_length=120, default="")
 
     class Meta:
         db_table = "forum_morph_form"

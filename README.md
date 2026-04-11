@@ -215,6 +215,20 @@ python manage.py build_search_index
 
 The command also prints the rebuild time at the end.
 
+### Morphological dictionary (word+ expansion)
+
+When changing morphological family logic (pact, ppas, adj, etc.) it is enough to
+rebuild the morphological dictionary — **no need to reimport posts**:
+
+```bash
+python3 build_morph_csv.py
+python manage.py import_morph_csv morph_families.csv --clear
+python manage.py import_morph_suffix morph_suffixes.csv --clear
+```
+
+`morph_families.csv` / `morph_suffixes.csv` are not in the repository (large files) —
+download from Google Drive or generate from PoliMorf (`build_morph_csv.py`).
+
 ### Search table size
 
 ```bash

@@ -26,6 +26,7 @@ snapshots/
 morph_families*.csv
 morph_suffixes*.csv
 morph_indeclinable.csv
+morph_families_nom.csv
 
 # Work/scratch files
 bible_dry.log

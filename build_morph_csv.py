@@ -29,6 +29,7 @@ DEFAULT_INPUT  = "/home/andrzej/Downloads/Polimorf/PoliMorf-0.6.7.tab"
 DEFAULT_OUTPUT = "morph_families.csv"
 DEFAULT_SUFFIXES    = "morph_suffixes.csv"
 DEFAULT_INDECLINABLE = "morph_indeclinable.csv"
+DEFAULT_NOM      = "morph_families_nom.csv"
 
 
 def _normalize(text: str) -> str:
@@ -45,31 +46,51 @@ SKIP_POS = frozenset({
 })
 
 
-def adj_gender_families(number: str, gender_field: str, degree: str = "pos") -> list[str]:
+def is_nominative_tag(tag: str) -> bool:
+    """True jeśli tag oznacza formę mianownikową (nom) lub bezokolicznik (inf)."""
+    parts = tag.split(":")
+    pos = parts[0]
+    if pos == "inf":
+        return True
+    if pos == "impt":
+        # forma główna = 2. os. liczby pojedynczej (biegnij)
+        return len(parts) > 2 and parts[1] == "sg" and parts[2] == "sec"
+    if pos in ("subst", "depr", "adj", "ger", "pact", "ppas"):
+        case_field = parts[2] if len(parts) > 2 else ""
+        return "nom" in case_field.split(".")
+    if pos in ("adja", "adjp", "adjc"):
+        return True  # formy nieodmienne — jedyna forma w rodzinie
+    return False
+
+
+def gender_families(prefix: str, number: str, gender_field: str, suffix: str) -> list[str]:
     """
-    Wyznacza rodziny dla przymiotnika na podstawie liczby, pola gender i stopnia.
+    Wyznacza rodziny na podstawie liczby, pola gender i sufiksu końcowego.
+    Używane dla adj (suffix=stopień: pos/com/sup) i pact/ppas (suffix=aff/neg).
     gender_field może mieć postać 'm1.m2.m3' lub 'n1.n2' itp.
-    degree: pos / comp / sup
-    Zwraca listę (może być więcej niż jedna, gdy forma jest niejednoznaczna).
     """
     genders = gender_field.split(".")
     result: set[str] = set()
     for g in genders:
         if number == "sg":
             if g.startswith("m"):
-                result.add(f"adj:sg:m:{degree}")
+                result.add(f"{prefix}:sg:m:{suffix}")
             elif g == "f":
-                result.add(f"adj:sg:f:{degree}")
+                result.add(f"{prefix}:sg:f:{suffix}")
             elif g.startswith("n"):
-                result.add(f"adj:sg:n:{degree}")
+                result.add(f"{prefix}:sg:n:{suffix}")
             else:
-                result.add(f"adj:sg:other:{degree}")
+                result.add(f"{prefix}:sg:other:{suffix}")
         else:  # pl
             if g in ("m1", "p1"):
-                result.add(f"adj:pl:vir:{degree}")
+                result.add(f"{prefix}:pl:vir:{suffix}")
             else:
-                result.add(f"adj:pl:nonvir:{degree}")
+                result.add(f"{prefix}:pl:nonvir:{suffix}")
     return sorted(result)
+
+
+def adj_gender_families(number: str, gender_field: str, degree: str = "pos") -> list[str]:
+    return gender_families("adj", number, gender_field, degree)
 
 
 def tag_to_families(tag: str) -> list[str]:
@@ -116,15 +137,21 @@ def tag_to_families(tag: str) -> list[str]:
     if pos == "impt":
         return ["verb:impt"]
 
-    # Imiesłów czynny (biegający): rozbijamy na aff/neg
+    # Imiesłów czynny (biegający): rozbijamy na rodzaje jak adj + aff/neg
+    # tag: pact:number:case:gender:aspect:negation
     if pos == "pact":
         neg_aff = parts[-1] if parts[-1] in ("neg", "aff") else "aff"
-        return [f"pact:{neg_aff}"]
+        if len(parts) < 4:
+            return [f"pact:other:{neg_aff}"]
+        return gender_families("pact", parts[1], parts[3], neg_aff)
 
-    # Imiesłów bierny (robiony): rozbijamy na aff/neg
+    # Imiesłów bierny (robiony): rozbijamy na rodzaje jak adj + aff/neg
+    # tag: ppas:number:case:gender:aspect:negation
     if pos == "ppas":
         neg_aff = parts[-1] if parts[-1] in ("neg", "aff") else "aff"
-        return [f"ppas:{neg_aff}"]
+        if len(parts) < 4:
+            return [f"ppas:other:{neg_aff}"]
+        return gender_families("ppas", parts[1], parts[3], neg_aff)
 
     # Rzeczownik odsłowny (bieganie): rozbijamy na aff/neg
     if pos == "ger":
@@ -154,6 +181,8 @@ def build_csv(input_path: str, output_path: str, skip_pos_out: set | None = None
     # (lemat, nazwa_rodziny) → family_id (int)
     family_id_map: dict[tuple[str, str], int] = {}
     next_id = 0
+    # family_id → nom_form (znormalizowana forma mianownikowa)
+    nom_form_map: dict[int, str] = {}
 
     def get_id(lemma: str, family_name: str) -> int:
         nonlocal next_id
@@ -197,10 +226,17 @@ def build_csv(input_path: str, output_path: str, skip_pos_out: set | None = None
                     skip_pos_out.add(_normalize(lemma))
                 continue
 
+            is_nom = is_nominative_tag(tag)
+            form_n = _normalize(form) if is_nom else None
+
             for family_name in families:
                 fid = get_id(lemma, family_name)
                 writer.writerow([form, lemma, fid])
                 written += 1
+                # Zbierz nom_form: jeśli mianownik, weź najkrótszą (unika nom.voc)
+                if is_nom and form_n:
+                    if fid not in nom_form_map or len(form_n) < len(nom_form_map[fid]):
+                        nom_form_map[fid] = form_n
 
     print(f"\nParsowanie: {written:,} wpisów (z dup.), {skipped:,} pominięto",
           file=sys.stderr)
@@ -238,6 +274,17 @@ def build_csv(input_path: str, output_path: str, skip_pos_out: set | None = None
         for (lemma, fname), fid in sorted(family_id_map.items(), key=lambda x: x[1]):
             w.writerow([fid, lemma, fname])
     print(f"Mapa rodzin: {debug_path}", file=sys.stderr)
+
+    # Zapisz nom_form per family (forma mianownikowa — dla logiki canonical w Django)
+    # Fallback: jeśli nie znaleziono mianownika, użyj znormalizowanego lematu
+    nom_path = output_path.replace(".csv", "_nom.csv")
+    with open(nom_path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["family_id", "nom_form"])
+        for (lemma, _fname), fid in sorted(family_id_map.items(), key=lambda x: x[1]):
+            nom = nom_form_map.get(fid) or _normalize(lemma)
+            w.writerow([fid, nom])
+    print(f"Nom-form CSV: {nom_path} ({len(family_id_map):,} rodzin)", file=sys.stderr)
 
 
 def build_auxiliary_csvs(

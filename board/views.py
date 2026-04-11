@@ -877,7 +877,7 @@ def _parse_search_query(raw_query: str):
             seen_g: set[str] = set()
             deduped = [x for x in group if not (x in seen_g or seen_g.add(x))]
             term_groups.append(deduped)
-            display_parts.append("|".join(deduped))
+            display_parts.append("| ".join(deduped))
         else:
             skipped_terms.extend(group_skipped)
 

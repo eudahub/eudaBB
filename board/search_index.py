@@ -119,6 +119,8 @@ def rebuild_post_search_index_for_posts(posts, chunk_size: int = 500) -> int:
 def expand_morph_term(term_norm: str) -> list[str]:
     """
     Zwraca wszystkie znormalizowane formy z tej samej rodziny morfologicznej.
+    Jeśli wpisana forma jest mianownikową formą rodziny (nom_form), szuka tylko
+    tych rodzin — np. "anonim" → tylko sg, "anonimy" → tylko pl.
     Jeśli słowa nie ma w słowniku, próbuje analogii sufiksowej (fallback).
     """
     from .models import MorphForm
@@ -127,7 +129,7 @@ def expand_morph_term(term_norm: str) -> list[str]:
         families = list(
             MorphForm.objects
             .filter(form_norm=term_norm)
-            .values("lemma_norm", "family_id")
+            .values("lemma_norm", "family_id", "nom_form")
             .distinct()
         )
     except Exception:
@@ -138,10 +140,12 @@ def expand_morph_term(term_norm: str) -> list[str]:
         analog = _expand_by_suffix_analogy(term_norm)
         return analog if analog else [term_norm]
 
-    # Jeśli wpisana forma jest lematem w jakiejś rodzinie (kot→kot),
-    # ogranicz do tych rodzin — pomija przypadkowe trafienia w innych
-    # lematach (kot = gen.pl leksemu "kota").
-    canonical = [e for e in families if e["lemma_norm"] == term_norm]
+    # Jeśli wpisana forma jest mianownikową (nom_form) jakiejś rodziny,
+    # ogranicz do tych rodzin — np. "anonim" → sg, "anonimy" → pl.
+    # Fallback na lemma_norm dla danych zaimportowanych bez nom_form.
+    canonical = [e for e in families if e["nom_form"] == term_norm]
+    if not canonical:
+        canonical = [e for e in families if e["lemma_norm"] == term_norm]
     working = canonical if canonical else families
 
     q = Q()
@@ -165,7 +169,7 @@ def expand_morph_term_all(term_norm: str) -> list[str]:
         families = list(
             MorphForm.objects
             .filter(form_norm=term_norm)
-            .values("lemma_norm", "family_id")
+            .values("lemma_norm", "family_id", "nom_form")
             .distinct()
         )
     except Exception:
@@ -175,8 +179,10 @@ def expand_morph_term_all(term_norm: str) -> list[str]:
         analog = _expand_by_suffix_analogy(term_norm)
         return analog if analog else [term_norm]
 
-    # Kanoniczny lemat (forma = lemat) lub wszystkie lematy
-    canonical = [e for e in families if e["lemma_norm"] == term_norm]
+    # Kanoniczny lemat: preferuj nom_form == term, fallback na lemma_norm == term
+    canonical = [e for e in families if e["nom_form"] == term_norm]
+    if not canonical:
+        canonical = [e for e in families if e["lemma_norm"] == term_norm]
     working_lemmas = {e["lemma_norm"] for e in (canonical if canonical else families)}
 
     # Wszystkie formy ze wszystkich rodzin danego lematu

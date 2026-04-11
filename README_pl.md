@@ -215,6 +215,20 @@ python manage.py build_search_index
 
 Komenda wypisuje też czas wykonania na końcu.
 
+### Słownik morfologiczny (ekspansja słowo+)
+
+Przy zmianie logiki rodzin morfologicznych (pact, ppas, adj itp.) wystarczy przebudować
+słownik morfologiczny — **nie trzeba reimportować postów**:
+
+```bash
+python3 build_morph_csv.py
+python manage.py import_morph_csv morph_families.csv --clear
+python manage.py import_morph_suffix morph_suffixes.csv --clear
+```
+
+Pliki `morph_families.csv` / `morph_suffixes.csv` nie są w repozytorium (duże) —
+pobierz je z Google Drive lub wygeneruj z PoliMorf (`build_morph_csv.py`).
+
 ### Rozmiar tabeli wyszukiwania
 
 ```bash

@@ -11,6 +11,7 @@ Po zmianie normalizacji (ł→l) konieczny też rebuild indeksu wyszukiwania:
 """
 
 import csv
+import os
 import sys
 
 from django.core.management.base import BaseCommand, CommandError
@@ -38,6 +39,26 @@ class Command(BaseCommand):
         if options["clear"]:
             count = MorphForm.objects.all().delete()[0]
             self.stdout.write(f"Wyczyszczono {count} wierszy.")
+
+        # Wczytaj towarzyszący plik nom_form (morph_families_nom.csv)
+        nom_path = path.replace("morph_families.csv", "morph_families_nom.csv")
+        if not nom_path.endswith("morph_families_nom.csv"):
+            # fallback gdy ścieżka nie zawiera dokładnie morph_families.csv
+            nom_path = path.replace(".csv", "_nom.csv")
+        nom_map: dict[int, str] = {}
+        if os.path.exists(nom_path):
+            with open(nom_path, encoding="utf-8", newline="") as nf:
+                for row in csv.DictReader(nf):
+                    try:
+                        nom_map[int(row["family_id"])] = row["nom_form"]
+                    except (KeyError, ValueError):
+                        pass
+            self.stdout.write(f"Wczytano nom_form: {len(nom_map):,} rodzin z {nom_path}")
+        else:
+            self.stdout.write(
+                f"Uwaga: brak {nom_path} — pole nom_form będzie puste "
+                "(wyszukiwanie + będzie używać starej logiki lematu)."
+            )
 
         batch: list[MorphForm] = []
         inserted = 0
@@ -68,10 +89,13 @@ class Command(BaseCommand):
                     skipped += 1
                     continue
 
+                nom_form = nom_map.get(family_id, "")
+
                 batch.append(MorphForm(
                     form_norm=form_norm,
                     lemma_norm=lemma_norm,
                     family_id=family_id,
+                    nom_form=nom_form,
                 ))
 
                 if len(batch) >= CHUNK:
