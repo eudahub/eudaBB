@@ -207,13 +207,20 @@ Kod jest podzielony na pliki według faz (wszystkie w `board/management/commands
 
 | Plik | Zawartość |
 |------|-----------|
-| `enrich_quotes.py` | Punkt wejścia: `parse_args()` + `main()` — tylko 233 linie |
+| `enrich_quotes.py` | Punkt wejścia: `parse_args()` + `main()` — 233 linie |
 | `eq_common.py` | Wspólne narzędzia: stałe DB, parsowanie BBCode, `QuoteBlock`, `parse_quotes`, funkcje budowania cache (author, global, topic, ngram), `create_quotes_table` |
-| `eq_phase0.py` | Faza 0: `run_mark_broken` — wykrywa posty z niezbalansowanymi tagami |
+| `eq_phase0.py` | Faza 0: `run_mark_broken` |
 | `eq_phase1.py` | Faza 1: `enrich_post` + `run_phase1` — resolving `[quote]` → konkretny post (known-user, known-user-global, anon-topic, anon-global, ngram) |
-| `eq_phase2.py` | Faza 2: `run_propagate`, `run_fix_quote_authors`, `run_fix_quote_post_ids`, `run_mark_not_found` |
-| `eq_phase3.py` | Faza 3: indeks biblijny + `run_bible`, `run_bible_filter`, `run_bible_review_apply` |
-| `eq_phase4.py` | Faza 4: `run_fix_status`, `run_to_fquote` — finalizacja |
+| `eq_phase2.py` | Faza 2 — współdzielone wyrażenia regularne |
+| `eq_phase2_1.py` | Faza 2: `run_propagate` |
+| `eq_phase2_2.py` | Faza 2: `run_mark_not_found` + pomocnicze (`extract_nonquote_text`, `find_deeper_quote_source`, `resolve_quoted_source_post_id`) |
+| `eq_phase2_3.py` | Faza 2: `run_fix_quote_authors` |
+| `eq_phase2_4.py` | Faza 2: `run_fix_quote_post_ids` |
+| `eq_phase3.py` | Faza 3 — globale i helpery biblijne (`_BIBLE_NGRAM_INDEX`, `load_bible_index`, `_bible_votes` itd.) |
+| `eq_phase3_1.py` | Faza 3: `run_bible` |
+| `eq_phase3_2.py` | Faza 3: `run_bible_review_apply` |
+| `eq_phase3_3.py` | Faza 3: `run_bible_filter` |
+| `eq_phase4.py` | Faza 4: `run_fix_status`, `run_to_fquote` |
 | `eq_diag.py` | Diagnostyka: `run_analyze_depth` — tylko analiza, bez zmian w danych |
 
 Poniżej prawidłowa kolejność passów:
