@@ -8,20 +8,24 @@ from .auth_utils import prehash_password
 from .polls import validate_poll_option_count
 
 
-def _is_spam_email_domain(email: str) -> bool:
-    """Return True if the email's base domain is in SpamDomain with spam=1."""
+def _check_email_domain(email: str) -> str | None:
+    """Validate email domain. Returns error message or None if ok."""
     try:
         import tldextract
         from .models import SpamDomain
         host = email.split("@", 1)[-1].lower().strip()
         ext = tldextract.extract(host)
-        if ext.domain and ext.suffix:
-            base = f"{ext.domain}.{ext.suffix}"
-        else:
-            base = host
-        return SpamDomain.objects.filter(domain=base, spam=1).exists()
+        if not ext.suffix:
+            return "Adres email ma nieprawidłowe rozszerzenie domeny."
+        base = f"{ext.domain}.{ext.suffix}"
+        if SpamDomain.objects.filter(domain=base, spam=1).exists():
+            return (
+                "Adres skrzynki pocztowej wygląda na jednorazowy, tymczasowy lub spambox. "
+                "Użyj stałego adresu email."
+            )
     except Exception:
-        return False
+        pass
+    return None
 
 TOPIC_TITLE_MAX_LENGTH = 70
 
@@ -88,11 +92,9 @@ class RegisterStartForm(forms.Form):
 
     def clean_email(self):
         email = self.cleaned_data["email"].strip().lower()
-        if _is_spam_email_domain(email):
-            raise forms.ValidationError(
-                "Adres skrzynki pocztowej wygląda na jednorazowy, tymczasowy lub spambox. "
-                "Użyj stałego adresu email."
-            )
+        err = _check_email_domain(email)
+        if err:
+            raise forms.ValidationError(err)
         conflict = User.objects.filter(email=email).first()
         if not conflict:
             return email
