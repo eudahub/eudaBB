@@ -542,6 +542,7 @@ class PostSearchIndex(models.Model):
 class MorphForm(models.Model):
     """Morfologiczne rodziny słów (PoliMorf) do ekspansji zapytań typu słowo+."""
 
+    pk = models.CompositePrimaryKey("form_norm", "lemma_norm", "family_id")
     form_norm  = models.CharField(max_length=120)
     lemma_norm = models.CharField(max_length=120)
     family_id  = models.IntegerField()
@@ -549,7 +550,6 @@ class MorphForm(models.Model):
 
     class Meta:
         db_table = "forum_morph_form"
-        unique_together = [("form_norm", "lemma_norm", "family_id")]
         indexes = [
             models.Index(fields=["form_norm"]),
             models.Index(fields=["lemma_norm", "family_id"]),
