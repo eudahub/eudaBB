@@ -23,5 +23,13 @@ done
 source "${VENV_ACTIVATE}"
 cd "${SCRIPT_DIR}"
 export FORUM
+
+PORT="${BIND##*:}"
+LISTENING=$(lsof -ti:"${PORT}" -sTCP:LISTEN 2>/dev/null)
+if [[ -n "${LISTENING}" ]]; then
+  echo "==> Zwalnianie portu ${PORT} (PID: ${LISTENING})"
+  kill -9 ${LISTENING}
+fi
+
 echo "==> Forum: ${FORUM}  |  Serwer: ${BIND}"
 python manage.py runserver "${BIND}"
