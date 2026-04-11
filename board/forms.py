@@ -18,6 +18,8 @@ def _check_email_domain(email: str) -> str | None:
         if not ext.suffix:
             return "Adres email ma nieprawidłowe rozszerzenie domeny."
         name = ext.domain
+        if name.startswith("mail2"):
+            return "Adres email pochodzi z domeny o podejrzanie długiej nazwie."
         if len(name) > 29:
             return "Adres email pochodzi z domeny o podejrzanie długiej nazwie."
         if ("mail" in name or "box" in name) and len(name) > 11:
