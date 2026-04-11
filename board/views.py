@@ -2160,6 +2160,7 @@ def spam_action(request, post_id):
 
     # Email domain info
     email_domain = None
+    domain_users = []
     domain_user_count = 0
     domain_already_blocked = False
     if author and author.email:
@@ -2169,9 +2170,12 @@ def spam_action(request, post_id):
             ext = tldextract.extract(author.email.split("@")[-1])
             if ext.domain and ext.suffix:
                 email_domain = f"{ext.domain}.{ext.suffix}"
-                domain_user_count = User.objects.filter(
-                    email__iendswith=f"@{email_domain}"
-                ).count()
+                domain_users = list(
+                    User.objects.filter(email__iendswith=f"@{email_domain}")
+                    .order_by("-post_count")
+                    .values("pk", "username", "post_count", "date_joined")
+                )
+                domain_user_count = len(domain_users)
                 domain_already_blocked = SpamDomain.objects.filter(
                     domain=email_domain, spam=1
                 ).exists()
@@ -2264,6 +2268,7 @@ def spam_action(request, post_id):
         "topic": topic,
         "author": author,
         "email_domain": email_domain,
+        "domain_users": domain_users,
         "domain_user_count": domain_user_count,
         "domain_already_blocked": domain_already_blocked,
         "dangerous_days": getattr(settings, "IP_RETAIN_DANGEROUS_DAYS", 90),

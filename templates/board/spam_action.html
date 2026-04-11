@@ -54,17 +54,40 @@
   {% if email_domain %}
   <fieldset style="margin-bottom:1rem;padding:.6rem .8rem;border:1px solid #c88;">
     <legend style="font-size:12px;font-weight:bold;color:#900;">Domena email: {{ email_domain }}</legend>
-    <div style="font-size:12px;color:#555;margin-bottom:.4rem;">
-      Użytkowników z tej domeny: {{ domain_user_count }}
-      {% if domain_already_blocked %}
-        — <span style="color:#900;font-weight:bold;">domena już zablokowana</span>
-      {% endif %}
-    </div>
-    {% if not domain_already_blocked %}
-      <label style="display:flex;gap:.4rem;align-items:center;">
+    {% if domain_already_blocked %}
+      <div style="font-size:12px;color:#900;font-weight:bold;margin-bottom:.4rem;">Domena już zablokowana w spamboxes.</div>
+    {% else %}
+      <label style="display:flex;gap:.4rem;align-items:center;margin-bottom:.5rem;">
         <input type="checkbox" name="do_block_domain" value="1">
         <span style="font-size:13px;">Dodaj domenę do spamboxes (spam=1)</span>
       </label>
+    {% endif %}
+    <div style="font-size:12px;color:#555;margin-bottom:.3rem;">
+      Użytkownicy z tej domeny ({{ domain_user_count }}):
+    </div>
+    {% if domain_users %}
+      <div style="max-height:160px;overflow-y:auto;border:1px solid #ddd;font-size:12px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr style="background:#f8f1f1;position:sticky;top:0;">
+              <th style="text-align:left;padding:2px 6px;">Nick</th>
+              <th style="text-align:right;padding:2px 6px;">Postów</th>
+              <th style="text-align:right;padding:2px 6px;">Dołączył</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in domain_users %}
+            <tr style="border-top:1px solid #eee;">
+              <td style="padding:2px 6px;">
+                <a href="{% url 'user_profile' u.pk %}" target="_blank">{{ u.username }}</a>
+              </td>
+              <td style="text-align:right;padding:2px 6px;">{{ u.post_count }}</td>
+              <td style="text-align:right;padding:2px 6px;">{{ u.date_joined|date:"d.m.Y" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     {% endif %}
   </fieldset>
   {% endif %}
