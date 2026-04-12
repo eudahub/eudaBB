@@ -2585,6 +2585,14 @@ def request_reset(request):
                 "error": msg, "reason": reason, "prefill_username": username,
             })
 
+        if user.is_temporary:
+            msg = "Konta tymczasowe nie mogą resetować hasła."
+            if is_ajax:
+                return ajax_err(msg)
+            return render(request, "registration/request_reset.html", {
+                "error": msg, "reason": reason, "prefill_username": username,
+            })
+
         if not user.email:
             msg = "To konto nie ma adresu email. Skontaktuj się z administratorem."
             if is_ajax:
