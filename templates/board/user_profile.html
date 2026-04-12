@@ -2,7 +2,7 @@
 {% block title %}{{ profile.username }}{% endblock %}
 
 {% block content %}
-<h2>{{ profile.username }}</h2>
+<h2>{{ profile.username }}{% if profile.is_temporary %} <span style="font-size:14px;color:#999;border:1px solid #ccc;padding:1px 6px;border-radius:3px;">konto tymczasowe</span>{% endif %}</h2>
 
 <table style="border-collapse:collapse; margin-bottom:1rem;">
   {% if profile.avatar %}

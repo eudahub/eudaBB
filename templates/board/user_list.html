@@ -25,7 +25,7 @@
       {% for u in page.object_list %}
       <tr style="border-bottom:1px solid #eee;">
         <td style="padding:.3rem .6rem;">
-          <a href="{% url 'user_profile' u.pk %}">{{ u.username }}</a>
+          <a href="{% url 'user_profile' u.pk %}"{% if u.is_temporary %} style="color:#999;"{% endif %}>{{ u.username }}</a>{% if u.is_temporary %} <span style="font-size:10px;color:#999;">[tymcz.]</span>{% endif %}
           <a href="{% url 'search' %}?author={{ u.username|urlencode }}" style="margin-left:.5rem;font-size:11px;color:#800000;" title="Szukaj postów tego użytkownika">posty</a>
         </td>
         <td style="padding:.3rem .6rem; text-align:right;">{{ u.post_count }}</td>

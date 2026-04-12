@@ -47,6 +47,7 @@
         <a href="{{ topic.unread_url }}">{{ topic.title }}</a>
         {% if topic.has_unread %}<strong style="color:#800000;"> [nowe]</strong>{% endif %}
         {% if topic.is_locked %} 🔒{% endif %}
+        {% if topic.is_temporary %}<span style="font-size:10px;color:#999;"> [tymcz.]</span>{% endif %}
       </td>
       <td>{{ topic.author.username|default:"—" }}</td>
       <td>{{ topic.reply_count }}</td>

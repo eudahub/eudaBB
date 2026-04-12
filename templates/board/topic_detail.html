@@ -202,9 +202,9 @@
 
 {% for post in page.object_list %}
 {% if visible_post_ids == None or post.pk in visible_post_ids %}
-<div class="post-box" id="post-{{ post.pk }}">
+<div class="post-box" id="post-{{ post.pk }}"{% if post.is_temporary %} style="border-left:3px solid #ccc;"{% endif %}>
   <div class="post-header">
-    <span>#{{ post.post_order }}</span>
+    <span>#{{ post.post_order }}{% if post.is_temporary %} <span style="font-size:11px;color:#999;">[tymcz.]</span>{% endif %}</span>
     <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
     <span style="display:flex;gap:.35rem;align-items:center;">
       <button class="bbsrc-btn" data-quote-trigger="1" onclick="quotePost(this)"
@@ -244,7 +244,10 @@
     <tr>
       <td class="post-author">
         {% if post.author %}
-          <strong><a href="{% url 'user_profile' post.author.pk %}" style="color:inherit;">{{ post.author.username }}</a></strong>
+          <strong><a href="{% url 'user_profile' post.author.pk %}" style="{% if post.author.is_temporary %}color:#999;{% else %}color:inherit;{% endif %}">{{ post.author.username }}</a></strong>
+          {% if post.author.is_temporary %}
+            <br><span style="font-size:10px;color:#999;border:1px solid #ccc;padding:0 3px;border-radius:2px;">tymczasowe</span>
+          {% endif %}
           {% if post.author.avatar %}
             <br><a href="{% url 'user_profile' post.author.pk %}"><img src="{{ post.author.avatar.url }}" alt="" style="max-width:80px; max-height:80px; display:block; margin:.3rem 0;"></a>
           {% endif %}
@@ -336,7 +339,10 @@
   <div class="spam-hidden" style="display:none;">
     <table style="width:100%; border-collapse: collapse;">
       <tr>
-        <td class="post-author"><strong>{{ post.author.username|default:"[usunięty]" }}</strong></td>
+        <td class="post-author">
+          <strong{% if post.author.is_temporary %} style="color:#999;"{% endif %}>{{ post.author.username|default:"[usunięty]" }}</strong>
+          {% if post.author.is_temporary %}<br><span style="font-size:10px;color:#999;">tymczasowe</span>{% endif %}
+        </td>
         <td class="post-content">{{ post|post_content }}</td>
       </tr>
     </table>
