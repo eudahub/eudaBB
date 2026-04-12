@@ -254,7 +254,8 @@ def _get_client_ip(request):
 
 
 def _render_and_create_post(topic: Topic, author, content_bbcode: str,
-                             post_order: int, author_ip: str = None) -> Post:
+                             post_order: int, author_ip: str = None,
+                             is_temporary: bool = False) -> Post:
     retain_until = _retain_until(flagged=False) if author_ip else None
     post = Post.objects.create(
         topic=topic,
@@ -263,9 +264,16 @@ def _render_and_create_post(topic: Topic, author, content_bbcode: str,
         post_order=post_order,
         author_ip=author_ip,
         ip_retain_until=retain_until,
+        is_temporary=is_temporary,
     )
     rebuild_quote_references_for_post(post)
     return post
+
+
+def _is_temporary_content_mode():
+    """Return True if new posts/topics should be created as temporary."""
+    from .models import SiteConfig
+    return SiteConfig.get().site_mode in (SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA)
 
 
 # ---------------------------------------------------------------------------
@@ -576,10 +584,12 @@ def new_topic(request, forum_id):
     if request.method == "POST":
         form = NewTopicForm(request.POST, is_admin=is_admin)
         if form.is_valid():
+            temp = _is_temporary_content_mode()
             topic = Topic.objects.create(
                 forum=forum,
                 title=form.cleaned_data["title"],
                 author=request.user,
+                is_temporary=temp,
             )
             post = _render_and_create_post(
                 topic=topic,
@@ -587,6 +597,7 @@ def new_topic(request, forum_id):
                 content_bbcode=form.cleaned_data["content"],
                 post_order=1,
                 author_ip=_get_client_ip(request),
+                is_temporary=temp,
             )
             _update_topic_stats(topic, post)
             _update_forum_stats(forum, post)
@@ -669,6 +680,7 @@ def reply(request, topic_id):
                 content_bbcode=form.cleaned_data["content"],
                 post_order=next_order,
                 author_ip=_get_client_ip(request),
+                is_temporary=_is_temporary_content_mode(),
             )
             _update_topic_stats(topic, post)
             _update_forum_stats(topic.forum, post)
