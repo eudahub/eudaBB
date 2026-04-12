@@ -10,38 +10,29 @@
     <fieldset>
       <legend>Tryb serwisu</legend>
       <label style="display:block;margin-bottom:.3rem;">
-        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_NORMAL }}"
-               {% if cfg.site_mode == SiteConfig.MODE_NORMAL %}checked{% endif %}>
-        Normalny
+        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_PRODUCTION }}"
+               {% if cfg.site_mode == SiteConfig.MODE_PRODUCTION %}checked{% endif %}>
+        Produkcja
       </label>
       <label style="display:block;margin-bottom:.3rem;">
         <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_READONLY }}"
                {% if cfg.site_mode == SiteConfig.MODE_READONLY %}checked{% endif %}>
-        Tylko do odczytu (blokuje POST)
+        Tylko do odczytu (nikt nie może się zalogować ani pisać)
+      </label>
+      <label style="display:block;margin-bottom:.3rem;">
+        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_MAINTENANCE }}"
+               {% if cfg.site_mode == SiteConfig.MODE_MAINTENANCE %}checked{% endif %}>
+        Serwis (bramka + tymczasowe konta)
       </label>
       <label style="display:block;margin-bottom:.5rem;">
-        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_CLOSED }}"
-               {% if cfg.site_mode == SiteConfig.MODE_CLOSED %}checked{% endif %}>
-        Zamknięte — tylko lista serwisowa
+        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_BETA }}"
+               {% if cfg.site_mode == SiteConfig.MODE_BETA %}checked{% endif %}>
+        Beta (otwarte + tymczasowe konta)
       </label>
       <label for="maintenance_message" style="font-size:12px;">Komunikat na stronie przerwy</label>
       <textarea name="maintenance_message" id="maintenance_message"
                 rows="2" style="width:100%;box-sizing:border-box;font-size:13px;"
                 >{{ cfg.maintenance_message }}</textarea>
-    </fieldset>
-
-    <fieldset style="margin-top:.8rem;">
-      <legend>Kody resetowania hasła</legend>
-      <label>
-        <input type="radio" name="reset_mode" value="{{ SiteConfig.RESET_EMAIL }}"
-               {% if cfg.reset_mode == SiteConfig.RESET_EMAIL %}checked{% endif %}>
-        Wyślij emailem
-      </label><br>
-      <label>
-        <input type="radio" name="reset_mode" value="{{ SiteConfig.RESET_POPUP }}"
-               {% if cfg.reset_mode == SiteConfig.RESET_POPUP %}checked{% endif %}>
-        Pokaż w oknie popup (tryb testowy — nie wysyła emaili)
-      </label>
     </fieldset>
 
     <fieldset style="margin-top:.8rem;">

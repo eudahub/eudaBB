@@ -85,6 +85,10 @@ class User(AbstractUser):
         default=False,
         help_text="Superadmin: manages users and forum structure. Cannot post, has no email, no password reset.",
     )
+    is_temporary = models.BooleanField(
+        default=False,
+        help_text="Temporary account created during maintenance/beta — deleted on mode cleanup.",
+    )
 
     ROLE_USER      = 0
     ROLE_MODERATOR = 1
@@ -356,6 +360,10 @@ class Topic(models.Model):
         choices=TopicType.choices, default=TopicType.NORMAL,
     )
     is_locked = models.BooleanField(default=False)
+    is_temporary = models.BooleanField(
+        default=False, db_index=True,
+        help_text="Auto-managed: True when all posts are temporary, False when any post is permanent.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     # Cached counters — updated by helpers in views.py
@@ -462,6 +470,11 @@ class Post(models.Model):
     # Sequential position within topic — used for pagination and quote references
     post_order = models.PositiveIntegerField(default=0)
     like_count = models.PositiveIntegerField(default=0)
+
+    is_temporary = models.BooleanField(
+        default=False, db_index=True,
+        help_text="Temporary post — excluded from export, deleted on mode cleanup.",
+    )
 
     # Set during import when the post has unbalanced [quote]/[/quote] tags
     # (quote_status=4 in sfiniabb.db). Content is displayed verbatim, not parsed.
@@ -781,17 +794,6 @@ class PostLike(models.Model):
 class SiteConfig(models.Model):
     """Singleton table (always pk=1) — site-wide toggles configurable by root."""
 
-    # Reset code delivery: 'email' sends real mail, 'popup' shows code on screen
-    RESET_EMAIL = "email"
-    RESET_POPUP = "popup"
-    RESET_MODE_CHOICES = [
-        (RESET_EMAIL, "Wyślij emailem"),
-        (RESET_POPUP, "Pokaż w oknie (tryb testowy)"),
-    ]
-    reset_mode = models.CharField(
-        max_length=10, choices=RESET_MODE_CHOICES, default=RESET_EMAIL
-    )
-
     # Show "Przełącz" link in nav (lets you quickly switch accounts — test use only)
     show_switch_link = models.BooleanField(default=False)
     search_snippet_chars = models.PositiveIntegerField(default=800)
@@ -800,16 +802,18 @@ class SiteConfig(models.Model):
         help_text="Miękki limit opcji ankiety (max = twardy limit z settings POLL_OPTIONS_HARD_MAX, domyślnie 64).",
     )
 
-    MODE_NORMAL   = "normal"
-    MODE_READONLY = "readonly"
-    MODE_CLOSED   = "closed"
+    MODE_PRODUCTION  = "production"
+    MODE_READONLY    = "readonly"
+    MODE_MAINTENANCE = "maintenance"
+    MODE_BETA        = "beta"
     SITE_MODE_CHOICES = [
-        (MODE_NORMAL,   "Normalny"),
-        (MODE_READONLY, "Tylko do odczytu"),
-        (MODE_CLOSED,   "Zamknięte (tylko lista serwisowa)"),
+        (MODE_PRODUCTION,  "Produkcja"),
+        (MODE_READONLY,    "Tylko do odczytu"),
+        (MODE_MAINTENANCE, "Serwis (bramka + tymczasowe konta)"),
+        (MODE_BETA,        "Beta (otwarte + tymczasowe konta)"),
     ]
     site_mode = models.CharField(
-        max_length=10, choices=SITE_MODE_CHOICES, default=MODE_NORMAL
+        max_length=12, choices=SITE_MODE_CHOICES, default=MODE_PRODUCTION
     )
     maintenance_message = models.TextField(
         blank=True, default="",

@@ -190,7 +190,7 @@
           {% endif %}
         </span>
         <a href="{% url 'new_posts' %}">Nowe posty</a>
-        <a href="{% url 'my_topics' %}">Twoje posty</a>
+        <a href="{% url 'my_topics' %}">Wątki z twoimi postami</a>
         <a href="{% url 'unread_topics' %}">Nieprzeczytane</a>
         <a href="{% url 'new_topics' %}">Nowe wątki</a>
         <a href="{% url 'unanswered_topics' %}">Bez odpowiedzi</a>
@@ -198,7 +198,7 @@
         <a href="{% url 'user_list' %}">Użytkownicy</a>
         <a href="{% url 'pm_inbox' %}">PM{% if pm_unread %} <strong>({{ pm_unread }})</strong>{% endif %}</a>
         {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
-        {% if user.is_root %}<a href="{% url 'root_config' %}">Konfiguracja</a>{% endif %}
+        {% if user.is_root %}<a href="{% url 'root_config' %}">RootConfig</a>{% endif %}
         <form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Wyloguj</button></form>
         {% if site_config.show_switch_link %}<form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<input type="hidden" name="next" value="{% url 'login' %}"><button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Przełącz</button></form>{% endif %}
         {% if request.session.maintenance_access %}<form method="post" action="{% url 'maintenance_logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:#c00;cursor:pointer;font-size:inherit;font-weight:bold;">Wyloguj z serwisu</button></form>{% endif %}

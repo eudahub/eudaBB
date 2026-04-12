@@ -19,8 +19,8 @@ class MaintenanceModeMiddleware:
     """Block or restrict access based on SiteConfig.site_mode.
 
     normal   — no effect
-    readonly — GET requests pass through; POST requests (except /admin/) get
-               a 503 maintenance page
+    readonly — GET requests pass through; POST requests are blocked for everyone
+               except root (no login, no posting, no registration)
     closed   — only staff and users on MaintenanceAllowedUser may log in;
                everyone else sees the maintenance gate at /przerwa/
     """
@@ -51,7 +51,7 @@ class MaintenanceModeMiddleware:
                 )
             return self.get_response(request)
 
-        if mode == SiteConfig.MODE_CLOSED:
+        if mode == SiteConfig.MODE_MAINTENANCE:
             if request.session.get("maintenance_access"):
                 return self.get_response(request)
             # No service session → gate

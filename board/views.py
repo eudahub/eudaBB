@@ -1620,7 +1620,6 @@ def my_topics(request):
         .filter(
             user=request.user,
             topic__forum__archive_level__lte=request.user.archive_access,
-            topic__author_id__in=get_ignored_user_ids(request.user) if False else [],
         )
         .order_by("-last_post_at", "-topic_id")
     )
@@ -1794,8 +1793,7 @@ def register(request):
         request.session["register_code_attempts"] = 0
         request.session.modified = True
 
-        cfg = SiteConfig.get()
-        if getattr(settings, "TEST_MODE", False) or cfg.reset_mode == SiteConfig.RESET_POPUP:
+        if getattr(settings, "TEST_MODE", False):
             sent = True
             test_code = code
             return
@@ -2558,8 +2556,7 @@ def request_reset(request):
         expires = timezone.now() + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
         PasswordResetCode.objects.create(user=user, code=code, expires_at=expires)
 
-        cfg = SiteConfig.get()
-        use_popup = (cfg.reset_mode == SiteConfig.RESET_POPUP)
+        use_popup = getattr(settings, "TEST_MODE", False)
 
         if use_popup:
             sent_at = timezone.now().strftime("%Y-%m-%d %H:%M")
@@ -3078,10 +3075,9 @@ def root_config(request):
             else:
                 messages.warning(request, "Nie zaznaczono żadnego konta.")
         else:
-            cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
             cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
-            new_mode = request.POST.get("site_mode", SiteConfig.MODE_NORMAL)
-            if new_mode in (SiteConfig.MODE_NORMAL, SiteConfig.MODE_READONLY, SiteConfig.MODE_CLOSED):
+            new_mode = request.POST.get("site_mode", SiteConfig.MODE_PRODUCTION)
+            if new_mode in (SiteConfig.MODE_PRODUCTION, SiteConfig.MODE_READONLY, SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA):
                 cfg.site_mode = new_mode
             cfg.maintenance_message = request.POST.get("maintenance_message", "").strip()
             hard_limit = getattr(settings, "POLL_OPTIONS_HARD_MAX", 64)
@@ -3363,7 +3359,8 @@ def maintenance_gate(request):
 
 def maintenance_logout(request):
     """Clear maintenance_access session flag and log out from forum."""
+    from django.contrib.auth import logout as auth_logout
     request.session.pop("maintenance_access", None)
     request.session.pop("maintenance_user", None)
-    logout(request)
+    auth_logout(request)
     return redirect("maintenance_gate")
