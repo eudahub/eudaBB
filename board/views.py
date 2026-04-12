@@ -276,6 +276,24 @@ def _is_temporary_content_mode():
     return SiteConfig.get().site_mode in (SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA)
 
 
+def can_convert_to_permanent(post):
+    """Check if a temporary post can be converted to permanent.
+
+    Returns (can_convert: bool, reason: str|None).
+    Reasons: 'not_temporary', 'temporary_user', 'quotes_temporary'.
+    """
+    if not post.is_temporary:
+        return False, "not_temporary"
+    if post.author and post.author.is_temporary:
+        return False, "temporary_user"
+    from .models import QuoteReference
+    if QuoteReference.objects.filter(
+        post=post, source_post__is_temporary=True
+    ).exists():
+        return False, "quotes_temporary"
+    return True, None
+
+
 # ---------------------------------------------------------------------------
 # Public views
 # ---------------------------------------------------------------------------
@@ -443,6 +461,21 @@ def topic_detail(request, topic_id):
         )
     topic_participants = _get_or_build_topic_participants(topic)
 
+    # Conversion buttons for temporary posts (admin/root only in maintenance/beta)
+    convertible_post_ids = set()
+    blocked_convert_reasons = {}
+    is_admin_or_root = request.user.is_authenticated and (
+        request.user.is_root or request.user.role >= User.ROLE_ADMIN
+    )
+    if is_admin_or_root and _is_temporary_content_mode():
+        for p in page.object_list:
+            if p.is_temporary:
+                ok, reason = can_convert_to_permanent(p)
+                if ok:
+                    convertible_post_ids.add(p.pk)
+                elif reason:
+                    blocked_convert_reasons[p.pk] = reason
+
     return render(request, "board/topic_detail.html", {
         "topic": topic,
         "forum": topic.forum,
@@ -465,6 +498,9 @@ def topic_detail(request, topic_id):
         "deletable_post_ids": deletable_post_ids,
         "editable_post_ids": editable_post_ids,
         "can_edit_poll": can_edit_poll,
+        "convertible_post_ids": convertible_post_ids,
+        "blocked_convert_reasons": blocked_convert_reasons,
+        "is_admin_or_root": is_admin_or_root,
     })
 
 
@@ -3427,6 +3463,36 @@ def lock_topic(request, topic_id):
     topic.is_locked = not topic.is_locked
     topic.save(update_fields=["is_locked"])
     return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def convert_post_permanent(request, post_id):
+    """Convert a temporary post to permanent (admin/root only)."""
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    if not (request.user.is_root or request.user.role >= User.ROLE_ADMIN):
+        return HttpResponseForbidden()
+
+    post = get_object_or_404(Post.objects.select_related("author", "topic"), pk=post_id)
+    ok, reason = can_convert_to_permanent(post)
+    if not ok:
+        reason_map = {
+            "not_temporary": "Ten post nie jest tymczasowy.",
+            "temporary_user": "Post tymczasowego użytkownika nie może być zamieniony na trwały.",
+            "quotes_temporary": "Post cytuje tymczasowe posty — nie może być zamieniony na trwały.",
+        }
+        messages.error(request, reason_map.get(reason, "Nie można zamienić."))
+    else:
+        post.is_temporary = False
+        post.save(update_fields=["is_temporary"])
+        # If topic now has a permanent post, mark it permanent too
+        topic = post.topic
+        if topic.is_temporary:
+            topic.is_temporary = False
+            topic.save(update_fields=["is_temporary"])
+        messages.success(request, f"Post #{post.post_order} zamieniony na trwały.")
+
+    return redirect("topic_detail", topic_id=post.topic_id)
 
 
 def maintenance_gate(request):
