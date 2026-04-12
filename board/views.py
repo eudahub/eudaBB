@@ -1751,7 +1751,11 @@ def register(request):
     if request.user.is_authenticated:
         return redirect("/")
 
+    cfg = SiteConfig.get()
+    is_temp_mode = cfg.site_mode in (SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA)
+
     pending = request.session.get("register_pending")
+    reg_type = pending.get("reg_type") if pending else None  # "real" or "temporary"
     start_form = RegisterStartForm(initial=pending or None)
     finish_form = RegisterFinishForm()
     sent = False
@@ -1771,18 +1775,21 @@ def register(request):
     def send_registration_code(username: str, email: str):
         nonlocal sent, test_code, error
 
-        # Rate limit: 1 code per 30 minutes
-        last_sent_raw = request.session.get("register_code_sent_at")
-        if last_sent_raw:
-            try:
-                last_sent = timezone.datetime.fromisoformat(last_sent_raw)
-                elapsed = timezone.now() - last_sent
-                if elapsed < timedelta(minutes=30):
-                    wait = 30 - int(elapsed.total_seconds() / 60)
-                    error = f"Kod już wysłany. Poczekaj jeszcze około {wait} min przed kolejnym wysłaniem."
-                    return
-            except ValueError:
-                pass
+        is_temporary_reg = (reg_type == "temporary")
+
+        # Rate limit: 1 code per 30 minutes (skip for temporary users)
+        if not is_temporary_reg:
+            last_sent_raw = request.session.get("register_code_sent_at")
+            if last_sent_raw:
+                try:
+                    last_sent = timezone.datetime.fromisoformat(last_sent_raw)
+                    elapsed = timezone.now() - last_sent
+                    if elapsed < timedelta(minutes=30):
+                        wait = 30 - int(elapsed.total_seconds() / 60)
+                        error = f"Kod już wysłany. Poczekaj jeszcze około {wait} min przed kolejnym wysłaniem."
+                        return
+                except ValueError:
+                    pass
 
         code = f"{secrets.randbelow(1_000_000):06d}"
         now = timezone.now()
@@ -1793,7 +1800,8 @@ def register(request):
         request.session["register_code_attempts"] = 0
         request.session.modified = True
 
-        if getattr(settings, "TEST_MODE", False):
+        # Temporary users: show code in popup, never send email
+        if is_temporary_reg or getattr(settings, "TEST_MODE", False):
             sent = True
             test_code = code
             return
@@ -1827,15 +1835,21 @@ def register(request):
         action = request.POST.get("action")
 
         if action == "start":
-            start_form = RegisterStartForm(request.POST)
-            if start_form.is_valid():
-                clear_pending_registration()
-                request.session["register_pending"] = {
-                    "username": start_form.cleaned_data["username"],
-                    "email": start_form.cleaned_data["email"],
-                }
-                request.session.modified = True
-                return redirect("register")
+            # In maintenance/beta, require explicit reg_type choice
+            chosen_type = request.POST.get("reg_type", "")
+            if is_temp_mode and chosen_type not in ("real", "temporary"):
+                error = "Wybierz typ konta: prawdziwe lub tymczasowe."
+            else:
+                start_form = RegisterStartForm(request.POST)
+                if start_form.is_valid():
+                    clear_pending_registration()
+                    request.session["register_pending"] = {
+                        "username": start_form.cleaned_data["username"],
+                        "email": start_form.cleaned_data["email"],
+                        "reg_type": chosen_type if is_temp_mode else "real",
+                    }
+                    request.session.modified = True
+                    return redirect("register")
         elif action == "send_code":
             if not pending:
                 return redirect("register")
@@ -1888,6 +1902,7 @@ def register(request):
                         username=username,
                         email=email,
                         is_active=True,
+                        is_temporary=(reg_type == "temporary"),
                     )
                     password = finish_form.cleaned_data["password1"]
                     if finish_form.cleaned_data.get("password_is_prehashed") == "1":
@@ -1926,6 +1941,8 @@ def register(request):
         "test_code": test_code,
         "error": error,
         "code_valid_until": code_valid_until,
+        "is_temp_mode": is_temp_mode,
+        "reg_type": reg_type,
     })
 
 
