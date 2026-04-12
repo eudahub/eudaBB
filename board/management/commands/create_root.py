@@ -15,7 +15,7 @@ import getpass
 from django.core.management.base import BaseCommand, CommandError
 from decouple import config
 
-from board.models import User
+from board.models import User, MaintenanceAllowedUser
 from board.auth_utils import prehash_password
 
 
@@ -55,6 +55,8 @@ class Command(BaseCommand):
         )
         root.set_password(prehash_password(password, "root"))
         root.save()
+
+        MaintenanceAllowedUser.objects.get_or_create(username="root")
 
         self.stdout.write(self.style.SUCCESS(
             "Root account created. Log in at /admin/ with username 'root'."

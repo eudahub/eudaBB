@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
-from .models import User, Section, Forum, Topic, Post, SiteConfig, MaintenanceAllowedUser
+from .models import User, Section, Forum, Topic, Post
 
 
 @admin.register(User)
@@ -65,52 +65,3 @@ class PostAdmin(admin.ModelAdmin):
     search_fields = ["content_bbcode", "author__username"]
 
 
-@admin.register(SiteConfig)
-class SiteConfigAdmin(admin.ModelAdmin):
-    list_display = ["site_mode", "reset_mode", "show_switch_link"]
-    fieldsets = [
-        ("Tryb działania", {"fields": ["site_mode", "maintenance_message"]}),
-        ("Pozostałe", {"fields": ["reset_mode", "show_switch_link", "search_snippet_chars", "poll_options_soft_max"]}),
-    ]
-
-    def _is_root(self, request):
-        return getattr(request.user, "is_root", False)
-
-    def has_module_perms(self, request):
-        return self._is_root(request)
-
-    def has_view_permission(self, request, obj=None):
-        return self._is_root(request)
-
-    def has_add_permission(self, request):
-        return self._is_root(request) and not SiteConfig.objects.exists()
-
-    def has_change_permission(self, request, obj=None):
-        return self._is_root(request)
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-
-@admin.register(MaintenanceAllowedUser)
-class MaintenanceAllowedUserAdmin(admin.ModelAdmin):
-    list_display = ["username", "added_at"]
-    search_fields = ["username"]
-
-    def _is_root(self, request):
-        return getattr(request.user, "is_root", False)
-
-    def has_module_perms(self, request):
-        return self._is_root(request)
-
-    def has_view_permission(self, request, obj=None):
-        return self._is_root(request)
-
-    def has_add_permission(self, request):
-        return self._is_root(request)
-
-    def has_change_permission(self, request, obj=None):
-        return self._is_root(request)
-
-    def has_delete_permission(self, request, obj=None):
-        return self._is_root(request)

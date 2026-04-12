@@ -2471,7 +2471,7 @@ def login_view(request):
                 candidate = ForumUser.objects.get(username=username)
                 if not candidate.has_usable_password():
                     return redirect(
-                        f"/reset-hasla/?username={candidate.username}&reason=invalidated"
+                        f"/password-reset/?username={candidate.username}&reason=invalidated"
                     )
             except ForumUser.DoesNotExist:
                 pass
@@ -2571,14 +2571,14 @@ def request_reset(request):
                     "username": username,
                     "sent_at": sent_at,
                     "email_mask": mask_email(user.email),
-                    "do_reset_url": f"/ustaw-haslo/?username={username}",
+                    "do_reset_url": f"/set-password/?username={username}",
                 })
             return render(request, "registration/request_reset.html", {
                 "popup_code": code,
                 "popup_username": username,
                 "popup_sent_at": sent_at,
                 "email_mask": mask_email(user.email),
-                "do_reset_url": f"/ustaw-haslo/?username={username}",
+                "do_reset_url": f"/set-password/?username={username}",
                 "reason": reason,
             })
 
@@ -3002,7 +3002,7 @@ def user_likes_given(request, user_id):
 
 def root_config(request):
     """Root-only view to toggle site-wide settings."""
-    from .models import SiteConfig
+    from .models import SiteConfig, MaintenanceAllowedUser
     from django.core.exceptions import ValidationError
     if not request.user.is_authenticated or not request.user.is_root:
         return HttpResponseForbidden()
@@ -3022,6 +3022,26 @@ def root_config(request):
         action = request.POST.get("action")
         if action == "flush_reset_codes":
             PasswordResetCode.objects.all().delete()
+        elif action == "add_maintenance_user":
+            username = request.POST.get("maint_username", "").strip()
+            if not username:
+                messages.error(request, "Podaj nick.")
+            elif not User.objects.filter(username=username).exists():
+                messages.error(request, f"Użytkownik '{username}' nie istnieje.")
+            else:
+                _, created = MaintenanceAllowedUser.objects.get_or_create(username=username)
+                if created:
+                    messages.success(request, f"Dodano '{username}' do listy serwisowej.")
+                else:
+                    messages.warning(request, f"'{username}' już jest na liście.")
+        elif action == "remove_maintenance_user":
+            username = request.POST.get("maint_username", "").strip()
+            if username == "root":
+                messages.error(request, "Nie można usunąć roota z listy serwisowej.")
+            elif username:
+                deleted, _ = MaintenanceAllowedUser.objects.filter(username=username).delete()
+                if deleted:
+                    messages.success(request, f"Usunięto '{username}' z listy serwisowej.")
         elif action == "rename_user":
             user_id = request.POST.get("rename_user_id", "")
             new_username = request.POST.get("new_username", "")
@@ -3060,6 +3080,10 @@ def root_config(request):
         else:
             cfg.reset_mode = request.POST.get("reset_mode", SiteConfig.RESET_EMAIL)
             cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
+            new_mode = request.POST.get("site_mode", SiteConfig.MODE_NORMAL)
+            if new_mode in (SiteConfig.MODE_NORMAL, SiteConfig.MODE_READONLY, SiteConfig.MODE_CLOSED):
+                cfg.site_mode = new_mode
+            cfg.maintenance_message = request.POST.get("maintenance_message", "").strip()
             hard_limit = getattr(settings, "POLL_OPTIONS_HARD_MAX", 64)
             try:
                 cfg.search_snippet_chars = max(
@@ -3082,6 +3106,7 @@ def root_config(request):
         "reset_codes_count": PasswordResetCode.objects.count(),
         "all_users": all_users,
         "empty_users": empty_users,
+        "maintenance_users": MaintenanceAllowedUser.objects.order_by("username"),
     })
 
 
@@ -3320,9 +3345,12 @@ def maintenance_gate(request):
         user = authenticate(request, username=username, password=password)
         if user is None:
             error = "Nieprawidłowy nick lub hasło."
-        elif not (user.is_staff or MaintenanceAllowedUser.objects.filter(username=user.username).exists()):
+        elif not (getattr(user, "is_root", False) or MaintenanceAllowedUser.objects.filter(username=user.username).exists()):
             error = "Ten nick nie jest na liście serwisowej."
         else:
+            # Ensure root always has a visible DB entry (lazy creation)
+            if getattr(user, "is_root", False):
+                MaintenanceAllowedUser.objects.get_or_create(username=user.username)
             request.session["maintenance_access"] = True
             request.session["maintenance_user"] = user.username
             return redirect("/")

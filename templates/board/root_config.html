@@ -8,6 +8,29 @@
     {% csrf_token %}
 
     <fieldset>
+      <legend>Tryb serwisu</legend>
+      <label style="display:block;margin-bottom:.3rem;">
+        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_NORMAL }}"
+               {% if cfg.site_mode == SiteConfig.MODE_NORMAL %}checked{% endif %}>
+        Normalny
+      </label>
+      <label style="display:block;margin-bottom:.3rem;">
+        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_READONLY }}"
+               {% if cfg.site_mode == SiteConfig.MODE_READONLY %}checked{% endif %}>
+        Tylko do odczytu (blokuje POST)
+      </label>
+      <label style="display:block;margin-bottom:.5rem;">
+        <input type="radio" name="site_mode" value="{{ SiteConfig.MODE_CLOSED }}"
+               {% if cfg.site_mode == SiteConfig.MODE_CLOSED %}checked{% endif %}>
+        Zamknięte — tylko lista serwisowa
+      </label>
+      <label for="maintenance_message" style="font-size:12px;">Komunikat na stronie przerwy</label>
+      <textarea name="maintenance_message" id="maintenance_message"
+                rows="2" style="width:100%;box-sizing:border-box;font-size:13px;"
+                >{{ cfg.maintenance_message }}</textarea>
+    </fieldset>
+
+    <fieldset style="margin-top:.8rem;">
       <legend>Kody resetowania hasła</legend>
       <label>
         <input type="radio" name="reset_mode" value="{{ SiteConfig.RESET_EMAIL }}"
@@ -67,6 +90,38 @@
       <button type="submit">Zapisz</button>
       <a href="/">Anuluj</a>
     </div>
+  </form>
+
+  <form method="post" style="margin-top:.8rem;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="add_maintenance_user">
+    <fieldset>
+      <legend>Lista serwisowa</legend>
+      <p style="font-size:11px;color:#555;margin:.3rem 0 .5rem 0;">
+        Użytkownicy, którzy mogą przejść bramkę gdy forum jest zamknięte. Root jest zawsze na liście.
+      </p>
+      {% for mu in maintenance_users %}
+        <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.25rem;">
+          <span style="font-size:13px;">{{ mu.username }}</span>
+          {% if mu.username != "root" %}
+            <form method="post" style="display:inline;margin:0;">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="remove_maintenance_user">
+              <input type="hidden" name="maint_username" value="{{ mu.username }}">
+              <button type="submit" style="font-size:11px;padding:1px 6px;color:#900;background:none;border:1px solid #ccc;cursor:pointer;">usuń</button>
+            </form>
+          {% else %}
+            <span style="font-size:11px;color:#888;">(stały)</span>
+          {% endif %}
+        </div>
+      {% empty %}
+        <p style="font-size:12px;color:#888;margin:.3rem 0;">Brak wpisów.</p>
+      {% endfor %}
+      <div style="display:flex;gap:.4rem;margin-top:.6rem;align-items:center;">
+        <input type="text" name="maint_username" placeholder="Nick" style="font-size:13px;width:180px;">
+        <button type="submit">Dodaj</button>
+      </div>
+    </fieldset>
   </form>
 
   <hr style="margin:1.5rem 0;">

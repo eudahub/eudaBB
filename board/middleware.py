@@ -11,7 +11,7 @@ from django.shortcuts import redirect, render
 from .models import BlockedIP, SiteConfig, TorExitNode
 
 # Paths always accessible regardless of maintenance mode
-_MAINTENANCE_EXEMPT = frozenset(["/przerwa/", "/admin/"])
+_MAINTENANCE_EXEMPT = frozenset(["/maintenance/", "/admin/"])
 _MAINTENANCE_EXEMPT_PREFIXES = ("/admin/",)
 
 
@@ -32,14 +32,14 @@ class MaintenanceModeMiddleware:
         path = request.path_info
 
         # Admin and gate itself are always reachable
-        if path.startswith("/admin/") or path == "/przerwa/":
+        if path.startswith("/admin/") or path == "/maintenance/":
             return self.get_response(request)
 
         cfg = SiteConfig.get()
         mode = cfg.site_mode
 
         if mode == SiteConfig.MODE_READONLY:
-            if request.method == "POST":
+            if request.method == "POST" and not getattr(request.user, "is_root", False):
                 return render(
                     request,
                     "board/maintenance_gate.html",
@@ -62,7 +62,7 @@ class MaintenanceModeMiddleware:
 
 def redirect_to_gate(request, cfg):
     from django.shortcuts import redirect
-    return redirect("/przerwa/")
+    return redirect("/maintenance/")
 
 # Paths restricted for blocked IPs
 _BLOCKED_PATHS = frozenset([
