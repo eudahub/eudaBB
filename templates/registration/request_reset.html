@@ -16,6 +16,18 @@
       Hasło zostało zmienione. Jesteś teraz zalogowany.
     </p>
     <p><a href="/">Przejdź na forum →</a></p>
+  {% elif ghost_activated %}
+    <p style="background:#dfd; padding:.6rem; border-radius:4px;">
+      <strong>Tryb testowy:</strong> Konto <strong>{{ test_mode_username }}</strong> zostało aktywowane. Jesteś zalogowany.
+    </p>
+    <p><a href="/">Przejdź na forum →</a></p>
+  {% elif ghost_activation_sent %}
+    <p style="background:#dfd; padding:.6rem; border-radius:4px;">
+      Wysłaliśmy link aktywacyjny na <strong>{{ email_mask }}</strong>.<br>
+      Kliknij link w wiadomości, aby aktywować konto i ustawić hasło.
+    </p>
+    <p>Sprawdź skrzynkę (i folder spam).</p>
+    <p><a href="{% url 'login' %}">Powrót do logowania</a></p>
   {% else %}
     <div id="reset-error" style="color:red;display:none;margin-bottom:.4rem;"></div>
 
@@ -132,9 +144,14 @@ document.getElementById('check-nick-btn').addEventListener('click', function() {
   .then(function(r){ return r.json(); })
   .then(function(d) {
     if (!d.ok) { showErr(d.error); return; }
+    window._isGhost = !!d.is_ghost;
     document.getElementById('step-nick').style.display = 'none';
     document.getElementById('step-email').style.display = 'block';
-    document.getElementById('email-mask-info').textContent = 'Kod zostanie wysłany na: ' + d.email_mask;
+    if (d.is_ghost) {
+      document.getElementById('email-mask-info').textContent = 'Konto archiwalne. Potwierdź email powiązany z kontem: ' + d.email_mask;
+    } else {
+      document.getElementById('email-mask-info').textContent = 'Kod zostanie wysłany na: ' + d.email_mask;
+    }
     document.getElementById('email-confirm-input').placeholder = d.email_mask;
     document.getElementById('email-confirm-input').focus();
   });
@@ -169,6 +186,28 @@ document.getElementById('send-code-btn').addEventListener('click', function() {
     if (!d.ok) {
       showErr(d.error);
       status.textContent = '';
+    } else if (d.ghost_activation_sent) {
+      // Ghost account: activation link sent — hide form, show success
+      document.getElementById('step-email').style.display = 'none';
+      status.textContent = '';
+      var info = document.createElement('p');
+      info.style.background = '#dfd';
+      info.style.padding = '.6rem';
+      info.style.borderRadius = '4px';
+      info.innerHTML = 'Wysłaliśmy link aktywacyjny na <strong>' + d.email_mask + '</strong>.<br>Kliknij link w wiadomości, aby aktywować konto i ustawić hasło.<br>Sprawdź skrzynkę (i folder spam).';
+      document.getElementById('reset-form').parentNode.insertBefore(info, document.getElementById('reset-form'));
+      document.getElementById('reset-form').style.display = 'none';
+    } else if (d.ghost_activated) {
+      // TEST_MODE: ghost activated immediately
+      document.getElementById('step-email').style.display = 'none';
+      status.textContent = '';
+      var info = document.createElement('p');
+      info.style.background = '#dfd';
+      info.style.padding = '.6rem';
+      info.style.borderRadius = '4px';
+      info.innerHTML = '<strong>Tryb testowy:</strong> Konto <strong>' + d.username + '</strong> aktywowane. Jesteś zalogowany.';
+      document.getElementById('reset-form').parentNode.insertBefore(info, document.getElementById('reset-form'));
+      document.getElementById('reset-form').style.display = 'none';
     } else if (d.popup) {
       status.textContent = 'Kod wygenerowany — wysłany na ' + d.email_mask + '.';
       showResetPopup(d.code, d.username, d.sent_at);

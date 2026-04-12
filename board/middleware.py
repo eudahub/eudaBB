@@ -40,16 +40,20 @@ class MaintenanceModeMiddleware:
         mode = cfg.site_mode
 
         if mode == SiteConfig.MODE_READONLY:
-            if request.method == "POST" and not getattr(request.user, "is_root", False):
-                return render(
-                    request,
-                    "board/maintenance_gate.html",
-                    {
-                        "message": cfg.maintenance_message or "Forum jest teraz w trybie tylko do odczytu.",
-                        "readonly": True,
-                    },
-                    status=503,
-                )
+            if request.method == "POST":
+                # Allow root (already logged in) and the login form itself
+                # (so root can log in and then change the mode back).
+                is_root = getattr(request.user, "is_root", False)
+                if not is_root and path != "/login/":
+                    return render(
+                        request,
+                        "board/maintenance_gate.html",
+                        {
+                            "message": cfg.maintenance_message or "Forum jest teraz w trybie tylko do odczytu.",
+                            "readonly": True,
+                        },
+                        status=503,
+                    )
             return self.get_response(request)
 
         if mode == SiteConfig.MODE_MAINTENANCE:

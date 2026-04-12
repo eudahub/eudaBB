@@ -286,3 +286,265 @@ Wymagania: serwer uruchomiony lokalnie, `TEST_MODE=true` w `.env` (chyba że zaz
 1. Dodaj nowy post do wątku A (nieprzypięty)
 2. Odśwież listę wątków
 3. Wątek A powinien być teraz pierwszy wśród nieprzypiętych, ale B (przypięty) nadal wyżej
+
+---
+
+## 16. Tryb read-only — nikt nie może się zalogować ani pisać
+
+**Warunki wstępne:** zalogowany jako root
+
+**Kroki:**
+1. Wejdź na `/root/config/` → ustaw tryb **Tylko do odczytu** → Zapisz
+2. Wyloguj się
+3. Wejdź na `/login/` → spróbuj się zalogować
+
+**Oczekiwany wynik:**
+- Strona `/login/` renderuje się (GET działa)
+- Po kliknięciu „Zaloguj" (POST) → strona 503 z komunikatem o trybie read-only
+- Rejestracja (`/register/`), odpowiedź w wątku, nowy wątek — wszystkie POSTy zwracają 503
+
+**Weryfikacja wyjątku dla roota:**
+1. Wejdź na `/login/` → zaloguj się jako root (POST do `/login/` jest zawsze przepuszczany)
+2. Wejdź na `/root/config/` → zmień tryb z powrotem na Produkcja → Zapisz
+
+**Oczekiwany wynik:** root może się zalogować i zapisywać (POST) nawet w trybie read-only
+
+---
+
+## 17. Tryb maintenance — bramka serwisowa
+
+**Warunki wstępne:**
+- Istnieje konto `root` z hasłem
+- Nick `root` jest na liście serwisowej (zawsze)
+- `TEST_MODE=false` (produkcja)
+
+**Kroki:**
+1. Zaloguj się jako root → `/root/config/` → tryb **Serwis** → Zapisz
+2. Wyloguj się
+3. Wejdź na `/` lub dowolną stronę forum
+
+**Oczekiwany wynik:** przekierowanie na `/maintenance/`
+
+**Kroki — przejście przez bramkę:**
+1. Na `/maintenance/` wpisz nick `root` i hasło → kliknij „Zaloguj"
+2. Przekierowanie na `/`
+3. Wejdź na `/login/` → zaloguj się normalnie jako `root`
+
+**Oczekiwany wynik:**
+- Po etapie 1: wchodzisz na forum jako anonimowy (widoczny `root ›` w nagłówku)
+- Po etapie 3: zalogowany jako `root`, widoczne `root › root  (1 IP)`
+- Inny nick bez bramki → nie może wejść na forum
+
+**Weryfikacja blokady nicka spoza listy:**
+1. Na `/maintenance/` wpisz nick `januszek72` i poprawne hasło
+2. Oczekiwany wynik: błąd „Ten nick nie jest na liście serwisowej."
+
+---
+
+## 18. Tryb maintenance — wylogowanie serwisowe
+
+**Warunki wstępne:** przeszedłeś przez bramkę i jesteś zalogowany na forum
+
+**Kroki:**
+1. Kliknij link wylogowania serwisowego (jeśli widoczny w nawigacji)
+2. Lub wejdź ręcznie na `/maintenance/logout/` (POST)
+
+**Oczekiwany wynik:**
+- Wylogowany z forum I z bramki
+- Przekierowanie na `/maintenance/`
+- Dowolna strona forum znowu przekierowuje na bramkę
+
+---
+
+## 19. Tryb maintenance — TOR przez bramkę
+
+**Warunki wstępne:**
+- TOR browser aktywny
+- Nick `root` na liście serwisowej
+- Forum w trybie maintenance
+
+**Kroki:**
+1. Wejdź przez TOR na `/maintenance/`
+2. Zaloguj się jako `root`
+3. Wejdź na `/login/` → zaloguj się jako `root` przez normalny formularz
+
+**Oczekiwany wynik:**
+- Bramka przepuszcza TOR (brak blokady na `/maintenance/`)
+- Po zalogowaniu przez bramkę: można korzystać z forum przez TOR
+- Normalny login przez `/login/` przechodzi (bo `maintenance_access` w sesji zwalnia z TOR-blokady)
+
+---
+
+## 20. Rejestracja konta tymczasowego (tryb maintenance/beta)
+
+**Warunki wstępne:**
+- Forum w trybie **Serwis** lub **Beta**
+- `TEST_MODE=false`
+
+**Kroki:**
+1. Wejdź na `/register/`
+2. Sprawdź czy widoczny jest fieldset „Typ konta" z dwoma opcjami — żadna nie zaznaczona
+3. Kliknij „Dalej" bez wyboru → oczekiwany błąd „Wybierz typ konta"
+4. Zaznacz **Konto tymczasowe**
+5. Wpisz nick, email (może być wymyślony, musi być unikalny), hasło → Dalej
+6. Potwierdź email → na ekranie pojawia się kod (nie wysyłany emailem)
+7. Wpisz kod → utwórz konto
+
+**Oczekiwany wynik:**
+- Konto `is_temporary=True`
+- Nick na liście userów oznaczony `[tymcz.]` szarym kolorem
+- Profil usera pokazuje „konto tymczasowe"
+- Można wysłać kod wielokrotnie (brak limitu 30 min)
+- Kod wyświetlony na ekranie, email NIE wysłany
+
+---
+
+## 21. Rejestracja konta prawdziwego (tryb maintenance/beta)
+
+**Warunki wstępne:**
+- Forum w trybie **Serwis** lub **Beta**
+- `TEST_MODE=false`, skonfigurowany SendGrid
+
+**Kroki:**
+1. Wejdź na `/register/`
+2. Zaznacz **Prawdziwe konto**
+3. Wpisz nick, prawdziwy email, hasło → Dalej
+4. Sprawdź skrzynkę — powinna przyjść wiadomość z kodem
+
+**Oczekiwany wynik:**
+- Konto `is_temporary=False`
+- Obowiązuje limit 1 kod / 30 min
+- Nick na liście userów bez oznaczenia tymczasowego
+
+---
+
+## 22. Posty tymczasowe — tworzenie i oznaczenia
+
+**Warunki wstępne:**
+- Forum w trybie **Serwis** lub **Beta**
+- Zalogowany jako dowolny user (real lub temporary)
+
+**Kroki:**
+1. Utwórz nowy wątek → opublikuj
+2. Dodaj odpowiedź w innym wątku → opublikuj
+3. Wejdź na stronę wątku
+
+**Oczekiwany wynik:**
+- Nowy wątek widoczny jako `[tymcz.]` na liście wątków
+- Post oznaczony `[tymcz.]` w nagłówku, z szarą lewą krawędzią
+- Autor tymczasowy (jeśli konto tymczasowe): szary nick + „tymczasowe" badge
+
+---
+
+## 23. Konwersja postu na trwały (admin)
+
+**Warunki wstępne:**
+- Forum w trybie **Serwis**
+- Zalogowany jako admin (role ≥ 2)
+- Istnieje wątek z kilkoma postami tymczasowymi
+
+**Kroki — konwersja poprawna:**
+1. Otwórz wątek tymczasowy
+2. Znajdź post od **prawdziwego** usera (nie tymczasowego), który nie cytuje tymczasowych postów
+3. Kliknij przycisk **Trwały** (zielony) → potwierdź
+
+**Oczekiwany wynik:**
+- Post przestaje być oznaczony `[tymcz.]`
+- Wątek automatycznie staje się trwały (traci `[tymcz.]` na liście)
+
+**Kroki — konwersja zablokowana (konto tymczasowe):**
+1. Znajdź post od usera `is_temporary=True`
+2. Przycisk **Trwały** jest wyszarzony z tooltipem „Konto tymczasowe"
+
+**Kroki — konwersja zablokowana (cytat z tymczasowego):**
+1. Jeden post cytuje inny tymczasowy post
+2. Przycisk **Trwały** jest wyszarzony z tooltipem „Cytuje tymczasowe posty"
+
+---
+
+## 24. Czyszczenie tymczasowych danych
+
+**Warunki wstępne:**
+- Forum w trybie **Serwis** lub **Beta**
+- Istnieją konta tymczasowe, posty tymczasowe, wątki tymczasowe
+- Co najmniej jeden wątek ma też prawdziwy post (po konwersji z scenariusza 23)
+
+**Kroki — ręczne czyszczenie:**
+1. Zaloguj się jako `root` → `/root/config/`
+2. Widoczna sekcja „Tymczasowe dane" z licznikami (konta, posty, wątki)
+3. Kliknij „Wyczyść tymczasowe dane" → potwierdź
+
+**Oczekiwany wynik:**
+- Usunięte: tymczasowe konta, tymczasowe posty, wątki bez prawdziwych postów
+- Wątek z prawdziwym postem: zostaje, oznaczenie `[tymcz.]` znika
+- Liczniki w sekcji wróciły do 0
+
+**Kroki — automatyczne czyszczenie przy zmianie trybu:**
+1. Stwórz kilka tymczasowych postów/kont
+2. Zaloguj się jako `root` → `/root/config/` → zmień tryb z **Serwis** na **Produkcja** → Zapisz
+
+**Oczekiwany wynik:**
+- Automatyczne czyszczenie przeprowadzone
+- Flash message informuje ile usunięto (konta / posty / wątki)
+
+---
+
+## 25. Reset hasła — blokada dla tymczasowych kont
+
+**Warunki wstępne:**
+- Istnieje konto tymczasowe `tymcz01`
+
+**Kroki:**
+1. Wejdź na `/password-reset/`
+2. Wpisz nick `tymcz01` → wyślij
+
+**Oczekiwany wynik:**
+- Błąd „Konta tymczasowe nie mogą resetować hasła."
+- Kod NIE jest generowany ani wysyłany
+
+---
+
+## 26. Lista serwisowa — root zawsze obecny, niedeletowalny
+
+**Warunki wstępne:** zalogowany jako root
+
+**Kroki:**
+1. Wejdź na `/root/config/` → sekcja „Lista serwisowa"
+2. Sprawdź czy `root` jest na liście
+3. Sprawdź czy przy `root` jest przycisk „usuń"
+
+**Oczekiwany wynik:**
+- `root` widoczny z etykietą `(stały)`
+- Brak przycisku „usuń" przy root
+- Inne nicki mają przycisk „usuń"
+
+**Kroki — dodanie i usunięcie usera:**
+1. Wpisz nick istniejącego usera w polu „Dodaj" → kliknij
+2. Nick pojawia się na liście z przyciskiem „usuń"
+3. Kliknij „usuń" przy tym nicku
+4. Nick znika z listy
+
+**Weryfikacja nicka nieistniejącego:**
+- Wpisz nick którego nie ma w bazie → błąd „Użytkownik 'xyz' nie istnieje"
+
+---
+
+## 27. Tryb beta — rejestracja bez bramki, TOR zablokowany
+
+**Warunki wstępne:** forum w trybie **Beta**
+
+**Kroki:**
+1. Wejdź na dowolną stronę forum (bez wcześniejszego logowania)
+
+**Oczekiwany wynik:** brak przekierowania na bramkę — strona widoczna normalnie
+
+**Kroki — TOR w trybie beta:**
+1. Włącz TOR browser → wejdź na `/register/`
+
+**Oczekiwany wynik:**
+- Błąd 403 — TOR jest blokowany w trybie beta (brak wyjątku bramki)
+
+---
+
+*Przy zmianie URL-i pamiętaj: stare polskie ścieżki zastąpione angielskimi:*
+*`/reset-hasla/` → `/password-reset/`, `/ustaw-haslo/` → `/set-password/`, `/szukaj/` → `/search/` itd.*

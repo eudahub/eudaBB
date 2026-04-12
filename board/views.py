@@ -1888,16 +1888,53 @@ def register(request):
             if is_temp_mode and chosen_type not in ("real", "temporary"):
                 error = "Wybierz typ konta: prawdziwe lub tymczasowe."
             else:
-                start_form = RegisterStartForm(request.POST)
-                if start_form.is_valid():
-                    clear_pending_registration()
-                    request.session["register_pending"] = {
-                        "username": start_form.cleaned_data["username"],
-                        "email": start_form.cleaned_data["email"],
-                        "reg_type": chosen_type if is_temp_mode else "real",
-                    }
-                    request.session.modified = True
-                    return redirect("register")
+                username_raw = request.POST.get("username", "").strip()
+                email_raw = request.POST.get("email", "").strip().lower()
+
+                # Check for existing non-ghost account BEFORE form validation
+                # so we can offer the email-mask claim flow instead of a hard error.
+                existing_user = (
+                    User.objects.filter(username_normalized=normalize(username_raw))
+                    .exclude(is_ghost=True)
+                    .first()
+                ) if username_raw else None
+
+                if existing_user:
+                    mask = mask_email(existing_user.email) if existing_user.email else None
+                    if existing_user.email and email_raw == existing_user.email:
+                        # Email matches — enter claim flow
+                        clear_pending_registration()
+                        request.session["register_pending"] = {
+                            "username": existing_user.username,
+                            "email": existing_user.email,
+                            "reg_type": "claim",
+                        }
+                        request.session.modified = True
+                        return redirect("register")
+                    elif mask:
+                        error = (
+                            f"Ten nick jest już zajęty. Jeśli to Twoje konto, "
+                            f"wpisz email powiązany z nim: {mask}"
+                        )
+                    else:
+                        error = "Ten nick jest zajęty przez konto bez adresu email."
+                    start_form = RegisterStartForm(initial={"username": username_raw, "email": email_raw})
+                else:
+                    start_form = RegisterStartForm(request.POST)
+                    if start_form.is_valid():
+                        clear_pending_registration()
+                        request.session["register_pending"] = {
+                            "username": start_form.cleaned_data["username"],
+                            "email": start_form.cleaned_data["email"],
+                            "reg_type": chosen_type if is_temp_mode else "real",
+                        }
+                        request.session.modified = True
+                        return redirect("register")
+                    else:
+                        # Detect email conflict → show find_account hint
+                        email_val = request.POST.get("email", "").strip().lower()
+                        if email_val and User.objects.filter(email=email_val).exists():
+                            show_find_account_hint = True
         elif action == "send_code":
             if not pending:
                 return redirect("register")
@@ -1926,41 +1963,56 @@ def register(request):
             if finish_form.is_valid():
                 username = pending["username"]
                 email = pending["email"]
-                # Re-check uniqueness at final submit to avoid races.
-                conflict_name = User.objects.filter(
-                    username_normalized=normalize(username)
-                ).exists()
-                conflict_email = User.objects.filter(email=email).exists()
-                if conflict_name:
-                    clear_pending_registration()
-                    error = "Taki nick został już zajęty w międzyczasie. Zacznij rejestrację od nowa."
-                elif conflict_email:
-                    clear_pending_registration()
-                    error = "Ten email został już użyty w międzyczasie. Zacznij rejestrację od nowa."
-                elif not code or not expires_at or timezone.now() >= expires_at:
-                    error = "Kod wygasł. Wyślij nowy kod."
-                elif attempts >= 10:
-                    error = "Zbyt wiele błędnych prób kodu. Wyślij nowy kod."
-                elif finish_form.cleaned_data["code"] != code:
-                    request.session["register_code_attempts"] = attempts + 1
-                    request.session.modified = True
-                    error = "Nieprawidłowy kod."
-                else:
-                    user = User(
-                        username=username,
-                        email=email,
-                        is_active=True,
-                        is_temporary=(reg_type == "temporary"),
-                    )
-                    password = finish_form.cleaned_data["password1"]
-                    if finish_form.cleaned_data.get("password_is_prehashed") == "1":
-                        user.set_password(password)
+                is_claim = (reg_type == "claim")
+
+                # Re-check uniqueness at final submit (skip for claim — account already exists).
+                if not is_claim:
+                    conflict_name = User.objects.filter(
+                        username_normalized=normalize(username)
+                    ).exists()
+                    conflict_email = User.objects.filter(email=email).exists()
+                    if conflict_name:
+                        clear_pending_registration()
+                        error = "Taki nick został już zajęty w międzyczasie. Zacznij rejestrację od nowa."
+                    elif conflict_email:
+                        clear_pending_registration()
+                        error = "Ten email został już użyty w międzyczasie. Zacznij rejestrację od nowa."
+
+                if not error:
+                    if not code or not expires_at or timezone.now() >= expires_at:
+                        error = "Kod wygasł. Wyślij nowy kod."
+                    elif attempts >= 10:
+                        error = "Zbyt wiele błędnych prób kodu. Wyślij nowy kod."
+                    elif finish_form.cleaned_data["code"] != code:
+                        request.session["register_code_attempts"] = attempts + 1
+                        request.session.modified = True
+                        error = "Nieprawidłowy kod."
                     else:
-                        user.set_password(prehash_password(password, username))
-                    user.save()
-                    clear_pending_registration()
-                    login(request, user)
-                    return redirect("/")
+                        password = finish_form.cleaned_data["password1"]
+                        if is_claim:
+                            # Update existing account — don't create a new one
+                            user = User.objects.get(username=username, email=email)
+                            if finish_form.cleaned_data.get("password_is_prehashed") == "1":
+                                user.set_password(password)
+                            else:
+                                user.set_password(prehash_password(password, username))
+                            user.is_active = True
+                            user.save()
+                        else:
+                            user = User(
+                                username=username,
+                                email=email,
+                                is_active=True,
+                                is_temporary=(reg_type == "temporary"),
+                            )
+                            if finish_form.cleaned_data.get("password_is_prehashed") == "1":
+                                user.set_password(password)
+                            else:
+                                user.set_password(prehash_password(password, username))
+                            user.save()
+                        clear_pending_registration()
+                        login(request, user)
+                        return redirect("/")
 
     if pending:
         start_form = RegisterStartForm(initial=pending)
@@ -1991,6 +2043,7 @@ def register(request):
         "code_valid_until": code_valid_until,
         "is_temp_mode": is_temp_mode,
         "reg_type": reg_type,
+        "show_find_account_hint": locals().get("show_find_account_hint", False),
     })
 
 
@@ -2078,12 +2131,14 @@ def find_account(request):
     czy dany email jest w bazie.
     """
     sent = False
+    not_found = False
     if request.method == "POST":
         email_input = request.POST.get("email", "").strip().lower()
         if email_input:
-            user = User.objects.filter(is_ghost=True, email=email_input).first()
+            user = User.objects.filter(email=email_input).first()
 
-            if user:
+            if user and user.is_ghost:
+                # Ghost account — send activation link
                 token_obj, _ = ActivationToken.objects.get_or_create(
                     user=user,
                     defaults={
@@ -2091,7 +2146,6 @@ def find_account(request):
                         "expires_at": timezone.now() + timedelta(hours=24),
                     },
                 )
-                # Refresh token
                 token_obj.token = secrets.token_urlsafe(48)
                 token_obj.expires_at = timezone.now() + timedelta(hours=24)
                 token_obj.failed_attempts = 0
@@ -2101,7 +2155,6 @@ def find_account(request):
                 activation_url = request.build_absolute_uri(f"/activate/{token_obj.token}/")
 
                 if getattr(settings, "TEST_MODE", False):
-                    # TEST_MODE: aktywuj od razu, wyświetl nick (tylko na dev)
                     user.is_ghost = False
                     user.is_active = True
                     user.save(update_fields=["is_ghost", "is_active"])
@@ -2112,7 +2165,7 @@ def find_account(request):
                     })
 
                 send_mail(
-                    subject="Twoje konto na forum",
+                    subject="[eudaHub] Twoje konto na forum",
                     message=(
                         f"Znaleźliśmy Twoje konto na forum.\n\n"
                         f"Twój nick: {user.username}\n\n"
@@ -2124,10 +2177,34 @@ def find_account(request):
                     recipient_list=[email_input],
                     fail_silently=True,
                 )
-        # Zawsze ta sama odpowiedź — nie zdradza czy email jest w bazie
-        sent = True
+                sent = True
+            elif user:
+                # Active account — send nick reminder + password reset hint
+                reset_url = request.build_absolute_uri("/password-reset/")
+                if getattr(settings, "TEST_MODE", False):
+                    return render(request, "registration/find_account.html", {
+                        "test_mode_username": user.username,
+                        "test_mode_active": True,
+                        "success": True,
+                    })
 
-    return render(request, "registration/find_account.html", {"sent": sent})
+                send_mail(
+                    subject="[eudaHub] Twoje konto na forum",
+                    message=(
+                        f"Twój nick na forum: {user.username}\n\n"
+                        f"Konto jest aktywne. Aby się zalogować, użyj tego nicka.\n"
+                        f"Jeśli nie pamiętasz hasła, zresetuj je tutaj:\n{reset_url}\n\n"
+                        f"Jeśli to nie Ty — zignoruj tę wiadomość."
+                    ),
+                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+                    recipient_list=[email_input],
+                    fail_silently=True,
+                )
+                sent = True
+            else:
+                not_found = True
+
+    return render(request, "registration/find_account.html", {"sent": sent, "not_found": not_found})
 
 
 def activate_confirm(request, token):
@@ -2575,14 +2652,71 @@ def request_reset(request):
             })
 
         if user.is_ghost:
-            if user.email:
-                msg = "To konto nie ma hasła — nigdy nie było aktywowane. Na stronie logowania użyj opcji 'Nie pamiętasz nicka? Podaj email → odzyskaj konto'."
-            else:
+            if not user.email:
                 msg = "To konto nie ma hasła ani adresu email. Wybierz inny nick lub skontaktuj się z administratorem."
+                if is_ajax:
+                    return ajax_err(msg)
+                return render(request, "registration/request_reset.html", {
+                    "error": msg, "reason": reason, "prefill_username": username,
+                })
+            # Ghost with email — step 1: return mask, step 2: verify email then send link
+            if action == "check":
+                if is_ajax:
+                    return JsonResponse({"ok": True, "email_mask": mask_email(user.email), "is_ghost": True})
+                return render(request, "registration/request_reset.html", {
+                    "reason": reason, "prefill_username": username,
+                })
+            # action == "send": verify email first
+            email_confirm = request.POST.get("email_confirm", "").strip().lower()
+            if email_confirm != user.email.lower():
+                if is_ajax:
+                    return ajax_err("Podany adres email nie zgadza się.")
+                return render(request, "registration/request_reset.html", {
+                    "error": "Podany adres email nie zgadza się.",
+                    "reason": reason, "prefill_username": username,
+                })
+            # Email matches — send activation link
+            token_obj, _ = ActivationToken.objects.get_or_create(
+                user=user,
+                defaults={
+                    "token": secrets.token_urlsafe(48),
+                    "expires_at": timezone.now() + timedelta(hours=24),
+                },
+            )
+            token_obj.token = secrets.token_urlsafe(48)
+            token_obj.expires_at = timezone.now() + timedelta(hours=24)
+            token_obj.failed_attempts = 0
+            token_obj.window_start = None
+            token_obj.save()
+            activation_url = request.build_absolute_uri(f"/activate/{token_obj.token}/")
+            if getattr(settings, "TEST_MODE", False):
+                user.is_ghost = False
+                user.is_active = True
+                user.save(update_fields=["is_ghost", "is_active"])
+                login(request, user)
+                if is_ajax:
+                    return JsonResponse({"ok": True, "ghost_activated": True, "username": user.username})
+                return render(request, "registration/request_reset.html", {
+                    "ghost_activated": True,
+                    "test_mode_username": user.username,
+                })
+            send_mail(
+                subject="[eudaHub] Aktywacja konta na forum",
+                message=(
+                    f"Twój nick: {user.username}\n\n"
+                    f"Kliknij link aby aktywować konto i ustawić hasło:\n{activation_url}\n\n"
+                    f"Link ważny 24 godziny.\n"
+                    f"Jeśli to nie Ty — zignoruj tę wiadomość."
+                ),
+                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
             if is_ajax:
-                return ajax_err(msg)
+                return JsonResponse({"ok": True, "ghost_activation_sent": True, "email_mask": mask_email(user.email)})
             return render(request, "registration/request_reset.html", {
-                "error": msg, "reason": reason, "prefill_username": username,
+                "ghost_activation_sent": True,
+                "email_mask": mask_email(user.email),
             })
 
         if user.is_temporary:
@@ -3503,15 +3637,27 @@ def convert_post_permanent(request, post_id):
     return redirect("topic_detail", topic_id=post.topic_id)
 
 
+def logout_view(request):
+    """Logout that preserves maintenance_access so gate users stay on the forum."""
+    from django.contrib.auth import logout as auth_logout
+    # Save gate flags before flush
+    maintenance_access = request.session.get("maintenance_access")
+    maintenance_user = request.session.get("maintenance_user")
+    auth_logout(request)  # flushes entire session
+    if maintenance_access:
+        request.session["maintenance_access"] = maintenance_access
+        request.session["maintenance_user"] = maintenance_user
+    return redirect("login")
+
+
 def maintenance_gate(request):
     """Stage-1 gate for closed maintenance mode.
 
     Verifies nick+password (NO TOR check) and checks the MaintenanceAllowedUser
-    list (or staff).  On success sets session['maintenance_access'] = True but
-    does NOT log the user into the forum — they remain anonymous and may then
-    use the normal login flow (/login/) independently.
+    list (or staff).  On success sets session['maintenance_access'] = True and
+    logs out any existing forum session — so forum login remains a separate step.
     """
-    from django.contrib.auth import authenticate
+    from django.contrib.auth import authenticate, logout as auth_logout
     from .models import SiteConfig, MaintenanceAllowedUser
 
     # Already past the gate
@@ -3535,8 +3681,11 @@ def maintenance_gate(request):
             # Ensure root always has a visible DB entry (lazy creation)
             if getattr(user, "is_root", False):
                 MaintenanceAllowedUser.objects.get_or_create(username=user.username)
+            gate_username = user.username
+            # Log out any existing forum session so login stays a separate step
+            auth_logout(request)
             request.session["maintenance_access"] = True
-            request.session["maintenance_user"] = user.username
+            request.session["maintenance_user"] = gate_username
             return redirect("/")
 
     return render(request, "board/maintenance_gate.html", {

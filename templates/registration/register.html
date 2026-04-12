@@ -6,10 +6,17 @@
   <h2>Rejestracja</h2>
 
   {% if pending %}
-    <p>Rejestracja dla nicka <strong>{{ pending.username }}</strong>
-    {% if reg_type == "temporary" %}<span style="color:#999;">(konto tymczasowe)</span>{% endif %}
+    <p>
+      {% if reg_type == "claim" %}
+        Przejęcie konta <strong>{{ pending.username }}</strong>
+      {% else %}
+        Rejestracja dla nicka <strong>{{ pending.username }}</strong>
+        {% if reg_type == "temporary" %}<span style="color:#999;">(konto tymczasowe)</span>{% endif %}
+      {% endif %}
     </p>
-    {% if reg_type == "temporary" %}
+    {% if reg_type == "claim" %}
+      <p>Ten nick jest już zarejestrowany. Aby przejąć konto, potwierdź email powiązany z tym kontem: <strong>{{ email_mask }}</strong></p>
+    {% elif reg_type == "temporary" %}
       <p>Kod weryfikacyjny zostanie wyświetlony na ekranie po potwierdzeniu emaila.</p>
     {% else %}
       <p>Kod weryfikacyjny zostanie wysłany na: <strong>{{ email_mask }}</strong></p>
@@ -94,7 +101,12 @@
   {% endif %}
 
   <p><a href="{% url 'login' %}">Masz już konto? Zaloguj się.</a></p>
-  <p><a href="{% url 'find_account' %}">Masz konto archiwalne? Odzyskaj je po emailu.</a></p>
+  {% if show_find_account_hint %}
+  <p style="background:#fff8e1;border:1px solid #f0c040;padding:.5rem .7rem;border-radius:3px;font-size:13px;">
+    Ten email jest już przypisany do istniejącego konta.<br>
+    <a href="{% url 'find_account' %}">Nie pamiętasz nicka? Podaj email → wyślemy Ci nick i instrukcje.</a>
+  </p>
+  {% endif %}
 </article>
 
 {% if pending %}

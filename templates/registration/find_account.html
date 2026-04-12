@@ -3,11 +3,16 @@
 {% block content %}
 <h2>Nie pamiętasz swojego nicka?</h2>
 
-{% if success and test_mode_username %}
+{% if success and test_mode_active %}
+  <p style="color:green;"><strong>Tryb testowy:</strong> Twój nick to <strong>{{ test_mode_username }}</strong>. Konto aktywne — użyj <a href="{% url 'login' %}">logowania</a> lub <a href="{% url 'request_reset' %}">resetu hasła</a>.</p>
+{% elif success and test_mode_username %}
   <p style="color:green;"><strong>Tryb testowy:</strong> Twój nick to <strong>{{ test_mode_username }}</strong>. Zostałeś zalogowany.</p>
 {% elif sent %}
-  <p>Jeśli podany email jest powiązany z kontem na tym forum, wysłaliśmy na niego wiadomość z nickiem i linkiem aktywacyjnym.</p>
+  <p style="color:green;">Wysłaliśmy wiadomość z nickiem i linkiem aktywacyjnym na podany adres.</p>
   <p>Sprawdź skrzynkę (i folder spam).</p>
+{% elif not_found %}
+  <p style="color:red;">Nie znaleziono konta archiwalnego powiązanego z tym adresem email.</p>
+  <p>Sprawdź czy wpisujesz właściwy adres, lub <a href="{% url 'register' %}">zarejestruj nowe konto</a>.</p>
 {% else %}
   <p>Podaj adres email, którego użyłeś przy rejestracji. Jeśli konto istnieje, wyślemy na ten adres Twój nick i link aktywacyjny.</p>
   <p><em>Nick nie zostanie pokazany na ekranie — tylko w wiadomości email.</em></p>
