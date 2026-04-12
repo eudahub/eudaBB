@@ -115,6 +115,23 @@
     </fieldset>
   </form>
 
+  {% if temp_users or temp_posts or temp_topics %}
+  <form method="post" style="margin-top:.8rem;"
+        onsubmit="return confirm('Usunąć wszystkie tymczasowe konta, posty i wątki?');">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="cleanup_temporary">
+    <fieldset>
+      <legend>Tymczasowe dane</legend>
+      <p style="font-size:12px;margin:.3rem 0 .5rem 0;">
+        Konta: <strong>{{ temp_users }}</strong> &middot;
+        Posty: <strong>{{ temp_posts }}</strong> &middot;
+        Wątki: <strong>{{ temp_topics }}</strong>
+      </p>
+      <button type="submit" style="color:#900;">Wyczyść tymczasowe dane</button>
+    </fieldset>
+  </form>
+  {% endif %}
+
   <hr style="margin:1.5rem 0;">
 
   <form method="post" onsubmit="return confirm('Usunąć wszystkie kody resetowania hasła?');">

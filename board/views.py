@@ -2997,6 +2997,67 @@ def user_likes_given(request, user_id):
 # Quote link: redirect to the source post
 # ---------------------------------------------------------------------------
 
+
+def _cleanup_temporary():
+    """Delete temporary users, posts, and topics.  Returns stats dict."""
+    from .models import Forum as _Forum
+
+    # Topics with at least one permanent post survive
+    surviving_topic_ids = set(
+        Post.objects.filter(is_temporary=False)
+        .values_list("topic_id", flat=True)
+        .distinct()
+    )
+
+    # Gather affected forum IDs for stat recalculation
+    affected_forum_ids = set(
+        Topic.objects.filter(is_temporary=True)
+        .values_list("forum_id", flat=True)
+        .distinct()
+    )
+
+    # Delete temporary posts
+    del_posts, _ = Post.objects.filter(is_temporary=True).delete()
+
+    # Mark surviving topics as permanent
+    Topic.objects.filter(pk__in=surviving_topic_ids, is_temporary=True).update(is_temporary=False)
+
+    # Delete topics that have no permanent posts left
+    del_topics, _ = Topic.objects.filter(is_temporary=True).delete()
+
+    # Delete temporary users
+    del_users, _ = User.objects.filter(is_temporary=True).delete()
+
+    # Recalculate forum/topic/user stats
+    for forum in _Forum.objects.filter(pk__in=affected_forum_ids):
+        forum.topic_count = forum.topics.count()
+        forum.post_count = Post.objects.filter(topic__forum=forum).count()
+        last = (
+            Post.objects.filter(topic__forum=forum)
+            .order_by("-created_at")
+            .first()
+        )
+        forum.last_post = last
+        forum.last_post_at = last.created_at if last else None
+        forum.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
+
+    for topic in Topic.objects.filter(forum_id__in=affected_forum_ids):
+        topic.reply_count = max(0, topic.posts.count() - 1)
+        last = topic.posts.order_by("-created_at").first()
+        topic.last_post = last
+        topic.last_post_at = last.created_at if last else None
+        topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
+
+    # Recalculate post_count for all users (simpler than tracking affected ones)
+    from django.db.models import Count
+    for u in User.objects.annotate(real_count=Count("posts")).exclude(is_root=True):
+        if u.post_count != u.real_count:
+            u.post_count = u.real_count
+            u.save(update_fields=["post_count"])
+
+    return {"users": del_users, "posts": del_posts, "topics": del_topics}
+
+
 def root_config(request):
     """Root-only view to toggle site-wide settings."""
     from .models import SiteConfig, MaintenanceAllowedUser
@@ -3039,6 +3100,12 @@ def root_config(request):
                 deleted, _ = MaintenanceAllowedUser.objects.filter(username=username).delete()
                 if deleted:
                     messages.success(request, f"Usunięto '{username}' z listy serwisowej.")
+        elif action == "cleanup_temporary":
+            stats = _cleanup_temporary()
+            messages.success(
+                request,
+                f"Wyczyszczono: {stats['users']} kont, {stats['posts']} postów, {stats['topics']} wątków.",
+            )
         elif action == "rename_user":
             user_id = request.POST.get("rename_user_id", "")
             new_username = request.POST.get("new_username", "")
@@ -3076,9 +3143,20 @@ def root_config(request):
                 messages.warning(request, "Nie zaznaczono żadnego konta.")
         else:
             cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
+            old_mode = cfg.site_mode
             new_mode = request.POST.get("site_mode", SiteConfig.MODE_PRODUCTION)
             if new_mode in (SiteConfig.MODE_PRODUCTION, SiteConfig.MODE_READONLY, SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA):
                 cfg.site_mode = new_mode
+            # Auto-cleanup when leaving maintenance/beta
+            _temp_modes = (SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA)
+            if old_mode in _temp_modes and new_mode not in _temp_modes:
+                stats = _cleanup_temporary()
+                if stats["users"] or stats["posts"] or stats["topics"]:
+                    messages.info(
+                        request,
+                        f"Automatyczne czyszczenie: {stats['users']} kont, "
+                        f"{stats['posts']} postów, {stats['topics']} wątków.",
+                    )
             cfg.maintenance_message = request.POST.get("maintenance_message", "").strip()
             hard_limit = getattr(settings, "POLL_OPTIONS_HARD_MAX", 64)
             try:
@@ -3096,6 +3174,10 @@ def root_config(request):
             cfg.save()
         return redirect("root_config")
 
+    temp_users = User.objects.filter(is_temporary=True).count()
+    temp_posts = Post.objects.filter(is_temporary=True).count()
+    temp_topics = Topic.objects.filter(is_temporary=True).count()
+
     return render(request, "board/root_config.html", {
         "cfg": cfg,
         "SiteConfig": SiteConfig,
@@ -3103,6 +3185,9 @@ def root_config(request):
         "all_users": all_users,
         "empty_users": empty_users,
         "maintenance_users": MaintenanceAllowedUser.objects.order_by("username"),
+        "temp_users": temp_users,
+        "temp_posts": temp_posts,
+        "temp_topics": temp_topics,
     })
 
 
