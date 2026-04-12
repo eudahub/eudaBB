@@ -18,11 +18,12 @@ _MAINTENANCE_EXEMPT_PREFIXES = ("/admin/",)
 class MaintenanceModeMiddleware:
     """Block or restrict access based on SiteConfig.site_mode.
 
-    normal   — no effect
-    readonly — GET requests pass through; POST requests are blocked for everyone
-               except root (no login, no posting, no registration)
-    closed   — only staff and users on MaintenanceAllowedUser may log in;
-               everyone else sees the maintenance gate at /przerwa/
+    production  — no effect
+    readonly    — GET requests pass through; POST requests are blocked for
+                  everyone except root (no login, no posting, no registration)
+    maintenance — only root and users on MaintenanceAllowedUser may enter
+                  via the gate at /maintenance/; TOR allowed through the gate
+    beta        — no gate, open to community (TOR still blocked)
     """
 
     def __init__(self, get_response):
@@ -54,15 +55,9 @@ class MaintenanceModeMiddleware:
         if mode == SiteConfig.MODE_MAINTENANCE:
             if request.session.get("maintenance_access"):
                 return self.get_response(request)
-            # No service session → gate
-            return redirect_to_gate(request, cfg)
+            return redirect("/maintenance/")
 
         return self.get_response(request)
-
-
-def redirect_to_gate(request, cfg):
-    from django.shortcuts import redirect
-    return redirect("/maintenance/")
 
 # Paths restricted for blocked IPs
 _BLOCKED_PATHS = frozenset([
@@ -152,12 +147,21 @@ class SessionTrackingMiddleware:
 
 
 class TorBlockMiddleware:
+    """Block TOR/proxy IPs on login and registration paths.
+
+    In maintenance mode, users who already passed the gate (maintenance_access
+    in session) are exempt — this lets root test TOR blocking through the gate.
+    """
+
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
         path = request.path_info
         if path in _BLOCKED_PATHS or any(path.startswith(p) for p in _BLOCKED_PREFIXES):
+            # Maintenance gate users are exempt from TOR/proxy blocks
+            if request.session.get("maintenance_access"):
+                return self.get_response(request)
             ip = _get_client_ip(request)
             if ip:
                 if getattr(settings, "TOR_BLOCK_ENABLED", True) and ip in _load_tor_ips():
