@@ -4,7 +4,7 @@ Import ghost accounts from sfinia_users_admin.db.
 Usage:
     python manage.py import_users /path/to/sfinia_users_admin.db
 
-Creates User records with is_ghost=True, is_active=False, unusable password.
+Creates User records with unusable password (is_ghost() == True) and is_active=True.
 Skips users that already exist (by username).
 Run import_user_emails afterwards to hash their emails.
 """
@@ -45,9 +45,8 @@ class Command(BaseCommand):
 
             User.objects.create(
                 username=row["username"],
-                password=make_password(None),  # unusable password
-                is_ghost=True,
-                is_active=False,
+                password=make_password(None),  # unusable password — is_ghost() returns True
+                is_active=True,
                 signature=row["signature"] or "",
                 website=row["website"] or "",
                 location=row["location"] or "",

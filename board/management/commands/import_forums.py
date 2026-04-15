@@ -12,10 +12,23 @@ passes so parents always exist before children.
 """
 
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from django.core.management.base import BaseCommand, CommandError
 
 from board.models import Forum, Section
+
+_UTC = ZoneInfo("UTC")
+
+
+def _dt(s):
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_UTC)
+    except ValueError:
+        return None
 
 
 class Command(BaseCommand):
@@ -68,9 +81,15 @@ class Command(BaseCommand):
         # Używamy kolumny "order" jeśli istnieje, fallback na forum_id
         forum_cols = {r[1] for r in conn.execute("PRAGMA table_info(forums)").fetchall()}
         order_col = '"order"' if "order" in forum_cols else "forum_id"
+        has_last_post_at = "last_post_at" in forum_cols
+        last_post_at_col = ", last_post_at" if has_last_post_at else ""
+        # Note: topic_count, post_count are NOT imported — maintained by the app.
+        # Note: moderator_names, last_post_author, last_post_author_url, last_post_url
+        # have no corresponding Django Forum model fields — they are not imported.
         forums = conn.execute(
             f"SELECT forum_id, section_id, parent_forum_id, title, description, "
-            f"topic_count, post_count, visibility AS visibility_class, {order_col} AS display_order "
+            f"visibility AS visibility_class, {order_col} AS display_order"
+            f"{last_post_at_col} "
             f"FROM forums ORDER BY forum_id"
         ).fetchall()
 
@@ -93,6 +112,7 @@ class Command(BaseCommand):
                     return False  # parent not yet imported
 
             section = get_section(row)
+            last_post_at_val = _dt(row["last_post_at"]) if has_last_post_at else None
             forum, created = Forum.objects.get_or_create(
                 title=row["title"],
                 section=section,
@@ -102,13 +122,19 @@ class Command(BaseCommand):
                     "order": row["display_order"],
                     # visibility_class from phpBB: 0=public, 1=registered, 2=admin
                     "access_level": row["visibility_class"] or 0,
-                    "topic_count": row["topic_count"] or 0,
-                    "post_count": row["post_count"] or 0,
+                    "last_post_at": last_post_at_val,
                 },
             )
-            if not created and forum.order != row["display_order"]:
-                forum.order = row["display_order"]
-                forum.save(update_fields=["order"])
+            if not created:
+                update_fields = []
+                if forum.order != row["display_order"]:
+                    forum.order = row["display_order"]
+                    update_fields.append("order")
+                if has_last_post_at:
+                    forum.last_post_at = last_post_at_val
+                    update_fields.append("last_post_at")
+                if update_fields:
+                    forum.save(update_fields=update_fields)
             forum_map[row["forum_id"]] = forum
             return True
 

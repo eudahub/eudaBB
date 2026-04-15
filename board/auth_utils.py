@@ -17,16 +17,19 @@ PREHASH_TIME      = 2
 PREHASH_PARALLEL  = 1
 PREHASH_HASHLEN   = 32      # bytes → 64 hex chars
 
-SITE_SALT_SUFFIX = ":sfiniabb"
+SITE_SALT_SUFFIX = ":eudaBB"
 
 
 def prehash_password(password: str, username: str) -> str:
-    """Return hex-encoded argon2id(password, username+':sfiniabb').
+    """Return hex-encoded argon2id(password, normalize(username)+':eudaBB').
 
-    Deterministic — same password + username always gives the same hex string.
-    Used by CLI commands and the auth backend (for admin/CLI logins without JS).
+    Salt = normalized username (lowercase, no diacritics, alphanumeric only)
+    plus the engine suffix ':eudaBB'.  Deterministic — same password + username
+    always gives the same hex string.  Used by CLI commands and the auth backend
+    (for admin/CLI logins without JS).
     """
-    salt = (username.lower() + SITE_SALT_SUFFIX).encode()
+    from .username_utils import normalize
+    salt = (normalize(username) + SITE_SALT_SUFFIX).encode()
     raw = hash_secret_raw(
         secret=password.encode(),
         salt=salt,

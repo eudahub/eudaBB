@@ -42,11 +42,14 @@ from board.search_index import rebuild_post_search_index_for_posts
 
 
 TOPIC_TYPE_MAP = {
-    "":            Topic.TopicType.NORMAL,
-    "Przyklejony": Topic.TopicType.STICKY,
-    "Ogłoszenie":  Topic.TopicType.ANNOUNCEMENT,
-    "[ Ankieta ]": Topic.TopicType.NORMAL,   # polls → treat as normal for now
-    "Przesunięty": Topic.TopicType.NORMAL,   # moved placeholder
+    "":             Topic.TopicType.NORMAL,
+    None:           Topic.TopicType.NORMAL,
+    "Przyklejony":  Topic.TopicType.STICKY,
+    "sticky":       Topic.TopicType.STICKY,
+    "Ogłoszenie":   Topic.TopicType.ANNOUNCEMENT,
+    "announcement": Topic.TopicType.ANNOUNCEMENT,
+    "[ Ankieta ]":  Topic.TopicType.NORMAL,   # polls → treat as normal for now
+    "Przesunięty":  Topic.TopicType.NORMAL,   # moved placeholder
 }
 
 # Polish month abbreviations used by phpBB/sfinia
@@ -57,17 +60,28 @@ _PL_MONTHS = {
 
 
 def parse_pl_date(s):
-    """Parse 'Nie 21:08, 22 Sty 2006' → aware datetime (UTC).
+    """Parse datetime string → aware datetime (UTC).
 
-    Interprets the time as Europe/Warsaw (handles DST automatically:
-    winter = UTC+1, summer = UTC+2). Returns None on failure.
+    Handles two formats:
+    - Polish phpBB: 'Nie 21:08, 22 Sty 2006' (interpreted as Europe/Warsaw)
+    - ISO 8601: '2026-04-11T13:27:04' or '2026-04-11 13:27:04' (treated as UTC)
+
+    Returns None on failure.
     """
     if not s:
         return None
+    # ISO format (eudaHub / incremental export)
     try:
-        # Format: <DayAbbr> <HH:MM>, <DD> <MonthAbbr> <YYYY>
+        from zoneinfo import ZoneInfo
+        _UTC = ZoneInfo("UTC")
+        normalized = s.replace("T", " ")
+        dt = datetime.strptime(normalized[:19], "%Y-%m-%d %H:%M:%S")
+        return dt.replace(tzinfo=_UTC)
+    except ValueError:
+        pass
+    # Polish phpBB format: 'Nie 21:08, 22 Sty 2006'
+    try:
         parts = s.split()
-        # parts: ['Nie', '21:08,', '22', 'Sty', '2006']
         time_part = parts[1].rstrip(",")
         hour, minute = map(int, time_part.split(":"))
         day = int(parts[2])
@@ -75,7 +89,6 @@ def parse_pl_date(s):
         year = int(parts[4])
         if month is None:
             return None
-        # Create naive datetime, then attach Warsaw zone — DST handled automatically
         naive = datetime(year, month, day, hour, minute)
         return naive.replace(tzinfo=_WARSAW)
     except Exception:
@@ -104,7 +117,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        import os
         db_path = options["archive_db"]
+        is_sfinia = os.path.basename(db_path).startswith("sfinia")
         try:
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
@@ -175,7 +190,7 @@ class Command(BaseCommand):
         # rename_map is also used later to fix [quote="OldName"] in content_bbcode
         rename_map = {}  # old_name → new_name
         import_db_path = options.get("import_db")
-        if import_db_path:
+        if import_db_path and is_sfinia:
             try:
                 conn_imp = sqlite3.connect(import_db_path)
                 conn_imp.row_factory = sqlite3.Row
@@ -266,11 +281,14 @@ class Command(BaseCommand):
                 for new_order, row in enumerate(posts_in_topic, start=1):
                     author = user_map.get(row["author_name"])
                     keys = row.keys()
-                    # Use enriched content_quotes when available, fall back to content.
-                    # When quote_status=4 the post has unbalanced tags — content_quotes
-                    # is NULL there, so content is used and broken_tags is set True.
-                    content_quotes = row["content_quotes"] if "content_quotes" in keys else None
-                    content_bbcode = content_quotes or row["content"] or ""
+                    if is_sfinia:
+                        # Use enriched content_quotes when available, fall back to content.
+                        # When quote_status=4 the post has unbalanced tags — content_quotes
+                        # is NULL there, so content is used and broken_tags is set True.
+                        content_quotes = row["content_quotes"] if "content_quotes" in keys else None
+                        content_bbcode = content_quotes or row["content"] or ""
+                    else:
+                        content_bbcode = row["content"] or ""
                     repaired_content, repair_changes = repair_bbcode(content_bbcode)
                     if repair_changes:
                         content_bbcode = repaired_content
@@ -282,14 +300,14 @@ class Command(BaseCommand):
                             content_bbcode,
                         )
                     broken_tags = (
-                        "quote_status" in keys and row["quote_status"] == 4
+                        is_sfinia and "quote_status" in keys and row["quote_status"] == 4
                     )
                     dt = parse_pl_date(row["created_at"])
                     post_objects.append(Post(
                         topic=topic,
                         archive_post_id=row["post_id"],
                         author=author,
-                        subject=row["subject"] or "",
+                        subject=row["topic_title"] or "",
                         content_bbcode=content_bbcode,
                         broken_tags=broken_tags,
                         post_order=new_order,
@@ -438,6 +456,26 @@ class Command(BaseCommand):
         if users_to_update:
             User.objects.bulk_update(users_to_update, ["post_count"], batch_size=1000)
         self.stdout.write(f"  Zaktualizowano liczniki dla {len(users_to_update)} użytkowników.")
+
+        # --- Recalculate active_days (distinct UTC days with ≥1 post) ---
+        # For sfinia imports author_name in posts maps to new_name → username (handled by user_map).
+        # For other imports it maps directly to username.
+        # Either way, posts already have author_id set at this point.
+        self.stdout.write("Przeliczam active_days użytkowników…")
+        from django.db import connection
+        User.objects.update(active_days=0)
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT author_id, COUNT(DISTINCT DATE(created_at AT TIME ZONE 'UTC'))
+                FROM forum_posts
+                WHERE author_id IS NOT NULL
+                GROUP BY author_id
+            """)
+            active_days_rows = cursor.fetchall()
+        active_days_users = [User(id=row[0], active_days=row[1]) for row in active_days_rows]
+        if active_days_users:
+            User.objects.bulk_update(active_days_users, ["active_days"], batch_size=1000)
+        self.stdout.write(f"  Zaktualizowano active_days dla {len(active_days_users)} użytkowników.")
 
         self.stdout.write(self.style.SUCCESS(
             f"Gotowe. Wątki: {topics_created}, Posty: {posts_created}"

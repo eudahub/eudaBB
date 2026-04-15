@@ -9,7 +9,7 @@
     {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
     <input type="hidden" name="password_is_prehashed" value="0" id="prehashed-flag">
     {% if error %}
-      <p style="color:red;">{{ error }}</p>
+      <p style="color:red;">{{ error|safe }}</p>
     {% endif %}
     <label>Nick:
       <input type="text" name="username" required autocomplete="username" autofocus>
@@ -19,9 +19,8 @@
     </label>
     <button type="submit" id="login-btn">Zaloguj</button>
   </form>
-  <p><a href="{% url 'request_reset' %}">Nie pamiętasz hasła? Zresetuj je.</a></p>
   <p><a href="{% url 'register' %}">Nie masz konta? Zarejestruj się.</a></p>
-  <p><a href="{% url 'find_account' %}">Nie pamiętasz nicka? Podaj email → odzyskaj konto.</a></p>
+  <p><a href="{% url 'request_reset' %}">Nie mam hasła</a></p>
   <p><a href="{% url 'contact' %}">Problem z logowaniem? Napisz do administratora.</a></p>
 </article>
 <script>
@@ -29,7 +28,12 @@
   var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
   var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
 
-  function saltFor(username) { return username.toLowerCase() + ':sfiniabb'; }
+  var _MANUAL = {'ł':'l','Ł':'l','ø':'o','Ø':'o','æ':'a','Æ':'a'};
+  function normalizeUsername(u) {
+    u = u.replace(/[łŁøØæÆ]/g, function(c){ return _MANUAL[c]; });
+    return u.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+  function saltFor(username) { return normalizeUsername(username) + ':eudaBB'; }
 
   var form = document.getElementById('login-form');
   var flag = document.getElementById('prehashed-flag');

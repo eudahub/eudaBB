@@ -34,16 +34,35 @@
       </label>
     {% endfor %}
 
+    {% if can_release_nick %}
     <label style="display:flex;gap:.4rem;align-items:center;margin-top:.6rem;">
       <input type="checkbox" name="do_release_nick" value="1">
-      <span style="font-size:13px;">Zwolnij nick — usuń konto i wszystkie jego posty (cytowania zmienią autora na „[usunięty]")</span>
+      <span style="font-size:13px;">Zwolnij nick — usuń konto i wszystkie jego posty (cytowania zmienią autora na „[usunięty]"); email spamera zostanie zablokowany na stałe</span>
     </label>
+    {% else %}
+    <div style="font-size:12px;color:#666;margin-top:.6rem;">
+      Zwolnienie nicku niedostępne — użytkownik ma {{ author.active_days }} aktywnych dni (tylko admin może usuwać takich użytkowników).
+    </div>
+    {% endif %}
   </fieldset>
   {% endif %}
 
   {% if post.author_ip %}
   <fieldset style="margin-bottom:1rem;padding:.6rem .8rem;border:1px solid #c88;">
     <legend style="font-size:12px;font-weight:bold;color:#900;">Adres IP</legend>
+    <div style="font-size:12px;margin-bottom:.4rem;">
+      {{ post.author_ip }}
+      {% if ip_country_code %}
+        — <strong>{{ ip_country_code }}</strong>{% if ip_country_name %} ({{ ip_country_name }}){% endif %}
+        {% if ip_country_blocked %}
+          <span style="color:#900;font-weight:bold;margin-left:.4rem;">&#9888; kraj zablokowany</span>
+        {% else %}
+          {% if is_admin_or_root %}
+            &nbsp;<a href="{% url 'country_blocks_config' %}" style="font-size:11px;">[blokuj kraj]</a>
+          {% endif %}
+        {% endif %}
+      {% endif %}
+    </div>
     <label style="display:flex;gap:.4rem;align-items:center;">
       <input type="checkbox" name="do_flag_ip" value="1" checked>
       <span style="font-size:13px;">Oznacz IP jako groźne (retencja {{ dangerous_days }} dni)</span>

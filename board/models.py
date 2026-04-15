@@ -6,9 +6,9 @@ from django.dispatch import receiver
 from django.utils import timezone
 
 
-AVATAR_MAX_BYTES  = 64 * 1024   # 64 kB
-AVATAR_MAX_W      = 128
-AVATAR_MAX_H      = 128
+AVATAR_MAX_BYTES  = 80 * 1024   # 80 kB
+AVATAR_MAX_W      = 150
+AVATAR_MAX_H      = 150
 AVATAR_MIN_W      = 16
 AVATAR_MIN_H      = 32
 
@@ -45,10 +45,6 @@ class User(AbstractUser):
     likes_given_count = models.PositiveIntegerField(default=0)
     likes_received_count = models.PositiveIntegerField(default=0)
     rank = models.CharField(max_length=64, blank=True, default="")
-    is_ghost = models.BooleanField(
-        default=False,
-        help_text="Archive-imported account — no password, cannot log in",
-    )
     class SpamClass(models.IntegerChoices):
         NORMAL = 0, "Normalny"
         GRAY   = 1, "Gray (zaśmiecacz)"
@@ -62,11 +58,10 @@ class User(AbstractUser):
     )
 
     username_normalized = models.CharField(
-        max_length=31, blank=True, default="", db_index=True,
+        max_length=31, blank=True, default="", unique=True,
         help_text="Lowercase, no diacritics, alphanumeric only. Used for uniqueness checks.",
     )
 
-    is_banned = models.BooleanField(default=False)
     banned_until = models.DateTimeField(null=True, blank=True)
     ban_reason = models.TextField(blank=True, default="")
     is_processing = models.BooleanField(
@@ -102,8 +97,26 @@ class User(AbstractUser):
         help_text="0=użytkownik, 1=moderator, 2=administrator. Root jest osobnym kontem (is_root).",
     )
 
+    active_days = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of distinct UTC days on which the user posted at least one post.",
+    )
+
+    def is_ghost(self) -> bool:
+        """True when account has no usable password (archive-imported, never claimed)."""
+        return not self.has_usable_password()
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        super().clean()
+        if self.is_root and self.email:
+            raise ValidationError({"email": "Konto root nie może mieć adresu email."})
+
     def save(self, *args, **kwargs):
         from .username_utils import normalize
+        # Root must never have an email — enforce silently even if clean() was bypassed.
+        if self.is_root:
+            self.email = ""
         self.username_normalized = normalize(self.username)
         update_fields = kwargs.get("update_fields")
         if update_fields is not None and "username" in update_fields:
@@ -347,6 +360,11 @@ class Topic(models.Model):
         STICKY = 1, "Sticky"
         ANNOUNCEMENT = 2, "Announcement"
 
+    class Feature(models.IntegerChoices):
+        PLAIN = 0, "Plain"
+        POLL = 1, "Poll"
+        CHECKLIST = 2, "Checklist"
+
     forum = models.ForeignKey(Forum, on_delete=models.CASCADE, related_name="topics")
     archive_topic_id = models.PositiveIntegerField(
         null=True, blank=True, db_index=True
@@ -359,10 +377,17 @@ class Topic(models.Model):
     topic_type = models.IntegerField(
         choices=TopicType.choices, default=TopicType.NORMAL,
     )
+    feature = models.IntegerField(
+        choices=Feature.choices, default=Feature.PLAIN,
+    )
     is_locked = models.BooleanField(default=False)
     is_temporary = models.BooleanField(
         default=False, db_index=True,
         help_text="Auto-managed: True when all posts are temporary, False when any post is permanent.",
+    )
+    is_pending = models.BooleanField(
+        default=False, db_index=True,
+        help_text="Topic awaiting moderation — not visible on the forum.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -474,6 +499,10 @@ class Post(models.Model):
     is_temporary = models.BooleanField(
         default=False, db_index=True,
         help_text="Temporary post — excluded from export, deleted on mode cleanup.",
+    )
+    is_pending = models.BooleanField(
+        default=False, db_index=True,
+        help_text="Post awaiting moderation — not visible on the forum.",
     )
 
     # Set during import when the post has unbalanced [quote]/[/quote] tags
@@ -720,6 +749,188 @@ class PollVote(models.Model):
         return f"PollVote poll={self.poll_id} user={self.user_id} option={self.option_id}"
 
 
+# ---------------------------------------------------------------------------
+# Checklist (interactive task list attached to a topic)
+# ---------------------------------------------------------------------------
+
+class Checklist(models.Model):
+    """Interactive checklist attached 1:1 to a topic (like Poll)."""
+
+    class DefaultSort(models.TextChoices):
+        UPVOTES = "upvotes", "Upvotes"
+        PRIORITY = "priority", "Priority"
+        DATE = "date", "Date"
+        STATUS = "status", "Status"
+
+    topic = models.OneToOneField(
+        Topic, on_delete=models.CASCADE, related_name="checklist"
+    )
+    allow_user_proposals = models.BooleanField(default=True)
+    default_sort = models.CharField(
+        max_length=10, choices=DefaultSort.choices, default=DefaultSort.UPVOTES,
+    )
+    allowed_tags = models.TextField(blank=True, default="")
+    is_closed = models.BooleanField(default=False)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "forum_checklists"
+
+    def __str__(self):
+        return f"Checklist topic={self.topic_id}"
+
+
+class ChecklistCategory(models.Model):
+    """One category (tag) within a checklist."""
+
+    checklist = models.ForeignKey(
+        Checklist, on_delete=models.CASCADE, related_name="categories"
+    )
+    name = models.CharField(max_length=50)
+    color = models.CharField(max_length=7, default="#6c757d")  # hex
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "forum_checklist_categories"
+        ordering = ["order", "id"]
+        unique_together = [("checklist", "name")]
+
+    def __str__(self):
+        return f"{self.name} (checklist={self.checklist_id})"
+
+
+class ChecklistItem(models.Model):
+    """One item (proposal / task) in a checklist."""
+
+    class Status(models.IntegerChoices):
+        PENDING = 0, "Pending"
+        REJECTED = 1, "Rejected"
+        NEW = 2, "New"
+        IN_PROGRESS = 3, "In progress"
+        DONE = 4, "Done"
+        WONT_FIX = 5, "Won't fix"
+        DUPLICATE = 6, "Duplicate"
+
+    class Priority(models.IntegerChoices):
+        CRITICAL = 1, "Critical"
+        IMPORTANT = 2, "Important"
+        MINOR = 3, "Minor"
+        PLANNED = 4, "Planned"
+
+    checklist = models.ForeignKey(
+        Checklist, on_delete=models.CASCADE, related_name="items"
+    )
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, related_name="checklist_items"
+    )
+    author_label = models.CharField(max_length=30, blank=True, default="")
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default="")
+    category = models.ForeignKey(
+        ChecklistCategory, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="items"
+    )
+    status = models.IntegerField(
+        choices=Status.choices, default=Status.NEW
+    )
+    priority = models.IntegerField(
+        choices=Priority.choices, null=True, blank=True
+    )
+    duplicate_of = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="duplicates"
+    )
+    rejection_reason = models.CharField(max_length=500, blank=True, default="")
+    tag = models.CharField(max_length=50, blank=True, default="")
+    upvote_count = models.IntegerField(default=0)
+    anon_upvote_count = models.IntegerField(default=0)
+    comment_count = models.IntegerField(default=0)
+    order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    status_changed_at = models.DateTimeField(null=True, blank=True)
+    status_changed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+"
+    )
+
+    class Meta:
+        db_table = "forum_checklist_items"
+        ordering = ["order", "id"]
+        indexes = [
+            models.Index(fields=["checklist", "status"]),
+            models.Index(fields=["checklist", "-upvote_count"]),
+            models.Index(fields=["checklist", "created_at"]),
+            models.Index(fields=["checklist", "order"]),
+        ]
+
+    def __str__(self):
+        return f"ChecklistItem #{self.pk} '{self.title[:40]}'"
+
+    @property
+    def total_upvotes(self):
+        return self.upvote_count + self.anon_upvote_count
+
+    def display_author(self):
+        if self.author is not None:
+            return self.author.username
+        return self.author_label or "Anonimus"
+
+
+class ChecklistUpvote(models.Model):
+    """One upvote per user per checklist item."""
+
+    item = models.ForeignKey(
+        ChecklistItem, on_delete=models.CASCADE, related_name="upvotes"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="checklist_upvotes"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "forum_checklist_upvotes"
+        unique_together = [("item", "user")]
+        indexes = [
+            models.Index(fields=["item"]),
+            models.Index(fields=["user"]),
+        ]
+
+    def __str__(self):
+        return f"ChecklistUpvote item={self.item_id} user={self.user_id}"
+
+
+class ChecklistComment(models.Model):
+    """Short comment under a checklist item."""
+
+    item = models.ForeignKey(
+        ChecklistItem, on_delete=models.CASCADE, related_name="comments"
+    )
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, related_name="checklist_comments"
+    )
+    author_label = models.CharField(max_length=30, blank=True, default="")
+    content = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "forum_checklist_comments"
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["item", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"ChecklistComment #{self.pk} item={self.item_id}"
+
+    def display_author(self):
+        if self.author is not None:
+            return self.author.username
+        return self.author_label or "Anonimus"
+
+
 class TopicParticipant(models.Model):
     """Per-topic participation counters for one user."""
 
@@ -794,8 +1005,6 @@ class PostLike(models.Model):
 class SiteConfig(models.Model):
     """Singleton table (always pk=1) — site-wide toggles configurable by root."""
 
-    # Show "Przełącz" link in nav (lets you quickly switch accounts — test use only)
-    show_switch_link = models.BooleanField(default=False)
     search_snippet_chars = models.PositiveIntegerField(default=800)
     poll_options_soft_max = models.PositiveSmallIntegerField(
         default=50,
@@ -906,3 +1115,70 @@ class SpamDomain(models.Model):
 
     class Meta:
         db_table = "forum_spam_domain"
+
+
+class BlockedCountry(models.Model):
+    """Countries from which registration and posting are blocked."""
+    country_code = models.CharField(max_length=2, primary_key=True)
+    country_name = models.CharField(max_length=100, blank=True, default="")
+    blocked_by = models.ForeignKey(
+        "User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
+    blocked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "board_blocked_countries"
+        ordering = ["country_code"]
+
+    def __str__(self):
+        return f"{self.country_code} ({self.country_name})" if self.country_name else self.country_code
+
+
+class SpamEmail(models.Model):
+    """Individual email addresses permanently banned (e.g. from released spammer accounts)."""
+    email = models.EmailField(max_length=254, primary_key=True)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "forum_spam_email"
+
+
+class ModerationWindow(models.Model):
+    """Time window during which posts by new users (active_days<=5) go to the moderation queue."""
+
+    DAY_NAMES = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Nd"]
+
+    start_hour = models.PositiveSmallIntegerField()
+    start_minute = models.PositiveSmallIntegerField(default=0)
+    end_hour = models.PositiveSmallIntegerField()
+    end_minute = models.PositiveSmallIntegerField(default=0)
+    # 0=Mon … 6=Sun; null = all days
+    day_from = models.PositiveSmallIntegerField(null=True, blank=True)
+    day_to = models.PositiveSmallIntegerField(null=True, blank=True)
+    timezone = models.CharField(max_length=64, default="Europe/Warsaw")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        "User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="moderation_windows",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "board_moderation_windows"
+        ordering = ["start_hour", "start_minute"]
+
+    @property
+    def day_range_label(self):
+        if self.day_from is not None and self.day_to is not None:
+            return f"{self.DAY_NAMES[self.day_from]}–{self.DAY_NAMES[self.day_to]}"
+        return "każdy dzień"
+
+    def __str__(self):
+        days = ""
+        if self.day_from is not None and self.day_to is not None:
+            days = f" ({self.DAY_NAMES[self.day_from]}–{self.DAY_NAMES[self.day_to]})"
+        return (
+            f"{self.start_hour:02d}:{self.start_minute:02d}"
+            f"–{self.end_hour:02d}:{self.end_minute:02d}{days}"
+            f" [{self.timezone}]"
+        )

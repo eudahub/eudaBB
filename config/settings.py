@@ -16,6 +16,10 @@ TEST_MODE = config("TEST_MODE", default=False, cast=bool)
 # Example: SITE_NOTICE="WERSJA TESTOWA — baza danych zostanie zresetowana, wszelkie zmiany będą utracone."
 SITE_NOTICE = config("SITE_NOTICE", default="")
 
+# Path to MaxMind GeoLite2-Country.mmdb (optional — GeoIP country lookups and blocking).
+# Install: pip install geoip2  and set GEOIP_DB_PATH in .env
+GEOIP_DB_PATH = config("GEOIP_DB_PATH", default="/opt/geoip/GeoLite2-Country.mmdb")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -23,7 +27,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework",
     "board",
+    "api",
 ]
 
 MIDDLEWARE = [
@@ -167,3 +173,34 @@ EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="apikey")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL",  default="noreply@eudahub.pl")
 EMAIL_FROM_NAME     = config("EMAIL_FROM_NAME",     default="Forum eudaHub")
+
+# ---------------------------------------------------------------------------
+# REST framework — Android / mobile API
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    # Disable browsable API in production; keep in DEBUG for convenience
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+    ] + (["rest_framework.renderers.BrowsableAPIRenderer"] if config("DEBUG", default=True, cast=bool) else []),
+}
+
+SIMPLE_JWT = {
+    # Access token: short-lived (in RAM on device)
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),
+    # Refresh token: long-lived (EncryptedSharedPreferences)
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}

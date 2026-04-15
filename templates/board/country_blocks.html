@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Blokady krajów{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'moderation_queue' %}">Kolejka moderacji</a> ›
+  Blokady krajów
+</p>
+
+<h2>Blokady krajów (GeoIP)</h2>
+<p style="font-size:13px;color:#555;">
+  Użytkownicy z zablokowanych krajów nie mogą się rejestrować ani pisać postów.
+  Kody wg <a href="https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2" target="_blank">ISO 3166-1 alpha-2</a>.
+  Wymaga zainstalowanego <code>geoip2</code> i bazy <code>GeoLite2-Country.mmdb</code>
+  (ścieżka w <code>GEOIP_DB_PATH</code>).
+</p>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div style="margin-bottom:.6rem;padding:.4rem .7rem;background:{% if msg.tags == 'error' %}#fee{% else %}#efe{% endif %};border:1px solid #ccc;font-size:13px;">{{ msg }}</div>
+  {% endfor %}
+{% endif %}
+
+{% if blocked %}
+<table style="border-collapse:collapse;font-size:13px;margin-bottom:1.5rem;">
+  <thead>
+    <tr style="background:#f4f0e8;text-align:left;">
+      <th style="padding:4px 10px;">Kod</th>
+      <th style="padding:4px 10px;">Kraj</th>
+      <th style="padding:4px 10px;">Zablokowane przez</th>
+      <th style="padding:4px 10px;">Kiedy</th>
+      <th style="padding:4px 10px;"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in blocked %}
+    <tr style="border-top:1px solid #ddd;">
+      <td style="padding:4px 10px;font-weight:bold;">{{ b.country_code }}</td>
+      <td style="padding:4px 10px;">{{ b.country_name|default:"—" }}</td>
+      <td style="padding:4px 10px;color:#666;">{% if b.blocked_by %}{{ b.blocked_by.username }}{% else %}—{% endif %}</td>
+      <td style="padding:4px 10px;color:#666;font-size:11px;">{{ b.blocked_at|date:"d.m.Y H:i" }}</td>
+      <td style="padding:4px 10px;">
+        <form method="post" style="display:inline;" onsubmit="return confirm('Odblokować kraj {{ b.country_code }}?')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="country_code" value="{{ b.country_code }}">
+          <button type="submit" style="background:#060;color:#fff;border:none;padding:2px 8px;font-size:11px;cursor:pointer;">Odblokuj</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p style="color:#888;font-size:13px;">Brak zablokowanych krajów.</p>
+{% endif %}
+
+<div style="display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;">
+
+  <div>
+    <h3 style="font-size:14px;">Dodaj kraj ręcznie</h3>
+    <form method="post" style="font-size:13px;">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add">
+      <label>Kod kraju (2 litery):
+        <input type="text" name="country_code" maxlength="2" style="width:3rem;text-transform:uppercase;" placeholder="ZA" required>
+      </label>
+      <label style="margin-left:.5rem;">Nazwa (opcja):
+        <input type="text" name="country_name" style="width:140px;" placeholder="South Africa">
+      </label>
+      <button type="submit" style="background:#900;color:#fff;border:none;padding:.3rem .7rem;cursor:pointer;margin-left:.4rem;">Zablokuj</button>
+    </form>
+  </div>
+
+  <div>
+    <h3 style="font-size:14px;">Dodaj kraj po IP</h3>
+    <form method="post" style="font-size:13px;">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add_by_ip">
+      <label>IP:
+        <input type="text" name="ip" style="width:160px;" placeholder="197.239.6.32" required>
+      </label>
+      <button type="submit" style="background:#900;color:#fff;border:none;padding:.3rem .7rem;cursor:pointer;margin-left:.4rem;">Wykryj i zablokuj kraj</button>
+    </form>
+  </div>
+
+</div>
+
+<p style="margin-top:1.5rem;font-size:12px;">
+  <a href="{% url 'moderation_windows_config' %}">« Okna moderacji</a>
+</p>
+{% endblock %}

@@ -7,16 +7,16 @@ from .models import User, Section, Forum, Topic, Post
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ["username", "email", "post_count", "is_ghost", "is_active", "is_banned", "is_staff"]
-    list_filter = ["is_ghost", "is_active", "is_banned", "is_staff"]
+    list_display = ["username", "email", "post_count", "is_active", "is_staff"]
+    list_filter = ["is_active", "is_staff"]
     actions = ["activate_accounts", "delete_empty_accounts"]
     fieldsets = BaseUserAdmin.fieldsets + (
-        ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "is_ghost", "is_banned", "ban_reason", "archive_access")}),
+        ("Forum profile", {"fields": ("signature", "website", "location", "avatar", "post_count", "rank", "banned_until", "ban_reason", "archive_access")}),
     )
 
-    @admin.action(description="Aktywuj wybrane konta (is_ghost=False, is_active=True)")
+    @admin.action(description="Aktywuj wybrane konta (is_active=True)")
     def activate_accounts(self, request, queryset):
-        updated = queryset.filter(is_ghost=True).update(is_ghost=False, is_active=True)
+        updated = queryset.filter(is_active=False).update(is_active=True, banned_until=None)
         self.message_user(request, f"Aktywowano {updated} kont.", messages.SUCCESS)
 
     @admin.action(description="Usuń puste konta (bez postów, tematów i PM)")

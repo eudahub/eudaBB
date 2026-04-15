@@ -14,7 +14,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         conn = sqlite3.connect(SPAMBOXES_DB)
         cur = conn.cursor()
-        cur.execute("SELECT domain, spam FROM spamboxes")
+        cur.execute("SELECT domain, spam FROM spamboxes WHERE spam IS NOT NULL")
         rows = cur.fetchall()
         conn.close()
 

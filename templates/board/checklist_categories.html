@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Kategorie checklisty — {{ topic.title }}{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
+  Kategorie
+</p>
+
+<h2>Kategorie checklisty</h2>
+
+{% if categories %}
+<table style="width:100%;border-collapse:collapse;margin-bottom:1rem;">
+  <thead>
+    <tr style="border-bottom:2px solid #800000;font-size:12px;">
+      <th style="text-align:left;padding:.3rem;">Nazwa</th>
+      <th style="text-align:left;padding:.3rem;width:60px;">Kolor</th>
+      <th style="text-align:right;padding:.3rem;width:120px;">Akcje</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for cat in categories %}
+    <tr style="border-bottom:1px solid #eee;">
+      <td style="padding:.3rem;">
+        <span style="display:inline-block;width:12px;height:12px;background:{{ cat.color }};border-radius:2px;vertical-align:middle;margin-right:.3rem;"></span>
+        {{ cat.name }}
+      </td>
+      <td style="padding:.3rem;font-size:11px;color:#888;">{{ cat.color }}</td>
+      <td style="padding:.3rem;text-align:right;">
+        <form method="post" style="display:inline;" onsubmit="return confirm('Usunac kategorie {{ cat.name }}?');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="category_id" value="{{ cat.pk }}">
+          <button type="submit" class="bbsrc-btn" style="color:#900;font-size:11px;">Usun</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="font-size:12px;color:#888;"><em>Brak kategorii.</em></p>
+{% endif %}
+
+<h3>Dodaj kategorie</h3>
+<form method="post" style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="add">
+  <div>
+    <label style="font-size:12px;display:block;">Nazwa</label>
+    <input type="text" name="name" maxlength="50" required style="font-size:12px;padding:3px 6px;">
+  </div>
+  <div>
+    <label style="font-size:12px;display:block;">Kolor</label>
+    <input type="color" name="color" value="#6c757d" style="width:40px;height:28px;padding:0;border:1px solid #ccc;">
+  </div>
+  <button type="submit" style="font-size:12px;padding:3px 10px;">Dodaj</button>
+</form>
+
+<p style="margin-top:1rem;">
+  <a href="{% url 'topic_detail' topic.pk %}">&larr; Wrocdo checklisty</a>
+</p>
+{% endblock %}

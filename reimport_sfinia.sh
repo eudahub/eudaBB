@@ -11,7 +11,7 @@ ARCHIVER_DIR="${SCRIPT_DIR}/../phpbb-archiver"
 VENV_ACTIVATE="${SCRIPT_DIR}/venv/bin/activate"
 
 SFINIA_FULL="${ARCHIVER_DIR}/sfinia_full.db"
-AVATARS_DIR="${ARCHIVER_DIR}/admin_avatars"
+AVATARS_DIR="${ARCHIVER_DIR}/avatars"
 
 RUNSERVER_BIND="${1:-127.0.0.1:8000}"
 
@@ -28,11 +28,14 @@ fi
 source "${VENV_ACTIVATE}"
 cd "${SCRIPT_DIR}"
 
-echo "==> Migracje"
-python manage.py migrate
-
 echo "==> Czyszczenie bazy (morfologia zostaje)"
 python manage.py flush_except_morph --no-input
+
+echo "==> Czyszczenie avatarów"
+rm -f media/avatars/*
+
+echo "==> Migracje"
+python manage.py migrate
 
 echo "==> Import użytkowników"
 if [[ -d "${AVATARS_DIR}" ]]; then
@@ -57,5 +60,7 @@ python manage.py import_polls "${SFINIA_FULL}"
 echo "==> Tworzenie konta root"
 python manage.py create_root
 
+echo "==> Podsumowanie:"
+python manage.py shell -c "from board.models import Topic, Post, Poll, Checklist; print(f'  Topiki:     {Topic.objects.count()}'); print(f'  Posty:      {Post.objects.count()}'); print(f'  Ankiety:    {Poll.objects.count()}'); print(f'  Checklisty: {Checklist.objects.count()}')"
 echo "==> Gotowe."
 #python manage.py runserver "${RUNSERVER_BIND}"

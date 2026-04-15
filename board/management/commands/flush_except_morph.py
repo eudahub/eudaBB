@@ -40,12 +40,24 @@ class Command(BaseCommand):
                 self.stdout.write("Anulowano.")
                 return
 
-        tables = [
+        # Collect model tables, but only those that already exist in the DB
+        # (new migrations may define tables not yet created).
+        model_tables = {
             m._meta.db_table
             for m in apps.get_models()
             if m._meta.db_table not in PRESERVE_TABLES
             and m._meta.managed
-        ]
+        }
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            )
+            existing = {row[0] for row in c.fetchall()}
+
+        tables = sorted(model_tables & existing)
+        if not tables:
+            self.stdout.write("Brak tabel do wyczyszczenia.")
+            return
 
         tables_sql = ", ".join(f'"{t}"' for t in tables)
         with connection.cursor() as c:

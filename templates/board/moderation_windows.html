@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Okna moderacji{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> ›
+  <a href="{% url 'moderation_queue' %}">Kolejka moderacji</a> ›
+  Konfiguracja okien
+</p>
+
+<h2>Okna czasowe moderacji</h2>
+<p style="font-size:13px;color:#555;">
+  W skonfigurowanych oknach posty użytkowników z active_days &le; 5 trafiają do
+  <a href="{% url 'moderation_queue' %}">kolejki moderacji</a> zamiast od razu na forum.
+  Czas podaj w <strong>strefie lokalnej</strong> (jak poniżej).
+  Zakres nocny, np. 23:00–02:00, działa prawidłowo (przekracza północ).
+</p>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div style="margin-bottom:.6rem;padding:.4rem .7rem;background:{% if msg.tags == 'error' %}#fee{% else %}#efe{% endif %};border:1px solid #ccc;font-size:13px;">{{ msg }}</div>
+  {% endfor %}
+{% endif %}
+
+{% if windows %}
+<table style="border-collapse:collapse;font-size:13px;margin-bottom:1.5rem;">
+  <thead>
+    <tr style="background:#f4f0e8;text-align:left;">
+      <th style="padding:4px 10px;">Godziny</th>
+      <th style="padding:4px 10px;">Dni tygodnia</th>
+      <th style="padding:4px 10px;">Strefa</th>
+      <th style="padding:4px 10px;">Status</th>
+      <th style="padding:4px 10px;">Dodane przez</th>
+      <th style="padding:4px 10px;"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for w in windows %}
+    <tr style="border-top:1px solid #ddd;{% if not w.is_active %}opacity:.5;{% endif %}">
+      <td style="padding:4px 10px;">
+        {{ w.start_hour|stringformat:"02d" }}:{{ w.start_minute|stringformat:"02d" }}
+        –
+        {{ w.end_hour|stringformat:"02d" }}:{{ w.end_minute|stringformat:"02d" }}
+      </td>
+      <td style="padding:4px 10px;">
+        {{ w.day_range_label }}
+      </td>
+      <td style="padding:4px 10px;">{{ w.timezone }}</td>
+      <td style="padding:4px 10px;">
+        <form method="post" style="display:inline;">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="toggle">
+          <input type="hidden" name="window_id" value="{{ w.pk }}">
+          <button type="submit" style="font-size:11px;padding:1px 6px;cursor:pointer;background:{% if w.is_active %}#090{% else %}#aaa{% endif %};color:#fff;border:none;">
+            {% if w.is_active %}aktywne{% else %}wyłączone{% endif %}
+          </button>
+        </form>
+      </td>
+      <td style="padding:4px 10px;color:#888;font-size:11px;">
+        {% if w.created_by %}{{ w.created_by.username }}{% else %}—{% endif %}
+        <br>{{ w.created_at|date:"d.m.Y H:i" }}
+      </td>
+      <td style="padding:4px 10px;">
+        <form method="post" style="display:inline;" onsubmit="return confirm('Usunąć to okno moderacji?')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="window_id" value="{{ w.pk }}">
+          <button type="submit" style="font-size:11px;padding:1px 6px;cursor:pointer;background:#900;color:#fff;border:none;">Usuń</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p style="color:#888;font-size:13px;">Brak skonfigurowanych okien — moderacja czasowa wyłączona.</p>
+{% endif %}
+
+<h3 style="font-size:14px;">Dodaj okno</h3>
+<form method="post" style="max-width:480px;">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="add">
+
+  <table style="font-size:13px;border-spacing:4px 6px;border-collapse:separate;">
+    <tr>
+      <td style="padding-right:8px;">Godzina od:</td>
+      <td>
+        <input type="number" name="start_hour" min="0" max="23" required style="width:44px;" placeholder="23">
+        :
+        <input type="number" name="start_minute" min="0" max="59" value="0" style="width:44px;" placeholder="00">
+      </td>
+    </tr>
+    <tr>
+      <td>Godzina do:</td>
+      <td>
+        <input type="number" name="end_hour" min="0" max="23" required style="width:44px;" placeholder="2">
+        :
+        <input type="number" name="end_minute" min="0" max="59" value="0" style="width:44px;" placeholder="00">
+      </td>
+    </tr>
+    <tr>
+      <td>Dni od (opcja):</td>
+      <td>
+        <select name="day_from" style="font-size:13px;">
+          <option value="">— każdy dzień —</option>
+          {% for idx, name in days %}
+            <option value="{{ idx }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </td>
+    </tr>
+    <tr>
+      <td>Dni do (opcja):</td>
+      <td>
+        <select name="day_to" style="font-size:13px;">
+          <option value="">— każdy dzień —</option>
+          {% for idx, name in days %}
+            <option value="{{ idx }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </td>
+    </tr>
+    <tr>
+      <td>Strefa czasowa:</td>
+      <td>
+        <input type="text" name="timezone" value="Europe/Warsaw" style="width:180px;font-size:13px;">
+        <span style="font-size:11px;color:#666;">(np. Europe/Warsaw)</span>
+      </td>
+    </tr>
+  </table>
+
+  <div style="margin-top:.6rem;">
+    <button type="submit" style="background:#036;color:#fff;border:none;padding:.3rem .8rem;cursor:pointer;">Dodaj okno</button>
+  </div>
+</form>
+{% endblock %}

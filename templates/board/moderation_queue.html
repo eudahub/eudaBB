@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Kolejka moderacji{% endblock %}
+
+{% block content %}
+<p class="breadcrumb">
+  <a href="/">Forum</a> › Kolejka moderacji
+</p>
+
+<h2>Kolejka moderacji
+  {% if pending_posts %}
+    <span style="font-size:14px;font-weight:normal;color:#900;">({{ pending_posts|length }} post{{ pending_posts|length|pluralize:",y,ów" }})</span>
+  {% endif %}
+</h2>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div style="margin-bottom:.6rem;padding:.4rem .7rem;background:{% if msg.tags == 'error' %}#fee{% else %}#efe{% endif %};border:1px solid #ccc;font-size:13px;">{{ msg }}</div>
+  {% endfor %}
+{% endif %}
+
+{% if not pending_posts %}
+  <p style="color:#555;">Brak postów oczekujących na moderację.</p>
+{% else %}
+
+<form method="post" id="queue-form">
+  {% csrf_token %}
+
+  <div style="margin-bottom:.7rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+    <button type="submit" name="action" value="approve" style="background:#060;color:#fff;border:none;padding:.3rem .8rem;cursor:pointer;">Zatwierdź zaznaczone</button>
+    <button type="submit" name="action" value="delete" style="background:#900;color:#fff;border:none;padding:.3rem .8rem;cursor:pointer;" onclick="return confirm('Usunąć zaznaczone posty?')">Usuń zaznaczone</button>
+    <label style="font-size:12px;cursor:pointer;">
+      <input type="checkbox" id="select-all"> zaznacz wszystkie
+    </label>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead>
+      <tr style="background:#f4f0e8;text-align:left;">
+        <th style="padding:4px 6px;width:24px;"></th>
+        <th style="padding:4px 6px;">Data</th>
+        <th style="padding:4px 6px;">Autor</th>
+        <th style="padding:4px 6px;">Dział / Wątek</th>
+        <th style="padding:4px 6px;">Fragment</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for post in pending_posts %}
+      <tr style="border-top:1px solid #ddd;{% if forloop.counter|divisibleby:2 %}background:#fafaf7;{% endif %}">
+        <td style="padding:4px 6px;text-align:center;">
+          <input type="checkbox" name="post_ids" value="{{ post.pk }}" class="post-cb">
+        </td>
+        <td style="padding:4px 6px;white-space:nowrap;color:#666;">
+          {{ post.created_at|date:"d.m.Y H:i" }}
+        </td>
+        <td style="padding:4px 6px;">
+          {% if post.author %}
+            <a href="{% url 'user_profile' post.author.pk %}" target="_blank">{{ post.author.username }}</a>
+            <br><span style="font-size:11px;color:#888;">dni: {{ post.author.active_days }}</span>
+          {% else %}
+            <span style="color:#aaa;">[usunięty]</span>
+          {% endif %}
+        </td>
+        <td style="padding:4px 6px;">
+          <span style="color:#888;font-size:11px;">{{ post.topic.forum.title }}</span><br>
+          {% if not post.topic.is_pending %}
+            <a href="{% url 'topic_detail' post.topic.pk %}" target="_blank">{{ post.topic.title }}</a>
+          {% else %}
+            <span style="color:#999;">{{ post.topic.title }} <em>(wątek pending)</em></span>
+          {% endif %}
+        </td>
+        <td style="padding:4px 6px;max-width:320px;overflow:hidden;word-break:break-word;">
+          <span style="color:#333;">{{ post.content_bbcode|truncatechars:200 }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</form>
+
+{% endif %}
+
+{% if authors_in_queue %}
+<hr style="margin:1.5rem 0;">
+<h3 style="font-size:15px;">Autorzy w kolejce — zwolnij nick</h3>
+<p style="font-size:12px;color:#666;">Usuwa konto i wszystkie posty użytkownika (pending i normalne). Email zostaje zablokowany.</p>
+<table style="border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="background:#f4f0e8;text-align:left;">
+      <th style="padding:4px 8px;">Nick</th>
+      <th style="padding:4px 8px;">Aktywne dni</th>
+      <th style="padding:4px 8px;">Postów</th>
+      <th style="padding:4px 8px;"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in authors_in_queue %}
+    <tr style="border-top:1px solid #ddd;">
+      <td style="padding:4px 8px;"><a href="{% url 'user_profile' a.pk %}" target="_blank">{{ a.username }}</a></td>
+      <td style="padding:4px 8px;">{{ a.active_days }}</td>
+      <td style="padding:4px 8px;">{{ a.post_count }}</td>
+      <td style="padding:4px 8px;">
+        {% if is_admin_or_root or a.active_days <= 5 %}
+        <form method="post" style="display:inline;" onsubmit="return confirm('Usunąć konto {{ a.username }} i wszystkie jego posty?')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="release_user">
+          <input type="hidden" name="user_id" value="{{ a.pk }}">
+          <button type="submit" style="background:#900;color:#fff;border:none;padding:2px 8px;cursor:pointer;font-size:12px;">Zwolnij nick</button>
+        </form>
+        {% else %}
+        <span style="font-size:11px;color:#888;">tylko admin ({{ a.active_days }} dni)</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p style="margin-top:1.5rem;font-size:12px;">
+  <a href="{% url 'moderation_windows_config' %}">Konfiguracja okien moderacji »</a>
+</p>
+
+<script>
+document.getElementById('select-all').addEventListener('change', function() {
+  document.querySelectorAll('.post-cb').forEach(cb => cb.checked = this.checked);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,417 @@
+{# Checklist partial — included in topic_detail.html when topic has a checklist #}
+
+<div class="post-box" style="margin-bottom:.7rem;" id="checklist-panel">
+  <div class="post-header">
+    <span>Checklista{% if checklist.is_closed %} (zamknieta){% endif %}</span>
+    <span style="display:flex;gap:.5rem;align-items:center;font-size:12px;">
+      {% if cl_pending and cl_is_owner_or_mod %}
+        <span style="background:#d4a017;color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;">
+          {{ cl_pending|length }} oczekuje
+        </span>
+      {% endif %}
+      {% if cl_is_owner_or_mod %}
+        <a href="{% url 'checklist_manage_categories' topic.pk %}" class="bbsrc-btn">Kategorie</a>
+        <form method="post" action="{% url 'checklist_toggle_closed' topic.pk %}" style="display:inline;">
+          {% csrf_token %}
+          <button type="submit" class="bbsrc-btn">
+            {% if checklist.is_closed %}Otworz{% else %}Zamknij{% endif %}
+          </button>
+        </form>
+      {% endif %}
+    </span>
+  </div>
+  <div style="padding:.55rem .7rem;">
+
+    {# Filter / sort bar #}
+    <form method="get" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:12px;margin-bottom:.6rem;">
+      <label>Sortuj:
+        <select name="cl_sort" style="font-size:12px;padding:1px;">
+          <option value="upvotes"{% if cl_sort == "upvotes" %} selected{% endif %}>Glosy</option>
+          <option value="priority"{% if cl_sort == "priority" %} selected{% endif %}>Priorytet</option>
+          <option value="date"{% if cl_sort == "date" %} selected{% endif %}>Data</option>
+          <option value="status"{% if cl_sort == "status" %} selected{% endif %}>Status</option>
+        </select>
+      </label>
+      <label>Status:
+        <select name="cl_status" style="font-size:12px;padding:1px;">
+          <option value="">Wszystkie</option>
+          <option value="2"{% if cl_status_filter == "2" %} selected{% endif %}>Nowe</option>
+          <option value="3"{% if cl_status_filter == "3" %} selected{% endif %}>W trakcie</option>
+          <option value="4"{% if cl_status_filter == "4" %} selected{% endif %}>Zrobione</option>
+          <option value="5"{% if cl_status_filter == "5" %} selected{% endif %}>Nie bedzie</option>
+          <option value="6"{% if cl_status_filter == "6" %} selected{% endif %}>Duplikat</option>
+          <option value="1"{% if cl_status_filter == "1" %} selected{% endif %}>Odrzucone</option>
+        </select>
+      </label>
+      {% if cl_categories %}
+      <label>Kategoria:
+        <select name="cl_cat" style="font-size:12px;padding:1px;">
+          <option value="">Wszystkie</option>
+          {% for cat in cl_categories %}
+            <option value="{{ cat.pk }}"{% if cl_cat_filter == cat.pk|stringformat:"d" %} selected{% endif %}>{{ cat.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      {% if cl_allowed_tags %}
+      <label>Tag:
+        <select name="cl_tag" style="font-size:12px;padding:1px;">
+          <option value="">Wszystkie</option>
+          {% for t in cl_allowed_tags %}
+            <option value="{{ t }}"{% if cl_tag_filter == t %} selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      <button type="submit" style="font-size:12px;padding:1px 8px;">Filtruj</button>
+    </form>
+
+    {# Pending items (owner/mod only) #}
+    {% if cl_pending and cl_is_owner_or_mod %}
+    <div style="border:2px solid #d4a017;border-radius:4px;padding:.5rem;margin-bottom:.6rem;background:#fffbe6;">
+      <div style="font-size:12px;font-weight:bold;color:#8a6d00;margin-bottom:.3rem;">
+        Propozycje do zatwierdzenia ({{ cl_pending|length }})
+      </div>
+      {% for item in cl_pending %}
+      <div style="display:flex;gap:.5rem;align-items:flex-start;padding:.3rem 0;border-bottom:1px solid #eed;font-size:12px;">
+        <div style="flex:1;">
+          <strong>{{ item.title }}</strong>
+          {% if item.description %}<br><span style="color:#666;">{{ item.description|truncatechars:120 }}</span>{% endif %}
+          <br><span style="color:#999;">{{ item.display_author }} &middot; {{ item.created_at|date:"d.m.Y H:i" }}</span>
+          {% if item.category %}<span style="background:{{ item.category.color }};color:#fff;padding:0 4px;border-radius:2px;font-size:10px;margin-left:.3rem;">{{ item.category.name }}</span>{% endif %}
+          {% if item.tag %}<span style="background:#0d6efd;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;margin-left:.3rem;">{{ item.tag }}</span>{% endif %}
+        </div>
+        <div style="display:flex;gap:.3rem;flex-shrink:0;">
+          <form method="post" action="{% url 'checklist_approve_item' topic.pk item.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="bbsrc-btn" style="color:#060;">Zatwierdz</button>
+          </form>
+          <form method="post" action="{% url 'checklist_reject_item' topic.pk item.pk %}" style="display:inline;"
+                onsubmit="var r=prompt('Powod odrzucenia (opcjonalnie):');if(r===null)return false;this.querySelector('[name=reason]').value=r;">
+            {% csrf_token %}
+            <input type="hidden" name="reason" value="">
+            <button type="submit" class="bbsrc-btn" style="color:#900;">Odrzuc</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# Main item list #}
+    <div id="cl-item-list">
+    {% for item in cl_items %}
+      <div class="cl-item" data-item-id="{{ item.pk }}"
+           style="display:flex;gap:.5rem;align-items:flex-start;padding:.4rem 0;border-bottom:1px solid #eee;">
+        {# Upvote button #}
+        <div style="text-align:center;flex-shrink:0;min-width:36px;">
+          <button class="cl-upvote-btn bbsrc-btn"
+                  data-item-id="{{ item.pk }}"
+                  data-topic-id="{{ topic.pk }}"
+                  style="font-size:14px;padding:0 4px;{% if item.pk in cl_upvoted_ids %}color:#800000;font-weight:bold;{% endif %}"
+                  {% if checklist.is_closed or not request.user.is_authenticated %}disabled{% endif %}>&#9650;</button>
+          <div class="cl-upvote-count" style="font-size:12px;font-weight:bold;">{{ item.total_upvotes }}</div>
+        </div>
+
+        {# Item content #}
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+            {# Status badge #}
+            {% if item.status == 2 %}<span style="background:#28a745;color:#fff;padding:0 5px;border-radius:2px;font-size:10px;">NOWE</span>
+            {% elif item.status == 3 %}<span style="background:#fd7e14;color:#fff;padding:0 5px;border-radius:2px;font-size:10px;">W TRAKCIE</span>
+            {% elif item.status == 4 %}<span style="background:#6c757d;color:#fff;padding:0 5px;border-radius:2px;font-size:10px;">ZROBIONE</span>
+            {% elif item.status == 5 %}<span style="background:#dc3545;color:#fff;padding:0 5px;border-radius:2px;font-size:10px;">NIE BEDZIE</span>
+            {% elif item.status == 6 %}<span style="background:#6f42c1;color:#fff;padding:0 5px;border-radius:2px;font-size:10px;">DUPLIKAT</span>
+            {% elif item.status == 1 %}<span style="background:#aaa;color:#fff;padding:0 5px;border-radius:2px;font-size:10px;">ODRZUCONE</span>
+            {% endif %}
+
+            {# Priority badge #}
+            {% if item.priority == 1 %}<span style="color:#dc3545;font-size:11px;" title="Krytyczne">&#128308;</span>
+            {% elif item.priority == 2 %}<span style="color:#fd7e14;font-size:11px;" title="Wazne">&#128992;</span>
+            {% elif item.priority == 3 %}<span style="color:#0d6efd;font-size:11px;" title="Drobnostka">&#128309;</span>
+            {% elif item.priority == 4 %}<span style="color:#28a745;font-size:11px;" title="Planowane">&#128994;</span>
+            {% endif %}
+
+            <strong style="font-size:13px;">{{ item.title }}</strong>
+
+            {% if item.category %}
+              <span style="background:{{ item.category.color }};color:#fff;padding:0 4px;border-radius:2px;font-size:10px;">{{ item.category.name }}</span>
+            {% endif %}
+            {% if item.tag %}
+              <span style="background:#0d6efd;color:#fff;padding:0 4px;border-radius:2px;font-size:10px;">{{ item.tag }}</span>
+            {% endif %}
+          </div>
+          {% if item.description %}
+            <div style="font-size:12px;color:#555;margin-top:.2rem;">{{ item.description|truncatechars:200 }}</div>
+          {% endif %}
+          {% if item.status == 1 and item.rejection_reason %}
+            <div style="font-size:11px;color:#900;margin-top:.2rem;">Powod: {{ item.rejection_reason }}</div>
+          {% endif %}
+
+          <div style="font-size:11px;color:#888;margin-top:.2rem;display:flex;gap:.7rem;flex-wrap:wrap;">
+            <span>{{ item.display_author }} &middot; {{ item.created_at|date:"d.m.Y" }}</span>
+            <span class="cl-comments-toggle" data-item-id="{{ item.pk }}" data-topic-id="{{ topic.pk }}"
+                  style="cursor:pointer;color:#0d6efd;">
+              &#128172; {{ item.comment_count }}
+            </span>
+          </div>
+
+          {# Comments area (loaded via AJAX) #}
+          <div class="cl-comments-area" id="cl-comments-{{ item.pk }}" style="display:none;margin-top:.4rem;border-top:1px solid #eee;padding-top:.3rem;">
+            <div class="cl-comments-list"></div>
+            {% if request.user.is_authenticated and not checklist.is_closed %}
+            <div style="display:flex;gap:.3rem;margin-top:.3rem;">
+              <input type="text" class="cl-comment-input" data-item-id="{{ item.pk }}" data-topic-id="{{ topic.pk }}"
+                     maxlength="1000" placeholder="Dodaj komentarz..." style="flex:1;font-size:12px;padding:2px 4px;">
+              <button class="cl-comment-send bbsrc-btn" data-item-id="{{ item.pk }}" style="font-size:12px;">Wyslij</button>
+            </div>
+            {% endif %}
+          </div>
+
+          {# Owner/mod inline controls #}
+          {% if cl_is_owner_or_mod %}
+          <div style="display:flex;gap:.3rem;margin-top:.3rem;flex-wrap:wrap;font-size:11px;">
+            <form method="post" action="{% url 'checklist_set_status' topic.pk item.pk %}" style="display:inline;">
+              {% csrf_token %}
+              <select name="status" style="font-size:11px;padding:1px;" onchange="this.form.submit();">
+                <option value="2"{% if item.status == 2 %} selected{% endif %}>Nowe</option>
+                <option value="3"{% if item.status == 3 %} selected{% endif %}>W trakcie</option>
+                <option value="4"{% if item.status == 4 %} selected{% endif %}>Zrobione</option>
+                <option value="5"{% if item.status == 5 %} selected{% endif %}>Nie bedzie</option>
+                <option value="6"{% if item.status == 6 %} selected{% endif %}>Duplikat</option>
+              </select>
+            </form>
+            <form method="post" action="{% url 'checklist_set_priority' topic.pk item.pk %}" style="display:inline;">
+              {% csrf_token %}
+              <select name="priority" style="font-size:11px;padding:1px;" onchange="this.form.submit();">
+                <option value=""{% if not item.priority %} selected{% endif %}>- priorytet -</option>
+                <option value="1"{% if item.priority == 1 %} selected{% endif %}>Krytyczne</option>
+                <option value="2"{% if item.priority == 2 %} selected{% endif %}>Wazne</option>
+                <option value="3"{% if item.priority == 3 %} selected{% endif %}>Drobnostka</option>
+                <option value="4"{% if item.priority == 4 %} selected{% endif %}>Planowane</option>
+              </select>
+            </form>
+            <form method="post" action="{% url 'checklist_delete_item' topic.pk item.pk %}" style="display:inline;"
+                  onsubmit="return confirm('Usunac te pozycje?');">
+              {% csrf_token %}
+              <button type="submit" class="bbsrc-btn" style="color:#900;font-size:11px;">Usun</button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    {% empty %}
+      <p style="font-size:12px;color:#888;"><em>Brak pozycji na liscie.</em></p>
+    {% endfor %}
+    </div>
+
+    {# Add item form #}
+    {% if request.user.is_authenticated and not checklist.is_closed %}
+      {% if checklist.allow_user_proposals or cl_is_owner_or_mod %}
+      <div style="margin-top:.6rem;border-top:1px solid #ddd;padding-top:.5rem;">
+        <form method="post" action="{% url 'checklist_add_item' topic.pk %}">
+          {% csrf_token %}
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:flex-end;">
+            <div style="flex:1;min-width:200px;">
+              <input type="text" name="title" maxlength="200" required placeholder="Tytul nowej pozycji..."
+                     style="width:100%;font-size:12px;padding:3px 6px;box-sizing:border-box;">
+            </div>
+            {% if cl_categories %}
+            <select name="category" style="font-size:12px;padding:3px;">
+              <option value="">- kategoria -</option>
+              {% for cat in cl_categories %}
+                <option value="{{ cat.pk }}">{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+            {% if cl_allowed_tags %}
+            <select name="tag" style="font-size:12px;padding:3px;">
+              <option value="">- tag -</option>
+              {% for t in cl_allowed_tags %}
+                <option value="{{ t }}">{{ t }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+            <button type="submit" style="font-size:12px;padding:3px 10px;">Dodaj</button>
+          </div>
+          <textarea name="description" rows="2" maxlength="2000" placeholder="Opis (opcjonalnie)..."
+                    style="width:100%;font-size:12px;padding:3px 6px;box-sizing:border-box;margin-top:.3rem;"></textarea>
+        </form>
+      </div>
+      {% endif %}
+    {% elif not request.user.is_authenticated %}
+      <p style="font-size:12px;color:#888;margin-top:.5rem;">
+        <a href="{% url 'login' %}">Zaloguj sie</a>, aby dodac pozycje lub glosowac.
+      </p>
+    {% endif %}
+
+    {# Settings (owner/mod) #}
+    {% if cl_is_owner_or_mod %}
+    <div style="margin-top:.5rem;border-top:1px solid #ddd;padding-top:.4rem;">
+      <form method="post" action="{% url 'checklist_settings' topic.pk %}" style="display:flex;gap:.5rem;align-items:center;font-size:11px;flex-wrap:wrap;">
+        {% csrf_token %}
+        <label>
+          <input type="checkbox" name="allow_user_proposals" value="1"{% if checklist.allow_user_proposals %} checked{% endif %}>
+          Propozycje uzytkownikow
+        </label>
+        <label>Sortowanie:
+          <select name="default_sort" style="font-size:11px;">
+            <option value="upvotes"{% if checklist.default_sort == "upvotes" %} selected{% endif %}>Glosy</option>
+            <option value="priority"{% if checklist.default_sort == "priority" %} selected{% endif %}>Priorytet</option>
+            <option value="date"{% if checklist.default_sort == "date" %} selected{% endif %}>Data</option>
+            <option value="status"{% if checklist.default_sort == "status" %} selected{% endif %}>Status</option>
+          </select>
+        </label>
+        <label style="flex-basis:100%;margin-top:.3rem;">Tagi (przecinkami):
+          <input type="text" name="allowed_tags" value="{{ checklist.allowed_tags }}"
+                 placeholder="np. Funkcje, Wygląd/UX, Błędy"
+                 style="font-size:11px;padding:2px 4px;width:300px;max-width:100%;">
+        </label>
+        <button type="submit" class="bbsrc-btn" style="font-size:11px;">Zapisz ustawienia</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function(){
+  var csrfToken = '{{ csrf_token }}';
+
+  // Upvote toggle
+  document.querySelectorAll('.cl-upvote-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var itemId = btn.getAttribute('data-item-id');
+      var topicId = btn.getAttribute('data-topic-id');
+      fetch('/topic/' + topicId + '/checklist/item/' + itemId + '/upvote/', {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrfToken}
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.ok){
+          var countEl = btn.parentNode.querySelector('.cl-upvote-count');
+          countEl.textContent = d.count;
+          btn.style.color = d.upvoted ? '#800000' : '';
+          btn.style.fontWeight = d.upvoted ? 'bold' : '';
+        }
+      });
+    });
+  });
+
+  // Comments toggle & load
+  document.querySelectorAll('.cl-comments-toggle').forEach(function(toggle){
+    toggle.addEventListener('click', function(){
+      var itemId = toggle.getAttribute('data-item-id');
+      var topicId = toggle.getAttribute('data-topic-id');
+      var area = document.getElementById('cl-comments-' + itemId);
+      if(area.style.display === 'none'){
+        area.style.display = 'block';
+        var listEl = area.querySelector('.cl-comments-list');
+        listEl.innerHTML = '<em style="font-size:11px;color:#888;">Ladowanie...</em>';
+        fetch('/topic/' + topicId + '/checklist/item/' + itemId + '/comments/')
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          listEl.innerHTML = '';
+          d.comments.forEach(function(c){
+            var div = document.createElement('div');
+            div.style.cssText = 'font-size:12px;padding:.2rem 0;border-bottom:1px solid #f5f5f5;';
+            div.innerHTML = '<strong>' + escHtml(c.author) + '</strong> <span style="color:#999;">' + c.created_at + '</span><br>' + escHtml(c.content);
+            listEl.appendChild(div);
+          });
+          if(!d.comments.length){
+            listEl.innerHTML = '<em style="font-size:11px;color:#888;">Brak komentarzy.</em>';
+          }
+        });
+      } else {
+        area.style.display = 'none';
+      }
+    });
+  });
+
+  // Send comment
+  document.querySelectorAll('.cl-comment-send').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var itemId = btn.getAttribute('data-item-id');
+      var input = btn.parentNode.querySelector('.cl-comment-input');
+      var topicId = input.getAttribute('data-topic-id');
+      var content = input.value.trim();
+      if(!content) return;
+      fetch('/topic/' + topicId + '/checklist/item/' + itemId + '/comments/add/', {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json'},
+        body: JSON.stringify({content: content})
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.ok){
+          input.value = '';
+          var listEl = document.querySelector('#cl-comments-' + itemId + ' .cl-comments-list');
+          var em = listEl.querySelector('em');
+          if(em) em.remove();
+          var div = document.createElement('div');
+          div.style.cssText = 'font-size:12px;padding:.2rem 0;border-bottom:1px solid #f5f5f5;';
+          div.innerHTML = '<strong>' + escHtml(d.comment.author) + '</strong> <span style="color:#999;">' + d.comment.created_at + '</span><br>' + escHtml(d.comment.content);
+          listEl.appendChild(div);
+          // Update comment count in toggle
+          var toggle = document.querySelector('.cl-comments-toggle[data-item-id="' + itemId + '"]');
+          if(toggle){
+            var txt = toggle.textContent;
+            var num = parseInt(txt.replace(/[^0-9]/g,'')) || 0;
+            toggle.innerHTML = '&#128172; ' + (num + 1);
+          }
+        }
+      });
+    });
+  });
+
+  // Enter to send comment
+  document.querySelectorAll('.cl-comment-input').forEach(function(input){
+    input.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        input.parentNode.querySelector('.cl-comment-send').click();
+      }
+    });
+  });
+
+  function escHtml(s){
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(s));
+    return d.innerHTML;
+  }
+
+  {% if cl_is_owner_or_mod %}
+  // SortableJS drag-and-drop (loaded conditionally)
+  if(typeof Sortable === 'undefined'){
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/sortablejs@1/Sortable.min.js';
+    s.onload = initSortable;
+    document.head.appendChild(s);
+  } else {
+    initSortable();
+  }
+
+  function initSortable(){
+    var list = document.getElementById('cl-item-list');
+    if(!list || !list.children.length) return;
+    new Sortable(list, {
+      animation: 150,
+      handle: '.cl-item',
+      draggable: '.cl-item',
+      onEnd: function(){
+        var order = [];
+        list.querySelectorAll('.cl-item').forEach(function(el){
+          order.push(parseInt(el.getAttribute('data-item-id')));
+        });
+        fetch('/topic/{{ topic.pk }}/checklist/reorder/', {
+          method: 'POST',
+          headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json'},
+          body: JSON.stringify({order: order})
+        });
+      }
+    });
+  }
+  {% endif %}
+})();
+</script>

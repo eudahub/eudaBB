@@ -38,7 +38,12 @@ TOPIC_TITLE_MAX_LENGTH = 70
 # Normalized usernames permanently reserved by the system
 _RESERVED_USERNAME_NORMS = frozenset({
     "usuniety",   # display label for deleted accounts in quotes
+    "anonimus",   # pseudonym base for deleted temporary users in checklists
+    "gosc",       # reserved: "guest" equivalent
 })
+
+import re
+_RESERVED_USERNAME_PATTERN = re.compile(r"^anonimus\d+$")  # Anonimus_1, Anonimus_2, ...
 
 
 class RegisterForm(UserCreationForm):
@@ -67,17 +72,17 @@ class RegisterForm(UserCreationForm):
         proposed = self.cleaned_data["username"]
         norm_proposed = normalize(proposed)
 
-        if norm_proposed in _RESERVED_USERNAME_NORMS:
+        if norm_proposed in _RESERVED_USERNAME_NORMS or _RESERVED_USERNAME_PATTERN.match(norm_proposed):
             raise forms.ValidationError("Ta nazwa użytkownika jest zarezerwowana przez system.")
 
         # O(1) lookup via indexed username_normalized column
         conflict = User.objects.filter(username_normalized=norm_proposed).first()
         if conflict:
-            if conflict.is_ghost and conflict.username == proposed:
+            if conflict.is_ghost() and conflict.username == proposed:
                 # Exact match to ghost account — allow, trigger activation flow
                 self._ghost_username = conflict.username
                 return proposed
-            if conflict.is_ghost:
+            if conflict.is_ghost():
                 raise forms.ValidationError(
                     f"Nazwa zarezerwowana przez konto archiwalne '{conflict.username}'. "
                     "Skontaktuj się z administratorem."
@@ -88,43 +93,29 @@ class RegisterForm(UserCreationForm):
 
 
 class RegisterStartForm(forms.Form):
+    """Validates nick format and email format only.  Uniqueness checks are
+    handled by the view (5-case logic)."""
     username = forms.CharField(max_length=150, label="Nick")
     email = forms.EmailField(label="Email")
 
     def clean_username(self):
         proposed = self.cleaned_data["username"]
         norm_proposed = normalize(proposed)
-        if norm_proposed in _RESERVED_USERNAME_NORMS:
+        if norm_proposed in _RESERVED_USERNAME_NORMS or _RESERVED_USERNAME_PATTERN.match(norm_proposed):
             raise forms.ValidationError("Ta nazwa użytkownika jest zarezerwowana przez system.")
-        conflict = User.objects.filter(username_normalized=norm_proposed).first()
-        if not conflict:
-            return proposed
-        if conflict.is_ghost:
-            if not conflict.email:
-                raise forms.ValidationError(
-                    f"Nick '{conflict.username}' jest zajęty przez konto archiwalne "
-                    "bez adresu email. Wybierz inny nick."
-                )
-            raise forms.ValidationError(
-                f"To konto już istnieje w archiwum jako '{conflict.username}'. "
-                "Użyj odzyskiwania konta zamiast nowej rejestracji."
-            )
-        raise forms.ValidationError("Ta nazwa użytkownika jest już zajęta.")
+        return proposed
 
     def clean_email(self):
         email = self.cleaned_data["email"].strip().lower()
         err = _check_email_domain(email)
         if err:
             raise forms.ValidationError(err)
-        conflict = User.objects.filter(email=email).first()
-        if not conflict:
-            return email
-        if conflict.is_ghost:
+        from .models import SpamEmail
+        if SpamEmail.objects.filter(email=email).exists():
             raise forms.ValidationError(
-                "Ten email jest już przypisany do konta archiwalnego. "
-                "Użyj odzyskiwania konta zamiast nowej rejestracji."
+                "Ten adres email nie może być użyty do rejestracji."
             )
-        raise forms.ValidationError("Ten email jest już przypisany do istniejącego konta.")
+        return email
 
 
 class RegisterFinishForm(forms.Form):
@@ -154,13 +145,23 @@ def parse_poll_options_text(raw_text: str) -> tuple[list[dict], list[str]]:
     """Parse poll options textarea.
 
     Returns (options, errors) where options is list of {"text": str, "category": str}.
-    Format: lines starting with '-' are options, '##' lines are category headers,
-    blank lines reset current category, other non-empty lines are errors.
+
+    Format:
+      - Lines starting with '-' are options.
+      - Lines starting with '##' are category headers (legacy, still supported).
+      - Other non-empty lines are also category headers (no prefix needed).
+      - A blank line resets the current category.
+
+    Example:
+        Fora religijne
+        - Sfinia
+        - Katolik.pl
+
+        Fora ateistyczne
+        - Racjonalista
     """
     current_category = ""
     options = []
-    bad_lines = []
-    empty_category_lines = []
     declared_categories = []
     categories_with_options = set()
 
@@ -175,23 +176,15 @@ def parse_poll_options_text(raw_text: str) -> tuple[list[dict], list[str]]:
                 options.append({"text": text, "category": current_category})
                 if current_category:
                     categories_with_options.add(current_category)
-        elif stripped.startswith("##"):
-            cat = stripped[2:].strip()
-            if not cat:
-                empty_category_lines.append(stripped)
-            else:
+        else:
+            # Category header: strip optional '## ' prefix
+            cat = stripped.lstrip("#").strip()
+            if cat:
                 current_category = cat
                 if cat not in declared_categories:
                     declared_categories.append(cat)
-        else:
-            bad_lines.append(stripped)
 
     errors = []
-    if bad_lines:
-        examples = ", ".join(f'„{ln}"' for ln in bad_lines[:3])
-        errors.append(f"Nieznane linie (muszą zaczynać się od - lub ##): {examples}.")
-    if empty_category_lines:
-        errors.append("Nazwa kategorii (##) nie może być pusta.")
     empty_categories = [c for c in declared_categories if c not in categories_with_options]
     if empty_categories:
         examples = ", ".join(f'„{c}"' for c in empty_categories[:3])
@@ -220,7 +213,7 @@ def poll_options_to_text(options) -> str:
             if lines:
                 lines.append("")  # blank line before new category section
             if opt.category:
-                lines.append(f"## {opt.category}")
+                lines.append(opt.category)
             current_cat = opt.category
         lines.append(f"- {opt.option_text}")
     return "\n".join(lines)
@@ -383,3 +376,32 @@ class ReplyForm(forms.Form):
 
     def clean_content(self):
         return _validate_post_content(self.cleaned_data["content"], self._original_size)
+
+
+# ---------------------------------------------------------------------------
+# Checklist forms
+# ---------------------------------------------------------------------------
+
+class ChecklistItemForm(forms.Form):
+    title = forms.CharField(max_length=200, label="Tytuł")
+    description = forms.CharField(
+        max_length=2000, required=False, widget=forms.Textarea(attrs={"rows": 3}),
+        label="Opis",
+    )
+    category = forms.IntegerField(required=False, widget=forms.HiddenInput)
+
+
+class ChecklistCommentForm(forms.Form):
+    content = forms.CharField(max_length=1000, label="Komentarz")
+
+
+class ChecklistCategoryForm(forms.Form):
+    name = forms.CharField(max_length=50, label="Nazwa")
+    color = forms.CharField(max_length=7, initial="#6c757d", label="Kolor")
+
+    def clean_color(self):
+        import re
+        c = self.cleaned_data["color"].strip()
+        if not re.match(r"^#[0-9a-fA-F]{6}$", c):
+            raise forms.ValidationError("Kolor musi być w formacie #RRGGBB.")
+        return c

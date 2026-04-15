@@ -5,18 +5,47 @@
 <article style="max-width: 420px; margin: 4rem auto;">
   <h2>Rejestracja</h2>
 
-  {% if pending %}
-    <p>
-      {% if reg_type == "claim" %}
-        Przejęcie konta <strong>{{ pending.username }}</strong>
-      {% else %}
-        Rejestracja dla nicka <strong>{{ pending.username }}</strong>
-        {% if reg_type == "temporary" %}<span style="color:#999;">(konto tymczasowe)</span>{% endif %}
-      {% endif %}
+  {% if pending and pending.mode == "recover" %}
+    {# ── RECOVER MODE: email taken, send code+nick to email ── #}
+    <p>Już kiedyś rejestrowałeś się na tym forum z podanym adresem email.</p>
+    {% if sent and test_code %}
+      <p style="color:green;"><strong>Tryb testowy:</strong> nick: <strong>{{ test_nick }}</strong>, kod: <strong>{{ test_code }}</strong></p>
+    {% elif sent %}
+      <p style="color:green;">Wysłaliśmy kod weryfikacyjny i nazwę Twojego nicka na <strong>{{ email_mask }}</strong>. Sprawdź skrzynkę (i folder Spam).</p>
+    {% endif %}
+
+    {% if error %}
+      <p style="color:red;">{{ error|safe }}</p>
+    {% endif %}
+
+    <form method="post" id="register-finish-form">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="finish">
+      <label style="display:block;margin-bottom:.5rem;">
+        <span style="display:block;font-size:12px;margin-bottom:.2rem;">Nick (z wiadomości email)</span>
+        <input type="text" name="recover_nick" required autocomplete="off" style="width:100%;box-sizing:border-box;">
+      </label>
+      <input type="hidden" id="register-username" value="">
+      {% for field in finish_form %}
+        <label>{{ field.label }}{{ field }}
+          {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+          {% if field.errors %}<small style="color:red;">{{ field.errors|join:", " }}</small>{% endif %}
+        </label>
+      {% endfor %}
+      <button type="submit" id="register-finish-btn">Przejmij konto</button>
+    </form>
+
+    <p style="margin-top:.5rem;">
+      <form method="post" style="display:inline;">{% csrf_token %}<input type="hidden" name="action" value="send_code"><button type="submit" style="background:none;border:none;padding:0;color:#800000;cursor:pointer;font-size:inherit;text-decoration:underline;">Wyślij kod ponownie</button></form>
+      · <a href="{% url 'register' %}?reset=1">Zacznij od nowa</a>
     </p>
-    {% if reg_type == "claim" %}
-      <p>Ten nick jest już zarejestrowany. Aby przejąć konto, potwierdź email powiązany z tym kontem: <strong>{{ email_mask }}</strong></p>
-    {% elif reg_type == "temporary" %}
+
+  {% elif pending %}
+    {# ── NEW ACCOUNT MODE ── #}
+    <p>Rejestracja dla nicka <strong>{{ pending.username }}</strong>
+    {% if reg_type == "temporary" %}<span style="color:#999;">(konto tymczasowe)</span>{% endif %}
+    </p>
+    {% if reg_type == "temporary" %}
       <p>Kod weryfikacyjny zostanie wyświetlony na ekranie po potwierdzeniu emaila.</p>
     {% else %}
       <p>Kod weryfikacyjny zostanie wysłany na: <strong>{{ email_mask }}</strong></p>
@@ -24,7 +53,7 @@
     <p style="font-size:12px;color:#666;">Aby potwierdzić, wpisz pełny adres email poniżej.</p>
 
     {% if error %}
-      <p style="color:red;">{{ error }}</p>
+      <p style="color:red;">{{ error|safe }}</p>
     {% endif %}
     {% if sent and test_code %}
       <p style="color:green;"><strong>Tryb testowy:</strong> kod to <strong>{{ test_code }}</strong>.</p>
@@ -57,11 +86,13 @@
     </form>
 
     <p><a href="{% url 'register' %}?reset=1">Zmień nick lub email</a></p>
+
   {% else %}
+    {# ── START: nick + email form ── #}
     <p>Podaj nick i email. W następnym kroku wyślemy kod potwierdzający.</p>
 
     {% if error %}
-      <p style="color:red;">{{ error }}</p>
+      <p style="color:red;">{{ error|safe }}</p>
     {% endif %}
 
     <form method="post">
@@ -101,12 +132,6 @@
   {% endif %}
 
   <p><a href="{% url 'login' %}">Masz już konto? Zaloguj się.</a></p>
-  {% if show_find_account_hint %}
-  <p style="background:#fff8e1;border:1px solid #f0c040;padding:.5rem .7rem;border-radius:3px;font-size:13px;">
-    Ten email jest już przypisany do istniejącego konta.<br>
-    <a href="{% url 'find_account' %}">Nie pamiętasz nicka? Podaj email → wyślemy Ci nick i instrukcje.</a>
-  </p>
-  {% endif %}
 </article>
 
 {% if pending %}
@@ -115,11 +140,20 @@
   var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
   var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
 
-  function saltFor(username) { return username.toLowerCase() + ':sfiniabb'; }
+  var _MANUAL = {'ł':'l','Ł':'l','ø':'o','Ø':'o','æ':'a','Æ':'a'};
+  function normalizeUsername(u) {
+    u = u.replace(/[łŁøØæÆ]/g, function(c){ return _MANUAL[c]; });
+    return u.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+  function saltFor(username) { return normalizeUsername(username) + ':eudaBB'; }
 
   var form = document.getElementById('register-finish-form');
   var btn  = document.getElementById('register-finish-btn');
   if (!form || !btn) return;
+
+  // For recover mode, read nick from the input field; for new mode, from hidden field
+  var recoverNickField = form.querySelector('[name=recover_nick]');
+  var hiddenUsername = document.getElementById('register-username');
 
   var script = document.createElement('script');
   script.src = WASM_CDN;
@@ -127,7 +161,8 @@
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       btn.disabled = true;
-      var usernameValue = document.getElementById('register-username').value;
+      var usernameValue = recoverNickField ? recoverNickField.value : (hiddenUsername ? hiddenUsername.value : '');
+      if (!usernameValue) { form.submit(); return; }
       var p1field   = form.querySelector('[name=password1]');
       var p2field   = form.querySelector('[name=password2]');
       var flagField = form.querySelector('[name=password_is_prehashed]');

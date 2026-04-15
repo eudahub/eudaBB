@@ -1,33 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Reset hasła{% endblock %}
+{% block title %}Nie mam hasła{% endblock %}
 
 {% block content %}
 <article style="max-width: 420px; margin: 4rem auto;">
-  <h2>Reset hasła</h2>
-
-  {% if reason == "invalidated" %}
-    <p style="color:#800000; font-weight:bold;">
-      Twoje hasło zostało unieważnione. Podaj nick, wyślij kod, a następnie ustaw nowe hasło.
-    </p>
-  {% endif %}
+  <h2>Nie mam hasła</h2>
 
   {% if success %}
     <p style="background:#dfd; padding:.6rem; border-radius:4px;">
       Hasło zostało zmienione. Jesteś teraz zalogowany.
     </p>
     <p><a href="/">Przejdź na forum →</a></p>
-  {% elif ghost_activated %}
-    <p style="background:#dfd; padding:.6rem; border-radius:4px;">
-      <strong>Tryb testowy:</strong> Konto <strong>{{ test_mode_username }}</strong> zostało aktywowane. Jesteś zalogowany.
-    </p>
-    <p><a href="/">Przejdź na forum →</a></p>
-  {% elif ghost_activation_sent %}
-    <p style="background:#dfd; padding:.6rem; border-radius:4px;">
-      Wysłaliśmy link aktywacyjny na <strong>{{ email_mask }}</strong>.<br>
-      Kliknij link w wiadomości, aby aktywować konto i ustawić hasło.
-    </p>
-    <p>Sprawdź skrzynkę (i folder spam).</p>
-    <p><a href="{% url 'login' %}">Powrót do logowania</a></p>
   {% else %}
     <div id="reset-error" style="color:red;display:none;margin-bottom:.4rem;"></div>
 
@@ -78,19 +60,19 @@
   <p><a href="{% url 'login' %}">Powrót do logowania</a></p>
 </article>
 
-{# Popup modal — shown when popup mode is active #}
-<div id="reset-popup-modal" style="display:none;position:fixed;top:0;left:0;
+{# Greencode modal — shown when code is displayed on screen instead of emailed #}
+<div id="reset-greencode-modal" style="display:none;position:fixed;top:0;left:0;
      width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;
      align-items:center;justify-content:center;">
   <div style="background:#fff;border:2px solid #BC8F8F;border-radius:4px;
               padding:1.5rem 2rem;min-width:320px;max-width:420px;">
     <h3 style="margin-top:0;">Kod resetowania hasła</h3>
     <p style="font-size:11px;color:#555;">
-      Nick: <strong id="popup-username"></strong> &nbsp;|&nbsp;
-      Wysłano: <span id="popup-sent-at"></span>
+      Nick: <strong id="greencode-username"></strong> &nbsp;|&nbsp;
+      Wysłano: <span id="greencode-sent-at"></span>
     </p>
     <div style="text-align:center;margin:.8rem 0;">
-      <code id="popup-code"
+      <code id="greencode-code"
             style="font-size:2em;letter-spacing:.15em;background:#f8f8e8;
                    padding:.3rem .8rem;border:1px solid #BC8F8F;border-radius:3px;
                    cursor:pointer;" title="Kliknij, aby skopiować"></code>
@@ -99,10 +81,10 @@
       Jeśli nie ty wysłałeś — zignoruj.
     </p>
     <div style="display:flex;gap:.5rem;justify-content:center;">
-      <button onclick="document.getElementById('reset-popup-modal').style.display='none';"
+      <button onclick="document.getElementById('reset-greencode-modal').style.display='none';"
               style="font-size:12px;">Zamknij</button>
     </div>
-    <div id="popup-copy-msg"
+    <div id="greencode-copy-msg"
          style="text-align:center;font-size:10px;color:green;margin-top:.4rem;display:none;">
       Skopiowano!
     </div>
@@ -110,14 +92,14 @@
 </div>
 
 <script>
-function showResetPopup(code, username, sentAt) {
-  document.getElementById('popup-code').textContent = code;
-  document.getElementById('popup-username').textContent = username;
-  document.getElementById('popup-sent-at').textContent = sentAt;
-  document.getElementById('reset-popup-modal').style.display = 'flex';
-  document.getElementById('popup-code').onclick = function() {
+function showGreencode(code, username, sentAt) {
+  document.getElementById('greencode-code').textContent = code;
+  document.getElementById('greencode-username').textContent = username;
+  document.getElementById('greencode-sent-at').textContent = sentAt;
+  document.getElementById('reset-greencode-modal').style.display = 'flex';
+  document.getElementById('greencode-code').onclick = function() {
     navigator.clipboard.writeText(code).then(function() {
-      var msg = document.getElementById('popup-copy-msg');
+      var msg = document.getElementById('greencode-copy-msg');
       msg.style.display = 'block';
       setTimeout(function(){ msg.style.display = 'none'; }, 1500);
     });
@@ -128,7 +110,7 @@ var csrf = function() {
   return document.querySelector('[name=csrfmiddlewaretoken]').value;
 };
 var errEl = document.getElementById('reset-error');
-function showErr(msg) { errEl.textContent = msg; errEl.style.display = 'block'; }
+function showErr(msg) { errEl.innerHTML = msg; errEl.style.display = 'block'; }
 function hideErr() { errEl.style.display = 'none'; }
 
 // Step 1: check nick → get email mask
@@ -144,14 +126,16 @@ document.getElementById('check-nick-btn').addEventListener('click', function() {
   .then(function(r){ return r.json(); })
   .then(function(d) {
     if (!d.ok) { showErr(d.error); return; }
-    window._isGhost = !!d.is_ghost;
+    if (d.greencode) {
+      // Temporary account: code generated immediately, no email step
+      showGreencode(d.code, d.username, d.sent_at);
+      document.getElementById('step-nick').style.display = 'none';
+      document.getElementById('step-code').style.display = 'block';
+      return;
+    }
     document.getElementById('step-nick').style.display = 'none';
     document.getElementById('step-email').style.display = 'block';
-    if (d.is_ghost) {
-      document.getElementById('email-mask-info').textContent = 'Konto archiwalne. Potwierdź email powiązany z kontem: ' + d.email_mask;
-    } else {
-      document.getElementById('email-mask-info').textContent = 'Kod zostanie wysłany na: ' + d.email_mask;
-    }
+    document.getElementById('email-mask-info').textContent = 'Kod zostanie wysłany na: ' + d.email_mask;
     document.getElementById('email-confirm-input').placeholder = d.email_mask;
     document.getElementById('email-confirm-input').focus();
   });
@@ -186,31 +170,9 @@ document.getElementById('send-code-btn').addEventListener('click', function() {
     if (!d.ok) {
       showErr(d.error);
       status.textContent = '';
-    } else if (d.ghost_activation_sent) {
-      // Ghost account: activation link sent — hide form, show success
-      document.getElementById('step-email').style.display = 'none';
-      status.textContent = '';
-      var info = document.createElement('p');
-      info.style.background = '#dfd';
-      info.style.padding = '.6rem';
-      info.style.borderRadius = '4px';
-      info.innerHTML = 'Wysłaliśmy link aktywacyjny na <strong>' + d.email_mask + '</strong>.<br>Kliknij link w wiadomości, aby aktywować konto i ustawić hasło.<br>Sprawdź skrzynkę (i folder spam).';
-      document.getElementById('reset-form').parentNode.insertBefore(info, document.getElementById('reset-form'));
-      document.getElementById('reset-form').style.display = 'none';
-    } else if (d.ghost_activated) {
-      // TEST_MODE: ghost activated immediately
-      document.getElementById('step-email').style.display = 'none';
-      status.textContent = '';
-      var info = document.createElement('p');
-      info.style.background = '#dfd';
-      info.style.padding = '.6rem';
-      info.style.borderRadius = '4px';
-      info.innerHTML = '<strong>Tryb testowy:</strong> Konto <strong>' + d.username + '</strong> aktywowane. Jesteś zalogowany.';
-      document.getElementById('reset-form').parentNode.insertBefore(info, document.getElementById('reset-form'));
-      document.getElementById('reset-form').style.display = 'none';
-    } else if (d.popup) {
-      status.textContent = 'Kod wygenerowany — wysłany na ' + d.email_mask + '.';
-      showResetPopup(d.code, d.username, d.sent_at);
+    } else if (d.greencode) {
+      status.textContent = 'Kod wygenerowany.';
+      showGreencode(d.code, d.username, d.sent_at);
       document.getElementById('step-code').style.display = 'block';
     } else {
       status.textContent = 'Kod wysłany na ' + d.email_mask + '.';
@@ -223,7 +185,12 @@ document.getElementById('send-code-btn').addEventListener('click', function() {
 (function() {
   var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
   var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
-  function saltFor(u) { return u.toLowerCase() + ':sfiniabb'; }
+  var _MANUAL = {'ł':'l','Ł':'l','ø':'o','Ø':'o','æ':'a','Æ':'a'};
+  function normalizeUsername(u) {
+    u = u.replace(/[łŁøØæÆ]/g, function(c){ return _MANUAL[c]; });
+    return u.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+  function saltFor(u) { return normalizeUsername(u) + ':eudaBB'; }
   var form = document.getElementById('reset-form');
   var flag = document.getElementById('prehashed-flag');
   var btn  = document.getElementById('reset-btn');

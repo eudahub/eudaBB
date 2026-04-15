@@ -23,11 +23,11 @@ fi
 source "${VENV_ACTIVATE}"
 cd "${SCRIPT_DIR}"
 
-echo "==> Migracje"
-python manage.py migrate
-
 echo "==> Czyszczenie bazy (morfologia zostaje)"
 python manage.py flush_except_morph --no-input
+
+echo "==> Migracje"
+python manage.py migrate
 
 echo "==> Import użytkowników"
 python manage.py import_from_sfinia "${SFINIA_FULL}"
@@ -47,4 +47,6 @@ python manage.py import_polls "${SFINIA_FULL}"
 echo "==> Tworzenie konta root"
 python manage.py create_root
 
+echo "==> Podsumowanie:"
+python manage.py shell -c "from board.models import Topic, Post, Poll, Checklist; print(f'  Topiki:     {Topic.objects.count()}'); print(f'  Posty:      {Post.objects.count()}'); print(f'  Ankiety:    {Poll.objects.count()}'); print(f'  Checklisty: {Checklist.objects.count()}')"
 echo "==> Gotowe."

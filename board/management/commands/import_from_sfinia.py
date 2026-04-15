@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand, CommandError
 from django.core.files import File
+from django.core.files.storage import default_storage
 
 from board.models import User
 
@@ -31,7 +32,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--avatars-dir",
             default="",
-            help="Directory containing avatar files (e.g. /path/to/admin_avatars)",
+            help="Directory containing avatar files (e.g. /path/to/avatars)",
         )
         parser.add_argument(
             "--clear-ghosts",
@@ -53,7 +54,7 @@ class Command(BaseCommand):
         db_path = options["import_db"]
 
         if options["clear_ghosts"]:
-            count, _ = User.objects.filter(is_ghost=True).delete()
+            count, _ = User.objects.filter(password__startswith="!").delete()
             self.stdout.write(f"Usunięto {count} starych duchów.")
 
         try:
@@ -67,7 +68,7 @@ class Command(BaseCommand):
             for row in conn.execute("PRAGMA table_info(users)").fetchall()
         }
         required_columns = {
-            "user_id", "username", "email", "signature", "website", "location", "avatar",
+            "user_id", "username", "email", "signature", "website", "location", "avatar_local_path",
         }
         if not required_columns.issubset(columns):
             conn.close()
@@ -84,10 +85,16 @@ class Command(BaseCommand):
                 f"Invalid import DB schema in {db_path}. Missing columns: {missing}"
             )
 
+        has_new_name = "new_name" in columns
+        extra_name = (
+            ", COALESCE(NULLIF(new_name,''), username) AS final_username"
+            if has_new_name else
+            ", username AS final_username"
+        )
         rows = conn.execute(
-            "SELECT user_id, username, email, signature, website, location, avatar, "
-            "COALESCE(joined_at, '') AS joined_at "
-            "FROM users ORDER BY user_id"
+            f"SELECT user_id, username, email, signature, website, location, avatar_local_path, "
+            f"COALESCE(joined_at, '') AS joined_at, pass_hash, role{extra_name} "
+            f"FROM users ORDER BY user_id"
         ).fetchall()
 
         # Load rename map from username_aliases (action='rename')
@@ -123,24 +130,26 @@ class Command(BaseCommand):
 
         created = updated = avatars_set = renamed = 0
         for row in rows:
-            # need_rename_map takes precedence over username_aliases
-            username = need_rename_map.get(row["username"]) or rename_map.get(row["username"], row["username"])
+            # new_name (via final_username) takes precedence; fall back to alias map
+            username = row["final_username"] or rename_map.get(row["username"], row["username"])
             if username != row["username"]:
                 renamed += 1
 
             email = (row["email"] or "").strip().lower()
+            pass_hash = row["pass_hash"]
+            password  = pass_hash if pass_hash is not None else make_password(None)
             defaults = dict(
-                is_ghost=True,
-                is_active=False,
+                is_active=True,
                 email=email,
                 signature=row["signature"] or "",
                 website=row["website"]   or "",
                 location=row["location"] or "",
+                role=row["role"],
             )
             joined_str = (row["joined_at"] or "").strip()
             if joined_str:
                 try:
-                    defaults["date_joined"] = datetime.strptime(joined_str, "%Y-%m-%d").replace(
+                    defaults["date_joined"] = datetime.strptime(joined_str[:19], "%Y-%m-%d %H:%M:%S").replace(
                         tzinfo=timezone.utc
                     )
                 except ValueError:
@@ -148,25 +157,29 @@ class Command(BaseCommand):
 
             user, was_created = User.objects.get_or_create(
                 username=username,
-                defaults={**defaults, "password": make_password(None)},
+                defaults={**defaults, "password": password},
             )
 
             if not was_created:
-                if user.is_ghost:
+                if user.is_ghost():
                     for field, value in defaults.items():
                         setattr(user, field, value)
-                    update_fields = list(defaults.keys())
+                    user.password = password
+                    update_fields = list(defaults.keys()) + ["password"]
                 else:
-                    # Active user: only update profile metadata, not auth fields
-                    for field in ("signature", "website", "location"):
+                    # Active user: only update profile metadata and role, not auth fields
+                    for field in ("signature", "website", "location", "role"):
                         setattr(user, field, defaults[field])
-                    update_fields = ["signature", "website", "location"]
+                    update_fields = ["signature", "website", "location", "role"]
 
-                local_path = row["avatar"] or ""
+                local_path = row["avatar_local_path"] or ""
                 if local_path and avatars_dir and not user.avatar:
                     filename = os.path.basename(local_path)
                     full_path = os.path.join(avatars_dir, filename)
                     if os.path.exists(full_path):
+                        storage_name = user.avatar.field.upload_to + "/" + filename if user.avatar.field.upload_to else filename
+                        if default_storage.exists(storage_name):
+                            default_storage.delete(storage_name)
                         with open(full_path, "rb") as f:
                             user.avatar.save(filename, File(f), save=False)
                         update_fields.append("avatar")
@@ -176,11 +189,14 @@ class Command(BaseCommand):
                 updated += 1
                 continue
 
-            local_path = row["avatar"] or ""
+            local_path = row["avatar_local_path"] or ""
             if local_path and avatars_dir:
                 filename = os.path.basename(local_path)
                 full_path = os.path.join(avatars_dir, filename)
                 if os.path.exists(full_path):
+                    storage_name = user.avatar.field.upload_to + "/" + filename if user.avatar.field.upload_to else filename
+                    if default_storage.exists(storage_name):
+                        default_storage.delete(storage_name)
                     with open(full_path, "rb") as f:
                         user.avatar.save(filename, File(f), save=False)
                     user.save(update_fields=["avatar"])

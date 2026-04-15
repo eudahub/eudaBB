@@ -20,7 +20,13 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.conf import settings
 
-from .models import Section, Forum, Topic, Post, User, ActivationToken, BlockedIP, PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike, PostSearchIndex, SiteConfig, Poll, PollOption, PollVote, TopicParticipant, TopicReadState, IgnoredUser
+from .models import (
+    Section, Forum, Topic, Post, User, ActivationToken, BlockedIP,
+    PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike,
+    PostSearchIndex, SiteConfig, Poll, PollOption, PollVote,
+    TopicParticipant, TopicReadState, IgnoredUser,
+    Checklist, ChecklistCategory, ChecklistItem, ChecklistUpvote, ChecklistComment,
+)
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
     NewTopicForm, ReplyForm, validate_post_content, validate_pm_content,
@@ -47,7 +53,7 @@ from .search_index import extract_author_search_text, expand_morph_term, expand_
 
 def _update_topic_stats(topic: Topic, last_post: Post) -> None:
     """Recalculate and save cached counters on a topic after a new post."""
-    topic.reply_count = topic.posts.count() - 1  # first post is not a "reply"
+    topic.reply_count = topic.posts.filter(is_pending=False).count() - 1  # first post is not a "reply"
     topic.last_post = last_post
     topic.last_post_at = last_post.created_at
 
@@ -70,8 +76,8 @@ def _update_topic_stats(topic: Topic, last_post: Post) -> None:
 
 def _update_forum_stats(forum: Forum, last_post: Post) -> None:
     """Recalculate and save cached counters on a forum after a new post."""
-    forum.post_count = Post.objects.filter(topic__forum=forum).count()
-    forum.topic_count = forum.topics.count()
+    forum.post_count = Post.objects.filter(topic__forum=forum, is_pending=False).count()
+    forum.topic_count = forum.topics.filter(is_pending=False).count()
     forum.last_post = last_post
     forum.last_post_at = last_post.created_at
     forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
@@ -255,7 +261,8 @@ def _get_client_ip(request):
 
 def _render_and_create_post(topic: Topic, author, content_bbcode: str,
                              post_order: int, author_ip: str = None,
-                             is_temporary: bool = False) -> Post:
+                             is_temporary: bool = False,
+                             is_pending: bool = False) -> Post:
     retain_until = _retain_until(flagged=False) if author_ip else None
     post = Post.objects.create(
         topic=topic,
@@ -265,8 +272,12 @@ def _render_and_create_post(topic: Topic, author, content_bbcode: str,
         author_ip=author_ip,
         ip_retain_until=retain_until,
         is_temporary=is_temporary,
+        is_pending=is_pending,
     )
     rebuild_quote_references_for_post(post)
+    if author and not is_pending:
+        from .active_days import increment_if_new_day
+        increment_if_new_day(author, post)
     return post
 
 
@@ -280,7 +291,8 @@ def can_convert_to_permanent(post):
     """Check if a temporary post can be converted to permanent.
 
     Returns (can_convert: bool, reason: str|None).
-    Reasons: 'not_temporary', 'temporary_user', 'quotes_temporary'.
+    Reasons: 'not_temporary', 'temporary_user', 'quotes_temporary',
+             'feature_first_post'.
     """
     if not post.is_temporary:
         return False, "not_temporary"
@@ -291,6 +303,12 @@ def can_convert_to_permanent(post):
         post=post, source_post__is_temporary=True
     ).exists():
         return False, "quotes_temporary"
+    # In a topic with a poll or checklist, the first post must be converted first.
+    topic = post.topic
+    if hasattr(topic, "poll") or hasattr(topic, "checklist"):
+        first_post = topic.posts.order_by("post_order", "pk").first()
+        if first_post and first_post.pk != post.pk and first_post.is_temporary:
+            return False, "feature_first_post"
     return True, None
 
 
@@ -354,8 +372,8 @@ def topic_detail(request, topic_id):
     # Increment view counter (simple version — no dedup)
     Topic.objects.filter(pk=topic_id).update(view_count=topic.view_count + 1)
 
-    # Paginacja stabilna — wszystkie posty, niezależnie od PLONK
-    posts_qs = topic.posts.select_related("author", "updated_by")
+    # Paginacja stabilna — wszystkie posty, niezależnie od PLONK; pending niewidoczne
+    posts_qs = topic.posts.filter(is_pending=False).select_related("author", "updated_by")
     paginator = Paginator(posts_qs, getattr(settings, "POSTS_PER_PAGE", 20))
     page = paginator.get_page(request.GET.get("page"))
     _update_topic_read_state(request.user, topic, page)
@@ -476,6 +494,73 @@ def topic_detail(request, topic_id):
                 elif reason:
                     blocked_convert_reasons[p.pk] = reason
 
+    # Checklist context
+    cl = getattr(topic, "checklist", None) if hasattr(topic, "checklist") else None
+    # GeoIP country codes for mods — annotate post objects directly (in-memory, fast)
+    if is_mod:
+        from .geoip import get_country_code
+        for p in page.object_list:
+            p.geoip_code = get_country_code(p.author_ip) if p.author_ip else None
+
+    cl_items = []
+    cl_pending = []
+    cl_upvoted_ids = set()
+    cl_categories = []
+    cl_is_owner_or_mod = False
+    cl_sort = ""
+    if cl is not None:
+        cl_is_owner_or_mod = request.user.is_authenticated and (
+            topic.author_id == request.user.pk
+            or request.user.is_root
+            or request.user.role >= User.ROLE_ADMIN
+        )
+        cl_categories = list(cl.categories.all())
+        cl_allowed_tags = [t.strip() for t in cl.allowed_tags.split(",") if t.strip()]
+        cl_sort = request.GET.get("cl_sort", cl.default_sort)
+        items_qs = cl.items.select_related("author", "category")
+        # Filtering
+        cl_status_filter = request.GET.get("cl_status", "")
+        cl_cat_filter = request.GET.get("cl_cat", "")
+        cl_tag_filter = request.GET.get("cl_tag", "")
+        if cl_status_filter:
+            try:
+                items_qs = items_qs.filter(status=int(cl_status_filter))
+            except (ValueError, TypeError):
+                pass
+        if cl_cat_filter:
+            try:
+                items_qs = items_qs.filter(category_id=int(cl_cat_filter))
+            except (ValueError, TypeError):
+                pass
+        if cl_tag_filter and cl_tag_filter in cl_allowed_tags:
+            items_qs = items_qs.filter(tag=cl_tag_filter)
+        # Exclude PENDING for non-owners (unless it's the user's own)
+        if not cl_is_owner_or_mod:
+            if request.user.is_authenticated:
+                items_qs = items_qs.exclude(
+                    ~Q(author=request.user), status=ChecklistItem.Status.PENDING
+                )
+            else:
+                items_qs = items_qs.exclude(status=ChecklistItem.Status.PENDING)
+        # Sorting
+        if cl_sort == "priority":
+            items_qs = items_qs.order_by(django_models.F("priority").asc(nulls_last=True), "order")
+        elif cl_sort == "date":
+            items_qs = items_qs.order_by("-created_at")
+        elif cl_sort == "status":
+            items_qs = items_qs.order_by("status", "order")
+        else:  # upvotes (default)
+            items_qs = items_qs.order_by("-upvote_count", "order")
+        all_items = list(items_qs)
+        cl_items = [i for i in all_items if i.status != ChecklistItem.Status.PENDING]
+        cl_pending = [i for i in all_items if i.status == ChecklistItem.Status.PENDING]
+        if request.user.is_authenticated:
+            cl_upvoted_ids = set(
+                ChecklistUpvote.objects.filter(
+                    user=request.user, item__checklist=cl
+                ).values_list("item_id", flat=True)
+            )
+
     return render(request, "board/topic_detail.html", {
         "topic": topic,
         "forum": topic.forum,
@@ -501,6 +586,17 @@ def topic_detail(request, topic_id):
         "convertible_post_ids": convertible_post_ids,
         "blocked_convert_reasons": blocked_convert_reasons,
         "is_admin_or_root": is_admin_or_root,
+        "checklist": cl,
+        "cl_items": cl_items,
+        "cl_pending": cl_pending,
+        "cl_upvoted_ids": cl_upvoted_ids,
+        "cl_categories": cl_categories,
+        "cl_allowed_tags": cl_allowed_tags if cl else [],
+        "cl_is_owner_or_mod": cl_is_owner_or_mod,
+        "cl_sort": cl_sort,
+        "cl_status_filter": cl_status_filter if cl else "",
+        "cl_cat_filter": cl_cat_filter if cl else "",
+        "cl_tag_filter": cl_tag_filter if cl else "",
     })
 
 
@@ -620,12 +716,38 @@ def new_topic(request, forum_id):
     if request.method == "POST":
         form = NewTopicForm(request.POST, is_admin=is_admin)
         if form.is_valid():
+            from .antiflood import check_can_post as _flood_check
+            flood = _flood_check(request.user)
+            if not flood["allowed"]:
+                messages.error(request, str(flood["wait_seconds"]), extra_tags="antiflood")
+                return render(request, "board/new_topic.html", {
+                    "forum": forum, "form": form, "is_admin": is_admin,
+                    "pinned_topic_posts": _get_global_pinned_topic_posts(),
+                    "poll_options_text": request.POST.get("poll_options_text", ""),
+                    "poll_panel_open": False,
+                    "poll_options_soft_limit": SiteConfig.get().poll_options_soft_max,
+                    "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
+                })
+            from .geoip import is_country_blocked
+            if is_country_blocked(_get_client_ip(request)):
+                messages.error(request, "Tworzenie wątków jest niedostępne z Twojej lokalizacji.")
+                return render(request, "board/new_topic.html", {
+                    "forum": forum, "form": form, "is_admin": is_admin,
+                    "pinned_topic_posts": _get_global_pinned_topic_posts(),
+                    "poll_options_text": request.POST.get("poll_options_text", ""),
+                    "poll_panel_open": False,
+                    "poll_options_soft_limit": SiteConfig.get().poll_options_soft_max,
+                    "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
+                })
             temp = _is_temporary_content_mode()
+            from .moderation_windows import should_hold_for_moderation
+            pending = should_hold_for_moderation(request.user)
             topic = Topic.objects.create(
                 forum=forum,
                 title=form.cleaned_data["title"],
                 author=request.user,
                 is_temporary=temp,
+                is_pending=pending,
             )
             post = _render_and_create_post(
                 topic=topic,
@@ -634,7 +756,14 @@ def new_topic(request, forum_id):
                 post_order=1,
                 author_ip=_get_client_ip(request),
                 is_temporary=temp,
+                is_pending=pending,
             )
+            if pending:
+                messages.info(
+                    request,
+                    "Twój wątek trafił do kolejki moderacji i będzie widoczny po zatwierdzeniu.",
+                )
+                return redirect("forum_detail", forum_id=forum.pk)
             _update_topic_stats(topic, post)
             _update_forum_stats(forum, post)
             _increment_user_post_count(request.user)
@@ -663,6 +792,27 @@ def new_topic(request, forum_id):
                     )
                     for index, opt in enumerate(poll_data["options"], start=1)
                 ])
+                topic.feature = Topic.Feature.POLL
+                topic.save(update_fields=["feature"])
+
+            # Checklist creation (mutually exclusive with poll)
+            if not poll_data and request.POST.get("checklist_enabled") == "1":
+                cl = Checklist.objects.create(
+                    topic=topic,
+                    allow_user_proposals=request.POST.get("checklist_allow_proposals") == "1",
+                    default_sort=request.POST.get("checklist_default_sort", "upvotes"),
+                )
+                topic.feature = Topic.Feature.CHECKLIST
+                topic.save(update_fields=["feature"])
+                # Parse initial categories from textarea
+                raw_cats = request.POST.get("checklist_categories", "").strip()
+                if raw_cats:
+                    cat_names = [ln.strip() for ln in raw_cats.splitlines() if ln.strip()]
+                    ChecklistCategory.objects.bulk_create([
+                        ChecklistCategory(checklist=cl, name=name, order=idx)
+                        for idx, name in enumerate(cat_names)
+                    ])
+
             return redirect("topic_detail", topic_id=topic.pk)
     else:
         form = NewTopicForm(is_admin=is_admin)
@@ -709,6 +859,17 @@ def reply(request, topic_id):
     if request.method == "POST":
         form = ReplyForm(request.POST)
         if form.is_valid():
+            from .antiflood import check_can_post as _flood_check
+            flood = _flood_check(request.user)
+            if not flood["allowed"]:
+                messages.error(request, str(flood["wait_seconds"]), extra_tags="antiflood")
+                return redirect("topic_detail", topic_id=topic_id)
+            from .geoip import is_country_blocked
+            if is_country_blocked(_get_client_ip(request)):
+                messages.error(request, "Pisanie jest niedostępne z Twojej lokalizacji.")
+                return redirect("topic_detail", topic_id=topic_id)
+            from .moderation_windows import should_hold_for_moderation
+            pending = should_hold_for_moderation(request.user)
             next_order = topic.posts.count() + 1
             post = _render_and_create_post(
                 topic=topic,
@@ -717,7 +878,14 @@ def reply(request, topic_id):
                 post_order=next_order,
                 author_ip=_get_client_ip(request),
                 is_temporary=_is_temporary_content_mode(),
+                is_pending=pending,
             )
+            if pending:
+                messages.info(
+                    request,
+                    "Twój post trafił do kolejki moderacji i będzie widoczny po zatwierdzeniu.",
+                )
+                return redirect("topic_detail", topic_id=topic.pk)
             _update_topic_stats(topic, post)
             _update_forum_stats(topic.forum, post)
             _increment_user_post_count(request.user)
@@ -725,7 +893,7 @@ def reply(request, topic_id):
 
             # Redirect to the last page so user sees their post
             posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
-            last_page = (topic.posts.count() - 1) // posts_per_page + 1
+            last_page = (topic.posts.filter(is_pending=False).count() - 1) // posts_per_page + 1
             return redirect(f"/topic/{topic.pk}/?page={last_page}#post-{post.pk}")
     else:
         form = ReplyForm()
@@ -836,13 +1004,16 @@ def delete_post(request, post_id):
 
         if remaining == 1:
             # Last post → delete whole topic (with poll etc.)
+            if post.author and not post.is_pending:
+                from .active_days import decrement_if_last_on_day
+                decrement_if_last_on_day(post.author, post)
             forum_id = forum.pk
             topic.delete()
             messages.success(request, "Usunięto ostatni post — wątek został usunięty.")
             forum.refresh_from_db()
-            forum.post_count = Post.objects.filter(topic__forum=forum).count()
-            forum.topic_count = forum.topics.count()
-            new_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
+            forum.post_count = Post.objects.filter(topic__forum=forum, is_pending=False).count()
+            forum.topic_count = forum.topics.filter(is_pending=False).count()
+            new_last = Post.objects.filter(topic__forum=forum, is_pending=False).order_by("-created_at").first()
             forum.last_post = new_last
             forum.last_post_at = new_last.created_at if new_last else None
             forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
@@ -855,23 +1026,25 @@ def delete_post(request, post_id):
 
         # Delete the post and renumber remaining posts
         deleted_order = post.post_order
-        if post.author:
+        if post.author and not post.is_pending:
+            from .active_days import decrement_if_last_on_day
+            decrement_if_last_on_day(post.author, post)
             post.author.post_count = max(0, post.author.post_count - 1)
             post.author.save(update_fields=["post_count"])
         post.delete()
         topic.posts.filter(post_order__gt=deleted_order).update(
             post_order=django_models.F("post_order") - 1
         )
-        # Update topic stats
-        new_last_post = topic.posts.order_by("-created_at").first()
+        # Update topic stats (exclude pending posts from counts)
+        new_last_post = topic.posts.filter(is_pending=False).order_by("-created_at").first()
         if new_last_post:
-            topic.reply_count = topic.posts.count() - 1
+            topic.reply_count = topic.posts.filter(is_pending=False).count() - 1
             topic.last_post = new_last_post
             topic.last_post_at = new_last_post.created_at
             topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
         # Update forum stats
-        forum.post_count = Post.objects.filter(topic__forum=forum).count()
-        new_forum_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
+        forum.post_count = Post.objects.filter(topic__forum=forum, is_pending=False).count()
+        new_forum_last = Post.objects.filter(topic__forum=forum, is_pending=False).order_by("-created_at").first()
         forum.last_post = new_forum_last
         forum.last_post_at = new_forum_last.created_at if new_forum_last else None
         forum.save(update_fields=["post_count", "last_post", "last_post_at"])
@@ -1055,9 +1228,14 @@ def preview_post(request, topic_id):
 
 @login_required
 def preview_new_topic(request, forum_id):
-    """AJAX: validate and render BBCode text for the new-topic editor."""
+    """AJAX: validate and render BBCode text for the new-topic editor.
+
+    Also validates poll options (if poll_enabled=1) and returns poll preview HTML.
+    """
     from django.http import JsonResponse
+    from django.utils.html import escape
     from .bbcode import render as bbcode_render
+    from .forms import parse_poll_options_text
 
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
@@ -1065,6 +1243,26 @@ def preview_new_topic(request, forum_id):
     get_object_or_404(Forum, pk=forum_id)
     text = request.POST.get("content", "")
     repaired, changes, errors = validate_post_content(text)
+
+    # Poll validation
+    poll_enabled = request.POST.get("poll_enabled") == "1"
+    poll_html = ""
+    if poll_enabled:
+        poll_question = request.POST.get("poll_question", "").strip()
+        poll_options_raw = request.POST.get("poll_options_text", "").strip()
+        if not poll_question:
+            errors.append("Pytanie ankiety jest wymagane.")
+        if not poll_options_raw:
+            errors.append("Ankieta musi mieć przynajmniej jedną opcję.")
+        else:
+            options, poll_errors = parse_poll_options_text(poll_options_raw)
+            errors.extend(poll_errors)
+            if not options and not poll_errors:
+                errors.append("Ankieta musi mieć przynajmniej jedną opcję.")
+            if not errors:
+                # Build poll preview HTML (voting format — shows categories clearly)
+                poll_html = _render_poll_preview(escape(poll_question), options)
+
     if errors:
         return JsonResponse({
             "ok": False,
@@ -1076,7 +1274,34 @@ def preview_new_topic(request, forum_id):
         "html": bbcode_render(repaired),
         "content": repaired,
         "changes": changes,
+        "poll_html": poll_html,
     })
+
+
+def _render_poll_preview(question_escaped, options):
+    """Render poll preview HTML in voting format (categories visible)."""
+    from django.utils.html import escape
+    lines = []
+    lines.append(f'<div style="border:1px solid #BC8F8F;padding:.55rem .7rem;margin-top:.5rem;background:#fffcfc;">')
+    lines.append(f'<div style="font-weight:bold;margin-bottom:.45rem;">{question_escaped}</div>')
+    current_cat = None
+    for opt in options:
+        if opt["category"] != current_cat:
+            current_cat = opt["category"]
+            if current_cat:
+                lines.append(
+                    f'<div style="font-size:11px;font-weight:bold;color:#5a2020;margin-top:.4rem;'
+                    f'border-bottom:1px solid #d7b2b2;padding-bottom:.1rem;">'
+                    f'{escape(current_cat)}</div>'
+                )
+        lines.append(
+            f'<label style="display:flex;gap:.45rem;align-items:flex-start;">'
+            f'<input type="radio" disabled>'
+            f'<span>{escape(opt["text"])}</span></label>'
+        )
+    lines.append(f'<div style="font-size:11px;color:#555;margin-top:.4rem;">Podgląd ankiety — {len(options)} opcji</div>')
+    lines.append('</div>')
+    return "\n".join(lines)
 
 
 @login_required
@@ -1794,7 +2019,17 @@ def mark_all_topics_read(request):
 # ---------------------------------------------------------------------------
 
 def register(request):
-    """User registration view."""
+    """User registration — 5-case logic based on nick×email availability.
+
+    Cases (for real accounts):
+      1.1  nick free + email free  → new account
+      1.2  nick taken + email free → error "nick zajęty"
+      1.3  email taken + nick free → recover: send code+nick to email
+      1.4  nick taken + email taken, SAME user → "konto istnieje, zaloguj się"
+      1.5  nick taken + email taken, DIFFERENT users → same as 1.3
+
+    Temporary accounts (maintenance/beta): only check nick uniqueness.
+    """
     from .models import SiteConfig
     if request.user.is_authenticated:
         return redirect("/")
@@ -1803,11 +2038,12 @@ def register(request):
     is_temp_mode = cfg.site_mode in (SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA)
 
     pending = request.session.get("register_pending")
-    reg_type = pending.get("reg_type") if pending else None  # "real" or "temporary"
+    reg_type = pending.get("reg_type") if pending else None
     start_form = RegisterStartForm(initial=pending or None)
     finish_form = RegisterFinishForm()
     sent = False
     test_code = None
+    test_nick = None  # shown in TEST_MODE for recover flow
     error = None
 
     def clear_pending_registration():
@@ -1820,7 +2056,20 @@ def register(request):
         ):
             request.session.pop(key, None)
 
-    def send_registration_code(username: str, email: str):
+    def _generate_code():
+        """Generate a 6-digit code and store in session."""
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        now = timezone.now()
+        expires = now + timedelta(hours=4)
+        request.session["register_code"] = code
+        request.session["register_code_sent_at"] = now.isoformat()
+        request.session["register_code_expires_at"] = expires.isoformat()
+        request.session["register_code_attempts"] = 0
+        request.session.modified = True
+        return code, now, expires
+
+    def send_new_account_code(username: str, email: str):
+        """Send code for new registration (case 1.1)."""
         nonlocal sent, test_code, error
 
         is_temporary_reg = (reg_type == "temporary")
@@ -1839,24 +2088,16 @@ def register(request):
                 except ValueError:
                     pass
 
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        now = timezone.now()
-        expires = now + timedelta(hours=4)
-        request.session["register_code"] = code
-        request.session["register_code_sent_at"] = now.isoformat()
-        request.session["register_code_expires_at"] = expires.isoformat()
-        request.session["register_code_attempts"] = 0
-        request.session.modified = True
+        code, now, expires = _generate_code()
 
-        # Temporary users: show code in popup, never send email
         if is_temporary_reg or getattr(settings, "TEST_MODE", False):
             sent = True
             test_code = code
             return
 
-        sent_str   = now.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        valid_str  = expires.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        from_addr  = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
+        sent_str = now.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        valid_str = expires.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum")
         send_mail(
             subject="[eudaHub] Kod rejestracyjny",
             message=(
@@ -1875,80 +2116,166 @@ def register(request):
         )
         sent = True
 
+    def send_recover_code(existing_user):
+        """Send code + nick to email for account recovery (cases 1.3/1.5)."""
+        nonlocal sent, test_code, test_nick
+
+        code, now, expires = _generate_code()
+
+        if getattr(settings, "TEST_MODE", False):
+            sent = True
+            test_code = code
+            test_nick = existing_user.username
+            return
+
+        send_mail(
+            subject="[eudaHub] Odzyskanie konta",
+            message=(
+                f"Ktoś próbował zarejestrować się na forum eudaHub z Twoim adresem email.\n\n"
+                f"Twój nick: {existing_user.username}\n"
+                f"Kod weryfikacyjny: {code}\n\n"
+                f"Wpisz ten nick i kod na stronie rejestracji, aby odzyskać konto.\n\n"
+                f"Jeśli to nie Ty — zignoruj tę wiadomość."
+            ),
+            from_email=_from_email(),
+            recipient_list=[existing_user.email],
+            fail_silently=False,
+        )
+        sent = True
+
     if request.method == "GET" and request.GET.get("reset") == "1":
         clear_pending_registration()
         pending = None
 
+    # GeoIP country block check
+    from .geoip import is_country_blocked, get_country_code
+    client_ip = _get_client_ip(request)
+    _reg_blocked_country = get_country_code(client_ip) if is_country_blocked(client_ip) else None
+
     if request.method == "POST":
+        if _reg_blocked_country:
+            error = f"Rejestracja niedostępna z Twojej lokalizacji ({_reg_blocked_country})."
+            return render(request, "registration/register.html", {
+                "start_form": start_form, "finish_form": finish_form,
+                "sent": False, "error": error, "reg_type": None,
+                "is_temp_mode": is_temp_mode, "test_code": None,
+            })
+
         action = request.POST.get("action")
 
         if action == "start":
-            # In maintenance/beta, require explicit reg_type choice
             chosen_type = request.POST.get("reg_type", "")
             if is_temp_mode and chosen_type not in ("real", "temporary"):
                 error = "Wybierz typ konta: prawdziwe lub tymczasowe."
             else:
-                username_raw = request.POST.get("username", "").strip()
-                email_raw = request.POST.get("email", "").strip().lower()
-
-                # Check for existing non-ghost account BEFORE form validation
-                # so we can offer the email-mask claim flow instead of a hard error.
-                existing_user = (
-                    User.objects.filter(username_normalized=normalize(username_raw))
-                    .exclude(is_ghost=True)
-                    .first()
-                ) if username_raw else None
-
-                if existing_user:
-                    mask = mask_email(existing_user.email) if existing_user.email else None
-                    if existing_user.email and email_raw == existing_user.email:
-                        # Email matches — enter claim flow
-                        clear_pending_registration()
-                        request.session["register_pending"] = {
-                            "username": existing_user.username,
-                            "email": existing_user.email,
-                            "reg_type": "claim",
-                        }
-                        request.session.modified = True
-                        return redirect("register")
-                    elif mask:
-                        error = (
-                            f"Ten nick jest już zajęty. Jeśli to Twoje konto, "
-                            f"wpisz email powiązany z nim: {mask}"
-                        )
-                    else:
-                        error = "Ten nick jest zajęty przez konto bez adresu email."
-                    start_form = RegisterStartForm(initial={"username": username_raw, "email": email_raw})
+                # Validate format first
+                start_form = RegisterStartForm(request.POST)
+                if not start_form.is_valid():
+                    pass  # form errors will be shown
                 else:
-                    start_form = RegisterStartForm(request.POST)
-                    if start_form.is_valid():
+                    username = start_form.cleaned_data["username"]
+                    email = start_form.cleaned_data["email"]
+                    is_temp_reg = (chosen_type == "temporary")
+
+                    nick_owner = User.objects.filter(
+                        username_normalized=normalize(username)
+                    ).first()
+                    email_owner = User.objects.filter(email=email).first() if not is_temp_reg else None
+
+                    nick_taken = nick_owner is not None
+                    email_taken = email_owner is not None
+
+                    if is_temp_reg:
+                        # Temporary accounts: only check nick
+                        if nick_taken:
+                            error = "Nick zajęty, wybierz inny nick."
+                        else:
+                            clear_pending_registration()
+                            request.session["register_pending"] = {
+                                "username": username,
+                                "email": email,
+                                "reg_type": "temporary",
+                                "mode": "new",
+                            }
+                            request.session.modified = True
+                            return redirect("register")
+
+                    elif not nick_taken and not email_taken:
+                        # 1.1: both free → new account
                         clear_pending_registration()
                         request.session["register_pending"] = {
-                            "username": start_form.cleaned_data["username"],
-                            "email": start_form.cleaned_data["email"],
+                            "username": username,
+                            "email": email,
                             "reg_type": chosen_type if is_temp_mode else "real",
+                            "mode": "new",
                         }
                         request.session.modified = True
                         return redirect("register")
+
+                    elif nick_taken and not email_taken:
+                        # 1.2: nick taken, email free
+                        error = "Nick zajęty, wybierz inny nick do rejestracji."
+
+                    elif email_taken and not nick_taken:
+                        # 1.3: email taken, nick free → recover
+                        clear_pending_registration()
+                        request.session["register_pending"] = {
+                            "username": "",
+                            "email": email,
+                            "reg_type": "recover",
+                            "mode": "recover",
+                            "recover_username": email_owner.username,
+                        }
+                        request.session.modified = True
+                        send_recover_code(email_owner)
+                        return redirect("register")
+
                     else:
-                        # Detect email conflict → show find_account hint
-                        email_val = request.POST.get("email", "").strip().lower()
-                        if email_val and User.objects.filter(email=email_val).exists():
-                            show_find_account_hint = True
+                        # Both taken
+                        if nick_owner.pk == email_owner.pk:
+                            # 1.4: same user → account exists
+                            error = (
+                                'Konto już istnieje; '
+                                '<a href="/login/">zaloguj się</a> lub wybierz '
+                                '<a href="/password-reset/">nie mam hasła</a>.'
+                            )
+                        else:
+                            # 1.5: different users → recover by email
+                            clear_pending_registration()
+                            request.session["register_pending"] = {
+                                "username": "",
+                                "email": email,
+                                "reg_type": "recover",
+                                "mode": "recover",
+                                "recover_username": email_owner.username,
+                            }
+                            request.session.modified = True
+                            send_recover_code(email_owner)
+                            return redirect("register")
+
         elif action == "send_code":
             if not pending:
                 return redirect("register")
-            start_form = RegisterStartForm(initial=pending)
-            finish_form = RegisterFinishForm()
-            email_confirm = request.POST.get("email_confirm", "").strip().lower()
-            if email_confirm != pending["email"]:
-                error = "Podany adres email nie zgadza się. Wpisz pełny adres widoczny w masce."
+            mode = pending.get("mode", "new")
+            if mode == "recover":
+                # Resend recovery code
+                recover_user = User.objects.filter(
+                    username=pending.get("recover_username"),
+                    email=pending["email"],
+                ).first()
+                if recover_user:
+                    send_recover_code(recover_user)
             else:
-                send_registration_code(pending["username"], pending["email"])
+                # New account: confirm email then send code
+                email_confirm = request.POST.get("email_confirm", "").strip().lower()
+                if email_confirm != pending["email"]:
+                    error = "Podany adres email nie zgadza się. Wpisz pełny adres widoczny w masce."
+                else:
+                    send_new_account_code(pending["username"], pending["email"])
+
         elif action == "finish":
             if not pending:
                 return redirect("register")
-            start_form = RegisterStartForm(initial=pending)
             finish_form = RegisterFinishForm(request.POST)
             code = request.session.get("register_code")
             expires_at_raw = request.session.get("register_code_expires_at")
@@ -1961,12 +2288,19 @@ def register(request):
                     expires_at = None
 
             if finish_form.is_valid():
-                username = pending["username"]
-                email = pending["email"]
-                is_claim = (reg_type == "claim")
+                mode = pending.get("mode", "new")
+                is_recover = (mode == "recover")
 
-                # Re-check uniqueness at final submit (skip for claim — account already exists).
-                if not is_claim:
+                if is_recover:
+                    # The nick entered must match the recover_username
+                    entered_nick = request.POST.get("recover_nick", "").strip()
+                    if entered_nick != pending.get("recover_username"):
+                        error = "Wpisany nick nie zgadza się z kontem powiązanym z tym emailem."
+
+                if not is_recover and not error:
+                    # Re-check uniqueness at final submit for new accounts
+                    username = pending["username"]
+                    email = pending["email"]
                     conflict_name = User.objects.filter(
                         username_normalized=normalize(username)
                     ).exists()
@@ -1989,26 +2323,29 @@ def register(request):
                         error = "Nieprawidłowy kod."
                     else:
                         password = finish_form.cleaned_data["password1"]
-                        if is_claim:
-                            # Update existing account — don't create a new one
-                            user = User.objects.get(username=username, email=email)
+                        if is_recover:
+                            # Claim existing account
+                            user = User.objects.get(
+                                username=pending["recover_username"],
+                                email=pending["email"],
+                            )
                             if finish_form.cleaned_data.get("password_is_prehashed") == "1":
                                 user.set_password(password)
                             else:
-                                user.set_password(prehash_password(password, username))
+                                user.set_password(prehash_password(password, user.username))
                             user.is_active = True
                             user.save()
                         else:
                             user = User(
-                                username=username,
-                                email=email,
+                                username=pending["username"],
+                                email=pending["email"],
                                 is_active=True,
                                 is_temporary=(reg_type == "temporary"),
                             )
                             if finish_form.cleaned_data.get("password_is_prehashed") == "1":
                                 user.set_password(password)
                             else:
-                                user.set_password(prehash_password(password, username))
+                                user.set_password(prehash_password(password, user.username))
                             user.save()
                         clear_pending_registration()
                         login(request, user)
@@ -2039,11 +2376,11 @@ def register(request):
         "email_mask": email_mask,
         "sent": sent,
         "test_code": test_code,
+        "test_nick": test_nick,
         "error": error,
         "code_valid_until": code_valid_until,
         "is_temp_mode": is_temp_mode,
         "reg_type": reg_type,
-        "show_find_account_hint": locals().get("show_find_account_hint", False),
     })
 
 
@@ -2052,7 +2389,7 @@ def activate_ghost(request):
     from .models import User
     username = request.POST.get("username") or request.GET.get("username", "")
     try:
-        user = User.objects.get(username=username, is_ghost=False, is_active=False)
+        user = User.objects.get(username=username, is_active=False)
     except User.DoesNotExist:
         return render(request, "registration/activate_ghost.html", {
             "username": username, "error": "Nie znaleziono konta oczekującego aktywacji.",
@@ -2088,9 +2425,8 @@ def activate_ghost(request):
 
         if getattr(settings, "TEST_MODE", False):
             # TEST_MODE: activate immediately, no email link
-            user.is_ghost = False
             user.is_active = True
-            user.save(update_fields=["is_ghost", "is_active"])
+            user.save(update_fields=["is_active"])
             login(request, user)
             return render(request, "registration/activate_confirm.html", {
                 "success": True, "username": user.username,
@@ -2137,7 +2473,7 @@ def find_account(request):
         if email_input:
             user = User.objects.filter(email=email_input).first()
 
-            if user and user.is_ghost:
+            if user and user.is_ghost():
                 # Ghost account — send activation link
                 token_obj, _ = ActivationToken.objects.get_or_create(
                     user=user,
@@ -2155,9 +2491,8 @@ def find_account(request):
                 activation_url = request.build_absolute_uri(f"/activate/{token_obj.token}/")
 
                 if getattr(settings, "TEST_MODE", False):
-                    user.is_ghost = False
                     user.is_active = True
-                    user.save(update_fields=["is_ghost", "is_active"])
+                    user.save(update_fields=["is_active"])
                     login(request, user)
                     return render(request, "registration/find_account.html", {
                         "test_mode_username": user.username,
@@ -2220,9 +2555,8 @@ def activate_confirm(request, token):
         return render(request, "registration/activate_confirm.html", {"expired": True})
 
     user = token_obj.user
-    user.is_ghost = False
     user.is_active = True
-    user.save(update_fields=["is_ghost", "is_active"])
+    user.save(update_fields=["is_active"])
     token_obj.delete()
     login(request, user)
     return render(request, "registration/activate_confirm.html", {"success": True, "username": user.username})
@@ -2424,19 +2758,25 @@ def spam_action(request, post_id):
 
             # 3. Ban user
             if author and ban_duration != "0":
+                author.is_active = False
                 if ban_duration == "forever":
-                    author.is_banned = True
                     author.banned_until = None
                 else:
-                    days = int(ban_duration)
-                    author.is_banned = True
-                    author.banned_until = timezone.now() + timedelta(days=days)
-                author.save(update_fields=["is_banned", "banned_until"])
+                    author.banned_until = timezone.now() + timedelta(days=int(ban_duration))
+                author.save(update_fields=["is_active", "banned_until"])
 
             # 4. Release nick (delete user account + all posts + quote cleanup)
+            is_admin_or_root = user.is_root or user.role >= User.ROLE_ADMIN
             if author and do_release_nick:
-                from .user_delete import delete_user_and_cleanup
-                delete_user_and_cleanup(author)
+                if not is_admin_or_root and author.active_days > 5:
+                    # Moderators may only release new/spam users (active_days <= 5)
+                    pass
+                else:
+                    if author.email:
+                        from .models import SpamEmail
+                        SpamEmail.objects.get_or_create(email=author.email.strip().lower())
+                    from .user_delete import delete_user_and_cleanup
+                    delete_user_and_cleanup(author)
 
             # 5. Block email domain
             if do_block_domain and email_domain:
@@ -2460,6 +2800,15 @@ def spam_action(request, post_id):
         ("forever", "Na zawsze"),
     ]
 
+    is_admin_or_root = user.is_root or user.role >= User.ROLE_ADMIN
+    can_release_nick = is_admin_or_root or (author is None) or (author.active_days <= 5)
+
+    # GeoIP
+    from .geoip import get_country_info, is_country_blocked
+    from .models import BlockedCountry
+    ip_country_code, ip_country_name = get_country_info(post.author_ip)
+    ip_country_blocked = is_country_blocked(post.author_ip) if post.author_ip else False
+
     return render(request, "board/spam_action.html", {
         "post": post,
         "topic": topic,
@@ -2470,6 +2819,237 @@ def spam_action(request, post_id):
         "domain_already_blocked": domain_already_blocked,
         "dangerous_days": getattr(settings, "IP_RETAIN_DANGEROUS_DAYS", 90),
         "ban_choices": ban_choices,
+        "can_release_nick": can_release_nick,
+        "ip_country_code": ip_country_code,
+        "ip_country_name": ip_country_name,
+        "ip_country_blocked": ip_country_blocked,
+        "is_admin_or_root": is_admin_or_root,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Moderation queue — pending posts from new users during moderation windows
+# ---------------------------------------------------------------------------
+
+@login_required
+def moderation_queue(request):
+    """Flat list of pending posts awaiting moderation. Actions: approve / delete / release user."""
+    user = request.user
+    if not (user.is_root or user.role >= User.ROLE_MODERATOR):
+        return HttpResponseForbidden()
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        post_ids = [int(x) for x in request.POST.getlist("post_ids") if x.isdigit()]
+        is_admin_or_root = user.is_root or user.role >= User.ROLE_ADMIN
+
+        if action == "approve" and post_ids:
+            posts = list(
+                Post.objects
+                .filter(pk__in=post_ids, is_pending=True)
+                .select_related("author", "topic__forum")
+            )
+            with transaction.atomic():
+                for post in posts:
+                    post.is_pending = False
+                    post.save(update_fields=["is_pending"])
+                    topic = post.topic
+                    forum = topic.forum
+                    if topic.is_pending:
+                        topic.is_pending = False
+                        topic.save(update_fields=["is_pending"])
+                    _update_topic_stats(topic, post)
+                    _update_forum_stats(forum, post)
+                    if post.author:
+                        _increment_user_post_count(post.author)
+                        from .active_days import increment_if_new_day
+                        increment_if_new_day(post.author, post)
+            messages.success(request, f"Zatwierdzono {len(posts)} post(ów).")
+
+        elif action == "delete" and post_ids:
+            posts = list(
+                Post.objects
+                .filter(pk__in=post_ids, is_pending=True)
+                .select_related("topic")
+            )
+            with transaction.atomic():
+                topic_ids = set(p.topic_id for p in posts)
+                Post.objects.filter(pk__in=[p.pk for p in posts]).delete()
+                # Remove topics that have no posts left
+                for tid in topic_ids:
+                    try:
+                        t = Topic.objects.get(pk=tid)
+                        if not t.posts.exists():
+                            t.delete()
+                    except Topic.DoesNotExist:
+                        pass
+            messages.success(request, f"Usunięto {len(posts)} post(ów).")
+
+        elif action == "release_user":
+            user_id = request.POST.get("user_id", "").strip()
+            if user_id.isdigit():
+                target = get_object_or_404(User, pk=int(user_id))
+                if not is_admin_or_root and target.active_days > 5:
+                    messages.error(
+                        request,
+                        f"Brak uprawnień — moderator nie może usuwać użytkowników z active_days > 5 "
+                        f"({target.username} ma {target.active_days} dni aktywności).",
+                    )
+                else:
+                    if target.email:
+                        from .models import SpamEmail
+                        SpamEmail.objects.get_or_create(email=target.email.strip().lower())
+                    from .user_delete import delete_user_and_cleanup
+                    delete_user_and_cleanup(target)
+                    messages.success(request, f'Konto \u201e{target.username}\u201c zostało usunięte.')
+
+        return redirect("moderation_queue")
+
+    pending_posts = (
+        Post.objects
+        .filter(is_pending=True)
+        .select_related("author", "topic", "topic__forum")
+        .order_by("created_at")
+    )
+    # Group authors for the "release user" action
+    author_ids = pending_posts.values_list("author_id", flat=True).distinct()
+    authors_in_queue = (
+        User.objects
+        .filter(pk__in=author_ids)
+        .order_by("username")
+        .values("pk", "username", "active_days", "post_count")
+    )
+    is_admin_or_root = user.is_root or user.role >= User.ROLE_ADMIN
+    return render(request, "board/moderation_queue.html", {
+        "pending_posts": pending_posts,
+        "authors_in_queue": list(authors_in_queue),
+        "is_admin_or_root": is_admin_or_root,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Moderation windows config — admin-only CRUD
+# ---------------------------------------------------------------------------
+
+@login_required
+def moderation_windows_config(request):
+    """Admin-only view to add/delete time windows for the moderation queue."""
+    user = request.user
+    if not (user.is_root or user.role >= User.ROLE_ADMIN):
+        return HttpResponseForbidden()
+
+    from .models import ModerationWindow
+    DAYS = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Nd"]
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action == "add":
+            try:
+                start_hour = int(request.POST["start_hour"])
+                start_minute = int(request.POST.get("start_minute", 0))
+                end_hour = int(request.POST["end_hour"])
+                end_minute = int(request.POST.get("end_minute", 0))
+                tz_name = request.POST.get("timezone", "Europe/Warsaw").strip() or "Europe/Warsaw"
+                day_from_raw = request.POST.get("day_from", "").strip()
+                day_to_raw = request.POST.get("day_to", "").strip()
+                day_from = int(day_from_raw) if day_from_raw.isdigit() else None
+                day_to = int(day_to_raw) if day_to_raw.isdigit() else None
+                if not (0 <= start_hour <= 23 and 0 <= start_minute <= 59
+                        and 0 <= end_hour <= 23 and 0 <= end_minute <= 59):
+                    raise ValueError("Invalid time")
+                ModerationWindow.objects.create(
+                    start_hour=start_hour,
+                    start_minute=start_minute,
+                    end_hour=end_hour,
+                    end_minute=end_minute,
+                    day_from=day_from,
+                    day_to=day_to,
+                    timezone=tz_name,
+                    is_active=True,
+                    created_by=user,
+                )
+                messages.success(request, "Okno moderacji zostało dodane.")
+            except (KeyError, ValueError) as exc:
+                messages.error(request, f"Błąd danych: {exc}")
+
+        elif action == "toggle":
+            wid = request.POST.get("window_id", "")
+            if wid.isdigit():
+                try:
+                    w = ModerationWindow.objects.get(pk=int(wid))
+                    w.is_active = not w.is_active
+                    w.save(update_fields=["is_active"])
+                except ModerationWindow.DoesNotExist:
+                    pass
+
+        elif action == "delete":
+            wid = request.POST.get("window_id", "")
+            if wid.isdigit():
+                ModerationWindow.objects.filter(pk=int(wid)).delete()
+                messages.success(request, "Okno moderacji zostało usunięte.")
+
+        return redirect("moderation_windows_config")
+
+    windows = ModerationWindow.objects.all()
+    return render(request, "board/moderation_windows.html", {
+        "windows": windows,
+        "days": list(enumerate(DAYS)),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Country blocks config — admin-only
+# ---------------------------------------------------------------------------
+
+@login_required
+def country_blocks_config(request):
+    """Admin view to block/unblock countries by ISO 3166-1 alpha-2 code."""
+    user = request.user
+    if not (user.is_root or user.role >= User.ROLE_ADMIN):
+        return HttpResponseForbidden()
+
+    from .models import BlockedCountry
+    from .geoip import get_country_info
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action == "add":
+            code = request.POST.get("country_code", "").strip().upper()[:2]
+            if len(code) == 2 and code.isalpha():
+                # Try to get name from GeoIP or from form
+                name = request.POST.get("country_name", "").strip()
+                BlockedCountry.objects.get_or_create(
+                    country_code=code,
+                    defaults={"country_name": name, "blocked_by": user},
+                )
+                messages.success(request, f"Kraj {code} został zablokowany.")
+            else:
+                messages.error(request, "Nieprawidłowy kod kraju (wymagane 2 litery, np. PL).")
+
+        elif action == "add_by_ip":
+            ip = request.POST.get("ip", "").strip()
+            code, name = get_country_info(ip)
+            if code:
+                BlockedCountry.objects.get_or_create(
+                    country_code=code,
+                    defaults={"country_name": name or "", "blocked_by": user},
+                )
+                messages.success(request, f"Zablokowano kraj {code} ({name or '?'}) na podstawie IP {ip}.")
+            else:
+                messages.error(request, f"Nie udało się ustalić kraju dla IP {ip} (brak bazy GeoIP lub nieznane IP).")
+
+        elif action == "delete":
+            code = request.POST.get("country_code", "").strip().upper()
+            BlockedCountry.objects.filter(country_code=code).delete()
+            messages.success(request, f"Kraj {code} odblokowany.")
+
+        return redirect("country_blocks_config")
+
+    blocked = list(BlockedCountry.objects.all())
+    return render(request, "board/country_blocks.html", {
+        "blocked": blocked,
     })
 
 
@@ -2580,9 +3160,10 @@ def _record_login_fail(username: str) -> int:
 def login_view(request):
     """Custom login.
 
-    - Wrong password: increment fail counter, show error (max 20/h).
-    - Unusable password (null, admin-invalidated): redirect to reset flow.
-    - 'Forgot password' link on page → user navigates to reset voluntarily.
+    Three distinct error messages depending on the situation:
+    - Nick not found → "Użytkownik nie istnieje"
+    - Unusable password (ghost, reset) → "Hasło zostało zresetowane"
+    - Wrong password → "Hasło się nie zgadza"
     """
     from django.contrib.auth import authenticate
     from .models import User as ForumUser
@@ -2603,21 +3184,31 @@ def login_view(request):
         else:
             user = authenticate(request, username=username, password=password)
             if user is not None:
+                if request.session.pop("ban_lifted", False):
+                    from django.contrib import messages as django_messages
+                    django_messages.success(request, "Twoje konto jest znów aktywne.")
                 login(request, user)
                 return redirect(request.POST.get("next") or request.GET.get("next") or "/")
 
-            # Auth failed — check if password is unusable (admin-invalidated)
+            # Auth failed — distinguish cases
             try:
                 candidate = ForumUser.objects.get(username=username)
-                if not candidate.has_usable_password():
-                    return redirect(
-                        f"/password-reset/?username={candidate.username}&reason=invalidated"
-                    )
+                if candidate.is_root:
+                    error = 'Nieprawidłowe hasło.'
+                elif not candidate.is_active:
+                    if candidate.banned_until is not None:
+                        until = candidate.banned_until.strftime("%Y-%m-%d %H:%M")
+                        error = f'Konto zablokowane do {until}.'
+                    else:
+                        error = 'Konto zablokowane bezterminowo.'
+                elif not candidate.has_usable_password():
+                    error = 'Hasło zostało zresetowane; wybierz <a href="/password-reset/">nie mam hasła</a>.'
+                else:
+                    error = 'Hasło się nie zgadza; podaj hasło albo wybierz <a href="/password-reset/">nie mam hasła</a>.'
             except ForumUser.DoesNotExist:
-                pass
+                error = 'Użytkownik nie istnieje; <a href="/register/">zarejestruj się</a>.'
 
             _record_login_fail(username)
-            error = "Nieprawidłowy nick lub hasło."
 
     return render(request, "registration/login.html", {
         "error": error,
@@ -2626,11 +3217,16 @@ def login_view(request):
 
 
 def request_reset(request):
-    """Step 1: user asks for a reset code. Sends 6-digit code by email or shows popup."""
-    from django.http import JsonResponse
-    from .models import User as ForumUser, SiteConfig
+    """'Nie mam hasła' — unified flow for ghost and regular accounts.
 
-    reason = request.GET.get("reason", "")
+    Step 1 (check): nick → return email mask (AJAX)
+    Step 2 (send):  verify email matches → send 6-digit code
+    The do_reset view handles step 3 (code + new password).
+    Ghost and non-ghost accounts are treated identically — no activation links.
+    """
+    from django.http import JsonResponse
+    from .models import User as ForumUser
+
     prefill_username = request.GET.get("username", "")
 
     if request.method == "POST":
@@ -2644,87 +3240,43 @@ def request_reset(request):
         try:
             user = ForumUser.objects.get(username=username)
         except ForumUser.DoesNotExist:
-            if is_ajax:
-                return JsonResponse({"ok": False, "error": "Nie znaleziono konta o tym nicku."})
-            return render(request, "registration/request_reset.html", {
-                "error": "Nie znaleziono konta o tym nicku.",
-                "reason": reason, "prefill_username": username,
-            })
-
-        if user.is_ghost:
-            if not user.email:
-                msg = "To konto nie ma hasła ani adresu email. Wybierz inny nick lub skontaktuj się z administratorem."
-                if is_ajax:
-                    return ajax_err(msg)
-                return render(request, "registration/request_reset.html", {
-                    "error": msg, "reason": reason, "prefill_username": username,
-                })
-            # Ghost with email — step 1: return mask, step 2: verify email then send link
-            if action == "check":
-                if is_ajax:
-                    return JsonResponse({"ok": True, "email_mask": mask_email(user.email), "is_ghost": True})
-                return render(request, "registration/request_reset.html", {
-                    "reason": reason, "prefill_username": username,
-                })
-            # action == "send": verify email first
-            email_confirm = request.POST.get("email_confirm", "").strip().lower()
-            if email_confirm != user.email.lower():
-                if is_ajax:
-                    return ajax_err("Podany adres email nie zgadza się.")
-                return render(request, "registration/request_reset.html", {
-                    "error": "Podany adres email nie zgadza się.",
-                    "reason": reason, "prefill_username": username,
-                })
-            # Email matches — send activation link
-            token_obj, _ = ActivationToken.objects.get_or_create(
-                user=user,
-                defaults={
-                    "token": secrets.token_urlsafe(48),
-                    "expires_at": timezone.now() + timedelta(hours=24),
-                },
-            )
-            token_obj.token = secrets.token_urlsafe(48)
-            token_obj.expires_at = timezone.now() + timedelta(hours=24)
-            token_obj.failed_attempts = 0
-            token_obj.window_start = None
-            token_obj.save()
-            activation_url = request.build_absolute_uri(f"/activate/{token_obj.token}/")
-            if getattr(settings, "TEST_MODE", False):
-                user.is_ghost = False
-                user.is_active = True
-                user.save(update_fields=["is_ghost", "is_active"])
-                login(request, user)
-                if is_ajax:
-                    return JsonResponse({"ok": True, "ghost_activated": True, "username": user.username})
-                return render(request, "registration/request_reset.html", {
-                    "ghost_activated": True,
-                    "test_mode_username": user.username,
-                })
-            send_mail(
-                subject="[eudaHub] Aktywacja konta na forum",
-                message=(
-                    f"Twój nick: {user.username}\n\n"
-                    f"Kliknij link aby aktywować konto i ustawić hasło:\n{activation_url}\n\n"
-                    f"Link ważny 24 godziny.\n"
-                    f"Jeśli to nie Ty — zignoruj tę wiadomość."
-                ),
-                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@forum"),
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
-            if is_ajax:
-                return JsonResponse({"ok": True, "ghost_activation_sent": True, "email_mask": mask_email(user.email)})
-            return render(request, "registration/request_reset.html", {
-                "ghost_activation_sent": True,
-                "email_mask": mask_email(user.email),
-            })
-
-        if user.is_temporary:
-            msg = "Konta tymczasowe nie mogą resetować hasła."
+            msg = 'Nie znaleziono konta o tym nicku. <a href="/register/">Zarejestruj się.</a>'
             if is_ajax:
                 return ajax_err(msg)
             return render(request, "registration/request_reset.html", {
-                "error": msg, "reason": reason, "prefill_username": username,
+                "error": msg, "prefill_username": username,
+            })
+
+        if user.is_root:
+            msg = "Konto root nie korzysta z odzyskiwania hasła."
+            if is_ajax:
+                return ajax_err(msg)
+            return render(request, "registration/request_reset.html", {
+                "error": msg, "prefill_username": username,
+            })
+
+        if user.is_temporary:
+            # Temporary accounts: skip email entirely — generate code and show on screen.
+            allowed, _ = _can_send_reset_code(user)
+            if not allowed:
+                msg = (f"Wysłano już {PasswordResetCode.MAX_PER_HOUR} kody w ciągu ostatniej godziny. "
+                       "Spróbuj ponownie za chwilę.")
+                if is_ajax:
+                    return ajax_err(msg)
+                return render(request, "registration/request_reset.html", {
+                    "error": msg, "prefill_username": username,
+                })
+            code = _generate_reset_code()
+            expires = timezone.now() + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
+            PasswordResetCode.objects.create(user=user, code=code, expires_at=expires)
+            sent_at = timezone.now().strftime("%Y-%m-%d %H:%M")
+            if is_ajax:
+                return JsonResponse({
+                    "ok": True, "greencode": True,
+                    "code": code, "username": username, "sent_at": sent_at,
+                })
+            return render(request, "registration/request_reset.html", {
+                "greencode_code": code, "greencode_username": username, "greencode_sent_at": sent_at,
             })
 
         if not user.email:
@@ -2732,7 +3284,7 @@ def request_reset(request):
             if is_ajax:
                 return ajax_err(msg)
             return render(request, "registration/request_reset.html", {
-                "error": msg, "reason": reason, "prefill_username": username,
+                "error": msg, "prefill_username": username,
             })
 
         # Step 1: just return email mask (no code sent)
@@ -2746,7 +3298,7 @@ def request_reset(request):
                 return ajax_err("Podany adres email nie zgadza się.")
             return render(request, "registration/request_reset.html", {
                 "error": "Podany adres email nie zgadza się.",
-                "reason": reason, "prefill_username": username,
+                "prefill_username": username,
             })
 
         allowed, _ = _can_send_reset_code(user)
@@ -2756,47 +3308,42 @@ def request_reset(request):
             if is_ajax:
                 return ajax_err(msg)
             return render(request, "registration/request_reset.html", {
-                "error": msg, "reason": reason, "prefill_username": username,
+                "error": msg, "prefill_username": username,
             })
 
         code = _generate_reset_code()
         expires = timezone.now() + timedelta(hours=PasswordResetCode.CODE_EXPIRY_HOURS)
         PasswordResetCode.objects.create(user=user, code=code, expires_at=expires)
 
-        use_popup = getattr(settings, "TEST_MODE", False)
+        use_greencode = getattr(settings, "TEST_MODE", False)
 
-        if use_popup:
+        if use_greencode:
             sent_at = timezone.now().strftime("%Y-%m-%d %H:%M")
             if is_ajax:
                 return JsonResponse({
                     "ok": True,
-                    "popup": True,
+                    "greencode": True,
                     "code": code,
                     "username": username,
                     "sent_at": sent_at,
                     "email_mask": mask_email(user.email),
-                    "do_reset_url": f"/set-password/?username={username}",
                 })
             return render(request, "registration/request_reset.html", {
-                "popup_code": code,
-                "popup_username": username,
-                "popup_sent_at": sent_at,
+                "greencode_code": code,
+                "greencode_username": username,
+                "greencode_sent_at": sent_at,
                 "email_mask": mask_email(user.email),
-                "do_reset_url": f"/set-password/?username={username}",
-                "reason": reason,
             })
 
         _send_reset_code_email(user, code, user.email)
         if is_ajax:
-            return JsonResponse({"ok": True, "popup": False,
+            return JsonResponse({"ok": True, "greencode": False,
                                  "email_mask": mask_email(user.email)})
         return render(request, "registration/request_reset.html", {
             "sent": True, "email_mask": mask_email(user.email),
-            "reason": reason,
         })
 
     return render(request, "registration/request_reset.html", {
-        "reason": reason,
         "prefill_username": prefill_username,
     })
 
@@ -2824,8 +3371,9 @@ def do_reset(request):
             except ForumUser.DoesNotExist:
                 error = "Nieprawidłowy nick lub kod."
             else:
-                code_obj = _find_valid_code(user, code_input)
-                if code_obj is None:
+                if user.is_root:
+                    error = "Konto root nie korzysta z odzyskiwania hasła."
+                elif (code_obj := _find_valid_code(user, code_input)) is None:
                     error = "Nieprawidłowy lub wygasły kod."
                 else:
                     from .auth_utils import prehash_password
@@ -2833,12 +3381,9 @@ def do_reset(request):
                     if not is_prehashed:
                         password1 = prehash_password(password1, username)
                     user.set_password(password1)
-                    # Activate ghost accounts on password reset (user proved email access)
-                    update_fields = ["password"]
-                    if not user.is_active:
-                        user.is_active = True
-                        user.is_ghost = False
-                        update_fields += ["is_active", "is_ghost"]
+                    # Ghost accounts get activated on password reset (user proved email access)
+                    update_fields = ["password", "is_active"]
+                    user.is_active = True
                     user.save(update_fields=update_fields)
                     # Mark this and all older codes as used
                     PasswordResetCode.objects.filter(user=user, is_used=False).update(is_used=True)
@@ -3205,6 +3750,76 @@ def user_likes_given(request, user_id):
 # ---------------------------------------------------------------------------
 
 
+def _assign_checklist_anon_labels(temp_users_qs):
+    """Assign 'Anonimus_N' labels to checklist items/comments by temp users.
+
+    Within each checklist, the same user gets the same number.
+    Must be called BEFORE deleting temp users (SET_NULL will clear author FK).
+    """
+
+    temp_user_ids = set(temp_users_qs.values_list("pk", flat=True))
+    if not temp_user_ids:
+        return
+
+    # Gather all checklists that have contributions from temp users
+    item_checklist_ids = set(
+        ChecklistItem.objects.filter(author_id__in=temp_user_ids)
+        .values_list("checklist_id", flat=True).distinct()
+    )
+    comment_checklist_ids = set(
+        ChecklistComment.objects.filter(author_id__in=temp_user_ids)
+        .values_list("item__checklist_id", flat=True).distinct()
+    )
+    checklist_ids = item_checklist_ids | comment_checklist_ids
+
+    for cl_id in checklist_ids:
+        # Collect unique temp user IDs in this checklist, ordered by first appearance
+        user_ids_items = list(
+            ChecklistItem.objects.filter(checklist_id=cl_id, author_id__in=temp_user_ids)
+            .order_by("created_at")
+            .values_list("author_id", flat=True)
+        )
+        user_ids_comments = list(
+            ChecklistComment.objects.filter(item__checklist_id=cl_id, author_id__in=temp_user_ids)
+            .order_by("created_at")
+            .values_list("author_id", flat=True)
+        )
+        seen = {}
+        counter = 0
+        for uid in user_ids_items + user_ids_comments:
+            if uid not in seen:
+                counter += 1
+                seen[uid] = f"Anonimus_{counter}"
+
+        # Update labels
+        for uid, label in seen.items():
+            ChecklistItem.objects.filter(
+                checklist_id=cl_id, author_id=uid
+            ).update(author_label=label)
+            ChecklistComment.objects.filter(
+                item__checklist_id=cl_id, author_id=uid
+            ).update(author_label=label)
+
+
+def _preserve_checklist_anon_upvotes(temp_users_qs):
+    """Before deleting temp users, add their upvote counts to anon_upvote_count."""
+    from django.db.models import Count
+
+    temp_user_ids = set(temp_users_qs.values_list("pk", flat=True))
+    if not temp_user_ids:
+        return
+
+    anon_counts = (
+        ChecklistUpvote.objects.filter(user_id__in=temp_user_ids)
+        .values("item_id")
+        .annotate(cnt=Count("pk"))
+    )
+    for row in anon_counts:
+        ChecklistItem.objects.filter(pk=row["item_id"]).update(
+            anon_upvote_count=django_models.F("anon_upvote_count") + row["cnt"]
+        )
+
+
 def _cleanup_temporary():
     """Delete temporary users, posts, and topics.  Returns stats dict."""
     from .models import Forum as _Forum
@@ -3224,16 +3839,47 @@ def _cleanup_temporary():
     )
 
     # Delete temporary posts
-    del_posts, _ = Post.objects.filter(is_temporary=True).delete()
+    _, _detail = Post.objects.filter(is_temporary=True).delete()
+    del_posts = _detail.get("board.Post", 0)
 
     # Mark surviving topics as permanent
     Topic.objects.filter(pk__in=surviving_topic_ids, is_temporary=True).update(is_temporary=False)
 
     # Delete topics that have no permanent posts left
-    del_topics, _ = Topic.objects.filter(is_temporary=True).delete()
+    _, _detail = Topic.objects.filter(is_temporary=True).delete()
+    del_topics = _detail.get("board.Topic", 0)
 
-    # Delete temporary users
-    del_users, _ = User.objects.filter(is_temporary=True).delete()
+    # Collect poll options affected by temporary user votes before deletion
+    from django.db.models import Count
+    affected_option_ids = set(
+        PollOption.objects.filter(
+            votes__user__is_temporary=True
+        ).values_list("pk", flat=True).distinct()
+    )
+
+    # Checklist: assign Anonimus_N labels and preserve upvote counts
+    _assign_checklist_anon_labels(User.objects.filter(is_temporary=True))
+    _preserve_checklist_anon_upvotes(User.objects.filter(is_temporary=True))
+
+    # Delete temporary users (cascades PollVotes and ChecklistUpvotes)
+    _, _detail = User.objects.filter(is_temporary=True).delete()
+    del_users = _detail.get("board.User", 0)
+
+    # Recalculate vote_count for poll options that lost votes
+    if affected_option_ids:
+        for opt in PollOption.objects.filter(pk__in=affected_option_ids).annotate(
+            real_count=Count("votes")
+        ):
+            if opt.vote_count != opt.real_count:
+                opt.vote_count = opt.real_count
+                opt.save(update_fields=["vote_count"])
+
+    # Recalculate checklist upvote_count from remaining records
+    for item in ChecklistItem.objects.annotate(
+        real_count=Count("upvotes")
+    ).exclude(upvote_count=django_models.F("real_count")):
+        item.upvote_count = item.real_count
+        item.save(update_fields=["upvote_count"])
 
     # Recalculate forum/topic/user stats
     for forum in _Forum.objects.filter(pk__in=affected_forum_ids):
@@ -3349,7 +3995,6 @@ def root_config(request):
             else:
                 messages.warning(request, "Nie zaznaczono żadnego konta.")
         else:
-            cfg.show_switch_link = (request.POST.get("show_switch_link") == "1")
             old_mode = cfg.site_mode
             new_mode = request.POST.get("site_mode", SiteConfig.MODE_PRODUCTION)
             if new_mode in (SiteConfig.MODE_PRODUCTION, SiteConfig.MODE_READONLY, SiteConfig.MODE_MAINTENANCE, SiteConfig.MODE_BETA):
@@ -3549,7 +4194,7 @@ def admin_roles(request):
     users = (
         User.objects.filter(is_root=False)
         .order_by("-role", "username")
-        .only("id", "username", "role", "is_ghost")
+        .only("id", "username", "role")
     )
     return render(request, "board/admin_roles.html", {
         "users": users,
@@ -3622,6 +4267,7 @@ def convert_post_permanent(request, post_id):
             "not_temporary": "Ten post nie jest tymczasowy.",
             "temporary_user": "Post tymczasowego użytkownika nie może być zamieniony na trwały.",
             "quotes_temporary": "Post cytuje tymczasowe posty — nie może być zamieniony na trwały.",
+            "feature_first_post": "W wątku z ankietą/checklistą najpierw należy oznaczyć pierwszy post jako trwały.",
         }
         messages.error(request, reason_map.get(reason, "Nie można zamienić."))
     else:
@@ -3701,3 +4347,384 @@ def maintenance_logout(request):
     request.session.pop("maintenance_user", None)
     auth_logout(request)
     return redirect("maintenance_gate")
+
+
+# ---------------------------------------------------------------------------
+# Checklist views
+# ---------------------------------------------------------------------------
+
+def _get_checklist_context(request, topic_id):
+    """Return (topic, checklist, is_owner_or_mod) or raise 404."""
+    from django.http import Http404
+    topic = get_object_or_404(Topic.objects.select_related("author"), pk=topic_id)
+    try:
+        checklist = topic.checklist
+    except Checklist.DoesNotExist:
+        raise Http404
+    is_owner = request.user.is_authenticated and topic.author_id == request.user.pk
+    is_mod = request.user.is_authenticated and (
+        request.user.is_root or request.user.role >= User.ROLE_ADMIN
+    )
+    return topic, checklist, (is_owner or is_mod)
+
+
+def _get_checklist_item(checklist, item_id):
+    return get_object_or_404(ChecklistItem, pk=item_id, checklist=checklist)
+
+
+@login_required
+def checklist_add_item(request, topic_id):
+    """Add a new checklist item. PENDING for regular users, NEW for owner/mod."""
+    from django.http import JsonResponse
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if checklist.is_closed and not is_owner_or_mod:
+        messages.error(request, "Checklista jest zamknięta.")
+        return redirect("topic_detail", topic_id=topic_id)
+    if not checklist.allow_user_proposals and not is_owner_or_mod:
+        messages.error(request, "Dodawanie pozycji jest wyłączone.")
+        return redirect("topic_detail", topic_id=topic_id)
+    if request.method != "POST":
+        return redirect("topic_detail", topic_id=topic_id)
+
+    from .antiflood import check_can_post as _flood_check
+    flood = _flood_check(request.user)
+    if not flood["allowed"]:
+        messages.error(request, str(flood["wait_seconds"]), extra_tags="antiflood")
+        return redirect("topic_detail", topic_id=topic_id)
+
+    from .forms import ChecklistItemForm
+    form = ChecklistItemForm(request.POST)
+    if not form.is_valid():
+        for err in form.errors.values():
+            messages.error(request, err[0])
+        return redirect("topic_detail", topic_id=topic_id)
+
+    category = None
+    cat_id = form.cleaned_data.get("category")
+    if cat_id:
+        category = checklist.categories.filter(pk=cat_id).first()
+
+    allowed_tags = [t.strip() for t in checklist.allowed_tags.split(",") if t.strip()]
+    raw_tag = request.POST.get("tag", "").strip()
+    tag = raw_tag if raw_tag in allowed_tags else ""
+
+    status = ChecklistItem.Status.NEW if is_owner_or_mod else ChecklistItem.Status.PENDING
+    max_order = checklist.items.aggregate(m=django_models.Max("order"))["m"] or 0
+
+    item = ChecklistItem.objects.create(
+        checklist=checklist,
+        author=request.user,
+        title=form.cleaned_data["title"],
+        description=form.cleaned_data.get("description", ""),
+        category=category,
+        tag=tag,
+        status=status,
+        order=max_order + 1,
+    )
+    # Auto-upvote own item
+    ChecklistUpvote.objects.create(item=item, user=request.user)
+    item.upvote_count = 1
+    item.save(update_fields=["upvote_count"])
+
+    if status == ChecklistItem.Status.PENDING:
+        messages.info(request, "Propozycja dodana — czeka na zatwierdzenie.")
+    else:
+        messages.success(request, "Pozycja dodana.")
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_approve_item(request, topic_id, item_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    item = _get_checklist_item(checklist, item_id)
+    if item.status != ChecklistItem.Status.PENDING:
+        messages.error(request, "Ta pozycja nie czeka na zatwierdzenie.")
+        return redirect("topic_detail", topic_id=topic_id)
+    item.status = ChecklistItem.Status.NEW
+    item.status_changed_at = timezone.now()
+    item.status_changed_by = request.user
+    item.save(update_fields=["status", "status_changed_at", "status_changed_by"])
+    messages.success(request, f"Zatwierdzono: {item.title}")
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_reject_item(request, topic_id, item_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    item = _get_checklist_item(checklist, item_id)
+    if item.status != ChecklistItem.Status.PENDING:
+        messages.error(request, "Ta pozycja nie czeka na zatwierdzenie.")
+        return redirect("topic_detail", topic_id=topic_id)
+    item.status = ChecklistItem.Status.REJECTED
+    item.rejection_reason = request.POST.get("reason", "")[:500]
+    item.status_changed_at = timezone.now()
+    item.status_changed_by = request.user
+    item.save(update_fields=["status", "rejection_reason", "status_changed_at", "status_changed_by"])
+    messages.success(request, f"Odrzucono: {item.title}")
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_set_status(request, topic_id, item_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    item = _get_checklist_item(checklist, item_id)
+    try:
+        new_status = int(request.POST.get("status", ""))
+    except (ValueError, TypeError):
+        return HttpResponseForbidden()
+    if new_status not in dict(ChecklistItem.Status.choices):
+        return HttpResponseForbidden()
+    item.status = new_status
+    item.status_changed_at = timezone.now()
+    item.status_changed_by = request.user
+    item.save(update_fields=["status", "status_changed_at", "status_changed_by"])
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_set_priority(request, topic_id, item_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    item = _get_checklist_item(checklist, item_id)
+    raw = request.POST.get("priority", "")
+    if raw == "":
+        item.priority = None
+    else:
+        try:
+            p = int(raw)
+        except (ValueError, TypeError):
+            return HttpResponseForbidden()
+        if p not in dict(ChecklistItem.Priority.choices):
+            return HttpResponseForbidden()
+        item.priority = p
+    item.save(update_fields=["priority"])
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_delete_item(request, topic_id, item_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    item = _get_checklist_item(checklist, item_id)
+    item.delete()
+    messages.success(request, "Pozycja usunięta.")
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_toggle_upvote(request, topic_id, item_id):
+    """AJAX: toggle upvote on a checklist item."""
+    from django.http import JsonResponse
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+    topic, checklist, _ = _get_checklist_context(request, topic_id)
+    if checklist.is_closed:
+        return JsonResponse({"error": "Checklista zamknięta."}, status=403)
+    item = _get_checklist_item(checklist, item_id)
+    existing = ChecklistUpvote.objects.filter(item=item, user=request.user).first()
+    if existing:
+        existing.delete()
+        upvoted = False
+    else:
+        ChecklistUpvote.objects.create(item=item, user=request.user)
+        upvoted = True
+    item.upvote_count = item.upvotes.count()
+    item.save(update_fields=["upvote_count"])
+    return JsonResponse({
+        "ok": True,
+        "upvoted": upvoted,
+        "count": item.total_upvotes,
+    })
+
+
+@login_required
+def checklist_item_comments(request, topic_id, item_id):
+    """AJAX: load comments for a checklist item."""
+    from django.http import JsonResponse
+    topic, checklist, _ = _get_checklist_context(request, topic_id)
+    item = _get_checklist_item(checklist, item_id)
+    comments = item.comments.select_related("author").order_by("created_at")
+    data = []
+    for c in comments:
+        data.append({
+            "id": c.pk,
+            "author": c.display_author(),
+            "author_id": c.author_id,
+            "content": c.content,
+            "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
+        })
+    return JsonResponse({"comments": data})
+
+
+@login_required
+def checklist_add_comment(request, topic_id, item_id):
+    """AJAX: add a comment to a checklist item."""
+    from django.http import JsonResponse
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+    topic, checklist, _ = _get_checklist_context(request, topic_id)
+    if checklist.is_closed:
+        return JsonResponse({"error": "Checklista zamknięta."}, status=403)
+    item = _get_checklist_item(checklist, item_id)
+
+    import json
+    try:
+        body = json.loads(request.body)
+        content = body.get("content", "").strip()
+    except (json.JSONDecodeError, AttributeError):
+        content = request.POST.get("content", "").strip()
+
+    if not content:
+        return JsonResponse({"error": "Treść komentarza jest wymagana."}, status=400)
+    if len(content) > 1000:
+        return JsonResponse({"error": "Komentarz zbyt długi (max 1000 znaków)."}, status=400)
+
+    comment = ChecklistComment.objects.create(
+        item=item,
+        author=request.user,
+        content=content,
+    )
+    item.comment_count = item.comments.count()
+    item.save(update_fields=["comment_count"])
+
+    return JsonResponse({
+        "ok": True,
+        "comment": {
+            "id": comment.pk,
+            "author": comment.display_author(),
+            "author_id": comment.author_id,
+            "content": comment.content,
+            "created_at": comment.created_at.strftime("%Y-%m-%d %H:%M"),
+        },
+    })
+
+
+@login_required
+def checklist_manage_categories(request, topic_id):
+    """Full page: manage checklist categories."""
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+
+    from .forms import ChecklistCategoryForm
+
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        if action == "add":
+            form = ChecklistCategoryForm(request.POST)
+            if form.is_valid():
+                max_order = checklist.categories.aggregate(m=django_models.Max("order"))["m"] or 0
+                ChecklistCategory.objects.create(
+                    checklist=checklist,
+                    name=form.cleaned_data["name"],
+                    color=form.cleaned_data["color"],
+                    order=max_order + 1,
+                )
+                messages.success(request, "Kategoria dodana.")
+        elif action == "delete":
+            cat_id = request.POST.get("category_id")
+            checklist.categories.filter(pk=cat_id).delete()
+            messages.success(request, "Kategoria usunięta.")
+        elif action == "edit":
+            cat_id = request.POST.get("category_id")
+            cat = checklist.categories.filter(pk=cat_id).first()
+            if cat:
+                form = ChecklistCategoryForm(request.POST)
+                if form.is_valid():
+                    cat.name = form.cleaned_data["name"]
+                    cat.color = form.cleaned_data["color"]
+                    cat.save(update_fields=["name", "color"])
+                    messages.success(request, "Kategoria zaktualizowana.")
+        return redirect("checklist_manage_categories", topic_id=topic_id)
+
+    categories = checklist.categories.all()
+    return render(request, "board/checklist_categories.html", {
+        "topic": topic,
+        "checklist": checklist,
+        "categories": categories,
+        "form": ChecklistCategoryForm(),
+    })
+
+
+@login_required
+def checklist_toggle_closed(request, topic_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    if checklist.is_closed:
+        checklist.is_closed = False
+        checklist.closed_at = None
+        messages.success(request, "Checklista otwarta ponownie.")
+    else:
+        checklist.is_closed = True
+        checklist.closed_at = timezone.now()
+        messages.success(request, "Checklista zamknięta.")
+    checklist.save(update_fields=["is_closed", "closed_at"])
+    return redirect("topic_detail", topic_id=topic_id)
+
+
+@login_required
+def checklist_reorder(request, topic_id):
+    """AJAX: reorder checklist items via drag-and-drop."""
+    from django.http import JsonResponse
+    import json
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return JsonResponse({"error": "Brak uprawnień."}, status=403)
+    try:
+        body = json.loads(request.body)
+        order_ids = body.get("order", [])
+    except (json.JSONDecodeError, AttributeError):
+        return JsonResponse({"error": "Nieprawidłowe dane."}, status=400)
+
+    items = {item.pk: item for item in checklist.items.all()}
+    updates = []
+    for idx, item_id in enumerate(order_ids):
+        item = items.get(item_id)
+        if item and item.order != idx:
+            item.order = idx
+            updates.append(item)
+    if updates:
+        ChecklistItem.objects.bulk_update(updates, ["order"])
+    return JsonResponse({"ok": True})
+
+
+@login_required
+def checklist_settings(request, topic_id):
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    topic, checklist, is_owner_or_mod = _get_checklist_context(request, topic_id)
+    if not is_owner_or_mod:
+        return HttpResponseForbidden()
+    checklist.allow_user_proposals = request.POST.get("allow_user_proposals") == "1"
+    default_sort = request.POST.get("default_sort", "upvotes")
+    if default_sort in dict(Checklist.DefaultSort.choices):
+        checklist.default_sort = default_sort
+    raw_tags = request.POST.get("allowed_tags", "")
+    parsed = [t.strip() for t in raw_tags.split(",") if t.strip()]
+    checklist.allowed_tags = ", ".join(parsed)
+    checklist.save(update_fields=["allow_user_proposals", "default_sort", "allowed_tags"])
+    messages.success(request, "Ustawienia zapisane.")
+    return redirect("topic_detail", topic_id=topic_id)

@@ -29,6 +29,7 @@
       <button type="button" class="bb-btn" data-open='[Bible=""]' data-close="[/Bible]">Bible</button>
       <button type="button" class="bb-btn" data-open='[AI=""]' data-close="[/AI]">AI</button>
       <button type="button" id="new-topic-poll-button">ankieta</button>
+      <button type="button" id="new-topic-checklist-button">checklista</button>
     </div>
 
     <label>{{ form.content.label }}
@@ -99,15 +100,52 @@
         <span id="poll-option-counter" style="font-size:11px;color:#666;">0 / {{ poll_options_soft_limit }}</span>
       </div>
       <p style="font-size:11px;color:#666;margin:.2rem 0 .4rem 0;">
-        Opcja: linia zaczynająca się od <code>-</code>. Kategoria: linia zaczynająca się od <code>##</code>. Puste linie są pomijane.
+        Opcja: linia zaczynająca się od <code>-</code>. Kategoria: linia bez myślnika. Puste linie oddzielają grupy.
       </p>
       <textarea name="poll_options_text" id="poll-options-text" rows="8"
                 style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"
-                placeholder="- Opcja bez kategorii&#10;&#10;## Pierwsza kategoria&#10;- Opcja A&#10;- Opcja B&#10;&#10;## Druga kategoria&#10;- Opcja C">{{ poll_options_text }}</textarea>
+                placeholder="- Opcja bez kategorii&#10;&#10;Pierwsza kategoria&#10;- Opcja A&#10;- Opcja B&#10;&#10;Druga kategoria&#10;- Opcja C">{{ poll_options_text }}</textarea>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem;">
         <button type="button" id="remove-poll-panel" class="secondary">Usuń ankietę</button>
         <button type="submit">Dodaj wątek i ankietę</button>
       </div>
+    </div>
+  </div>
+
+  <input type="hidden" name="checklist_enabled" id="checklist-enabled-input" value="0">
+
+  <div id="new-topic-checklist-panel"
+       style="display:none;margin-top:.8rem;padding:.8rem 1rem;border:1px solid #BC8F8F;background:#f8fff8;">
+    <strong style="font-size:13px;">Checklista</strong>
+    <p style="font-size:11px;color:#666;margin:.2rem 0 .5rem;">
+      Interaktywna lista zadan / zgloszen. Uzytkownicy moga proponowac pozycje i glosowac.
+    </p>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem;">
+      <label style="display:flex;gap:.35rem;align-items:center;font-size:12px;">
+        <input type="checkbox" name="checklist_allow_proposals" value="1" checked>
+        <span>Propozycje uzytkownikow</span>
+      </label>
+      <label style="font-size:12px;">Sortowanie domyslne:
+        <select name="checklist_default_sort" style="font-size:12px;">
+          <option value="upvotes">Glosy</option>
+          <option value="priority">Priorytet</option>
+          <option value="date">Data</option>
+          <option value="status">Status</option>
+        </select>
+      </label>
+    </div>
+    <div style="margin-top:.4rem;">
+      <strong style="font-size:12px;">Kategorie (opcjonalne)</strong>
+      <p style="font-size:11px;color:#666;margin:.1rem 0 .3rem;">
+        Podaj nazwy kategorii po jednej na linie. Mozesz je tez dodac pozniej.
+      </p>
+      <textarea name="checklist_categories" rows="4"
+                style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"
+                placeholder="Bug&#10;Feature request&#10;UX/UI&#10;Wydajnosc"></textarea>
+    </div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem;">
+      <button type="button" id="remove-checklist-panel" class="secondary">Usun checkliste</button>
+      <button type="submit">Dodaj watek i checkliste</button>
     </div>
   </div>
 </form>
@@ -486,8 +524,35 @@ document.querySelectorAll('.toggle-pinned-post').forEach(function(btn) {
 });
 
 document.getElementById('new-topic-poll-button').addEventListener('click', function() {
+  closePanelChecklist();
   togglePollPanel(true);
 });
+
+document.getElementById('new-topic-checklist-button').addEventListener('click', function() {
+  closePanelPoll();
+  openPanelChecklist();
+});
+
+function closePanelPoll() {
+  var panel = document.getElementById('new-topic-poll-panel');
+  var enabled = document.getElementById('poll-enabled-input');
+  if (panel) panel.style.display = 'none';
+  if (enabled) enabled.value = '0';
+}
+
+function closePanelChecklist() {
+  var panel = document.getElementById('new-topic-checklist-panel');
+  var enabled = document.getElementById('checklist-enabled-input');
+  if (panel) panel.style.display = 'none';
+  if (enabled) enabled.value = '0';
+}
+
+function openPanelChecklist() {
+  var panel = document.getElementById('new-topic-checklist-panel');
+  var enabled = document.getElementById('checklist-enabled-input');
+  if (panel) panel.style.display = 'block';
+  if (enabled) enabled.value = '1';
+}
 
 function updatePollCounter() {
   var ta = document.getElementById('poll-options-text');
@@ -513,6 +578,12 @@ var pollTextarea = document.getElementById('poll-options-text');
 if (pollTextarea) pollTextarea.addEventListener('input', updatePollCounter);
 updatePollCounter();
 
+document.getElementById('remove-checklist-panel').addEventListener('click', function() {
+  closePanelChecklist();
+  var ta = document.querySelector('[name="checklist_categories"]');
+  if (ta) ta.value = '';
+});
+
 document.getElementById('remove-poll-panel').addEventListener('click', function() {
   var panel = document.getElementById('new-topic-poll-panel');
   var enabled = document.getElementById('poll-enabled-input');
@@ -533,10 +604,19 @@ document.getElementById('remove-poll-panel').addEventListener('click', function(
 
 function requestNewTopicPreviewData() {
   var text = document.getElementById('new-topic-content').value;
+  var body = 'content=' + encodeURIComponent(text);
+  var pollEnabled = document.getElementById('poll-enabled-input');
+  if (pollEnabled && pollEnabled.value === '1') {
+    body += '&poll_enabled=1';
+    var q = document.getElementById('poll-question');
+    if (q) body += '&poll_question=' + encodeURIComponent(q.value);
+    var opts = document.getElementById('poll-options-text');
+    if (opts) body += '&poll_options_text=' + encodeURIComponent(opts.value);
+  }
   return fetch('{% url "preview_new_topic" forum.pk %}', {
     method: 'POST',
     headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
-    body: 'content=' + encodeURIComponent(text)
+    body: body
   })
   .then(function(r){ return r.json(); });
 }
@@ -573,7 +653,7 @@ function doNewTopicPreview() {
       document.getElementById('new-topic-content').value = d.content;
       if (window.syncNewTopicEditorChrome) window.syncNewTopicEditorChrome();
     }
-    content.innerHTML = d.html || '';
+    content.innerHTML = (d.html || '') + (d.poll_html || '');
     area.style.display = 'block';
   });
 }

@@ -44,7 +44,12 @@
 (function() {
   var WASM_CDN = 'https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/index.umd.min.js';
   var PARAMS = { memorySize: 262144, iterations: 2, parallelism: 1, hashLength: 32, outputType: 'hex' };
-  function saltFor(u) { return u.toLowerCase() + ':sfiniabb'; }
+  var _MANUAL = {'ł':'l','Ł':'l','ø':'o','Ø':'o','æ':'a','Æ':'a'};
+  function normalizeUsername(u) {
+    u = u.replace(/[łŁøØæÆ]/g, function(c){ return _MANUAL[c]; });
+    return u.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+  function saltFor(u) { return normalizeUsername(u) + ':eudaBB'; }
 
   var form = document.getElementById('reset-form');
   var flag = document.getElementById('prehashed-flag');

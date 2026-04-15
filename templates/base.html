@@ -200,7 +200,6 @@
         {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
         {% if user.is_root %}<a href="{% url 'root_config' %}">RootConfig</a>{% endif %}
         <form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Wyloguj</button></form>
-        {% if site_config.show_switch_link %}<form method="post" action="{% url 'logout' %}" style="display:inline;">{% csrf_token %}<input type="hidden" name="next" value="{% url 'login' %}"><button type="submit" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;font-size:inherit;">Przełącz</button></form>{% endif %}
         {% if request.session.maintenance_access %}<form method="post" action="{% url 'maintenance_logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:#c00;cursor:pointer;font-size:inherit;font-weight:bold;">Wyloguj z serwisu</button></form>{% endif %}
       {% else %}
         {% if request.session.maintenance_user %}
@@ -221,7 +220,7 @@
         <a href="{% url 'user_list' %}">Użytkownicy</a>
         <a href="{% url 'login' %}">Zaloguj</a>
         <a href="{% url 'register' %}">Rejestracja</a>
-        {% if site_config.show_switch_link %}<span style="color:#c00;font-weight:bold;font-size:10px;">[popup]</span>{% endif %}
+        <a href="{% url 'request_reset' %}">Nie mam hasła</a>
         {% if request.session.maintenance_access %}<form method="post" action="{% url 'maintenance_logout' %}" style="display:inline;">{% csrf_token %}<button type="submit" style="background:none;border:none;padding:0;color:#c00;cursor:pointer;font-size:inherit;font-weight:bold;">Wyloguj z serwisu</button></form>{% endif %}
       {% endif %}
     </div>
@@ -236,9 +235,27 @@
 
   {% if messages %}
     <ul class="messages">
-      {% for msg in messages %}<li class="{{ msg.tags }}">{{ msg }}</li>{% endfor %}
+      {% for msg in messages %}
+        {% if 'antiflood' in msg.tags %}
+          <li class="error antiflood-msg" data-wait="{{ msg }}"></li>
+        {% else %}
+          <li class="{{ msg.tags }}">{{ msg }}</li>
+        {% endif %}
+      {% endfor %}
     </ul>
   {% endif %}
+  <script>
+  (function(){
+    document.querySelectorAll('.antiflood-msg').forEach(function(el){
+      var wait = parseInt(el.getAttribute('data-wait'), 10);
+      if (!wait || wait <= 0) return;
+      var until = new Date(Date.now() + wait * 1000);
+      var h = until.getHours().toString().padStart(2,'0');
+      var m = until.getMinutes().toString().padStart(2,'0');
+      el.textContent = 'Zbyt wiele wpisów — możesz pisać ponownie o ' + h + ':' + m + '.';
+    });
+  })();
+  </script>
 
   {% block content %}{% endblock %}
 

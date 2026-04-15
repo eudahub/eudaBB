@@ -198,6 +198,10 @@
   </div>
 {% endif %}
 
+{% if checklist %}
+  {% include "board/_checklist.html" %}
+{% endif %}
+
 {% include "board/_pagination.html" %}
 
 {% for post in page.object_list %}
@@ -288,11 +292,18 @@
             </form>
           {% endif %}
         </div>
-        {% if is_moderator and post.ip_flagged %}
-          <div style="text-align:right; margin-top:.4rem;">
-            <span title="Post oznaczony jako groźny — retencja IP {{ dangerous_days }}d"
-                  style="color:#c00; font-size:.8em; font-weight:bold;">&#9888; groźne IP</span>
+        {% if is_moderator %}
+          {% if post.ip_flagged or post.geoip_code %}
+          <div style="text-align:right; margin-top:.4rem; font-size:.8em;">
+            {% if post.ip_flagged %}
+              <span title="Post oznaczony jako groźny — retencja IP {{ dangerous_days }}d"
+                    style="color:#c00; font-weight:bold;">&#9888; groźne IP</span>
+            {% endif %}
+            {% if post.geoip_code %}
+              <span style="color:#555; margin-left:.3rem;" title="{{ post.author_ip }}">{{ post.geoip_code }}</span>
+            {% endif %}
           </div>
+          {% endif %}
         {% endif %}
       </td>
     </tr>
