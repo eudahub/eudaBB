@@ -1081,6 +1081,48 @@ class SiteConfig(models.Model):
         return "SiteConfig"
 
 
+class Notification(models.Model):
+    class Type(models.TextChoices):
+        QUOTE_REPLY        = "quote_reply",        "Odpowiedź z cytatem"
+        POST_LIKED         = "post_liked",          "Plus za post"
+        POST_UNLIKED       = "post_unliked",        "Cofnięcie plusa"
+        PENDING_QUEUE      = "pending_queue",       "Kolejka oczekujących"
+        POST_REPORTED      = "post_reported",       "Zgłoszony post"
+        PM_REPORTED        = "pm_reported",         "Zgłoszona PM"
+        REPORT_CLOSED_POST = "report_closed_post",  "Zamknięto zgłoszenie postu"
+        REPORT_CLOSED_PM   = "report_closed_pm",    "Zamknięto zgłoszenie PM"
+
+    recipient  = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="notifications"
+    )
+    notif_type = models.CharField(max_length=24, choices=Type.choices)
+    is_read    = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # Who triggered this notification (null = system)
+    actor = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="sent_notifications",
+    )
+    # Relevant objects — only one filled depending on type
+    post = models.ForeignKey(
+        "Post", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="+",
+    )
+    pm = models.ForeignKey(
+        "PrivateMessage", null=True, blank=True, on_delete=models.CASCADE,
+        related_name="+",
+    )
+
+    class Meta:
+        db_table = "forum_notification"
+        ordering = ["-created_at"]
+        indexes  = [models.Index(fields=["recipient", "is_read", "created_at"])]
+
+    def __str__(self):
+        return f"Notif({self.notif_type}) → {self.recipient_id}"
+
+
 class UserSession(models.Model):
     """Tracks active sessions per user for concurrent-login detection."""
     user = models.ForeignKey(

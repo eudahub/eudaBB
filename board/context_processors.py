@@ -12,16 +12,22 @@ def test_mode(request):
 
 
 def pm_unread_count(request):
-    """Inject unread PM count into every template context."""
+    """Inject unread PM count and notification count into every template context."""
     if not request.user.is_authenticated:
-        return {"pm_unread": 0}
-    from board.models import PrivateMessageBox
-    count = PrivateMessageBox.objects.filter(
+        return {"pm_unread": 0, "notif_count": 0}
+    from board.models import Notification, PrivateMessageBox, Post
+    pm_count = PrivateMessageBox.objects.filter(
         owner=request.user,
         box_type=PrivateMessageBox.BoxType.INBOX,
         is_read=False,
     ).count()
-    return {"pm_unread": count}
+    notif_qs = Notification.objects.filter(recipient=request.user, is_read=False)
+    # PENDING_QUEUE counts only when queue is actually non-empty
+    has_pending = Post.objects.filter(is_pending=True).exists()
+    if not has_pending:
+        notif_qs = notif_qs.exclude(notif_type=Notification.Type.PENDING_QUEUE)
+    notif_count = notif_qs.count()
+    return {"pm_unread": pm_count, "notif_count": notif_count}
 
 
 def user_session_info(request):

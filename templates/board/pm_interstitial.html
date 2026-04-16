@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Masz nowe wiadomości{% endblock %}
+{% block content %}
+<div style="max-width:480px;margin:3rem auto;text-align:center;">
+  <h2>Masz {{ unread }} nieprzeczytan{% if unread == 1 %}ą wiadomość{% elif unread < 5 %}e wiadomości{% else %}ych wiadomości{% endif %}</h2>
+  <p style="color:#555;margin:1rem 0 2rem;">Ktoś napisał do Ciebie prywatną wiadomość.</p>
+  <div style="display:flex;gap:1rem;justify-content:center;">
+    <a href="{% url 'pm_inbox' %}" style="padding:.5rem 1.5rem;background:#336;color:#fff;text-decoration:none;border-radius:3px;">Przejdź do skrzynki</a>
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" style="padding:.5rem 1.5rem;background:none;border:1px solid #888;border-radius:3px;cursor:pointer;">Przejdź do forum</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -51,6 +51,11 @@ urlpatterns = [
     path("pm/<int:box_id>/",        views.pm_view,    name="pm_view"),
     path("pm/<int:box_id>/edit/",   views.pm_edit,    name="pm_edit"),
     path("pm/<int:box_id>/delete/", views.pm_delete,  name="pm_delete"),
+    path("pm/alert/",               views.pm_interstitial, name="pm_interstitial"),
+    # Notifications
+    path("notifications/",                    views.notifications_list,  name="notifications_list"),
+    path("notifications/<int:notif_id>/go/",  views.notification_go,     name="notification_go"),
+    path("notifications/clear/",              views.notifications_clear, name="notifications_clear"),
     path("admin/order/", views.admin_order, name="admin_order"),
     path("admin/order/subforums/<int:forum_id>/", views.admin_order_children, name="admin_order_children"),
     path("admin/order/section/<int:pk>/move/<str:direction>/", views.admin_order_move_section, name="admin_order_move_section"),

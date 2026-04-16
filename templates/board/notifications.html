@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Powiadomienia{% endblock %}
+{% block content %}
+<h2>Powiadomienia <small style="font-size:.7em;color:#666;">({{ notifs|length }}{% if not has_pending %} — kolejka oczekujących pominięta{% endif %})</small></h2>
+
+{% if notifs %}
+  <form method="post" action="{% url 'notifications_clear' %}" style="margin-bottom:.8rem;">
+    {% csrf_token %}
+    <button type="submit">Wyzeruj wszystkie</button>
+    {% if has_pending %}<small style="color:#888;margin-left:.5rem;">Notyfikacja kolejki oczekujących zostanie zachowana (kolejka niepusta).</small>{% endif %}
+  </form>
+
+  <table>
+    <thead><tr>
+      <th>Typ</th><th>Od</th><th>Opis</th><th>Kiedy</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for n in notifs %}
+      {% if n.notif_type != "pending_queue" or has_pending %}
+      <tr>
+        <td>
+          {% if n.notif_type == "quote_reply" %}Cytat
+          {% elif n.notif_type == "post_liked" %}Plus
+          {% elif n.notif_type == "post_unliked" %}Cofnięcie plusa
+          {% elif n.notif_type == "pending_queue" %}Kolejka
+          {% elif n.notif_type == "post_reported" %}Zgłoszenie postu
+          {% elif n.notif_type == "pm_reported" %}Zgłoszenie PM
+          {% elif n.notif_type == "report_closed_post" %}Zamknięto zgłoszenie
+          {% elif n.notif_type == "report_closed_pm" %}Zamknięto zgl. PM
+          {% else %}{{ n.notif_type }}{% endif %}
+        </td>
+        <td>{% if n.actor %}{{ n.actor.username }}{% else %}—{% endif %}</td>
+        <td>
+          {% if n.post %}
+            w <em>{{ n.post.topic.title|truncatechars:50 }}</em>
+          {% elif n.notif_type == "pending_queue" %}
+            Oczekują posty do zatwierdzenia
+          {% endif %}
+        </td>
+        <td><small>{{ n.created_at|date:"d.m H:i" }}</small></td>
+        <td>
+          <a href="{% url 'notification_go' n.pk %}">Przejdź →</a>
+        </td>
+      </tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>Brak nowych powiadomień.</p>
+{% endif %}
+{% endblock %}

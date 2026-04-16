@@ -278,6 +278,11 @@ def _render_and_create_post(topic: Topic, author, content_bbcode: str,
     if author and not is_pending:
         from .active_days import increment_if_new_day
         increment_if_new_day(author, post)
+        from .notifications import notify_quote_reply
+        notify_quote_reply(post)
+    elif is_pending:
+        from .notifications import notify_pending_queue
+        notify_pending_queue()
     return post
 
 
@@ -318,6 +323,15 @@ def can_convert_to_permanent(post):
 
 def index(request):
     """Forum index: list all sections with their forums."""
+    # PM interstitial: show once per session when there are unread PMs
+    if request.user.is_authenticated and not request.session.get("pm_interstitial_ack"):
+        if PrivateMessageBox.objects.filter(
+            owner=request.user,
+            box_type=PrivateMessageBox.BoxType.INBOX,
+            is_read=False,
+        ).exists():
+            return redirect("pm_interstitial")
+
     user_access = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     is_staff = request.user.is_staff if request.user.is_authenticated else False
     sections = Section.objects.prefetch_related(
@@ -2891,6 +2905,8 @@ def moderation_queue(request):
                         _increment_user_post_count(post.author)
                         from .active_days import increment_if_new_day
                         increment_if_new_day(post.author, post)
+                    from .notifications import notify_quote_reply
+                    notify_quote_reply(post)
             messages.success(request, f"Zatwierdzono {len(posts)} post(ów).")
 
         elif action == "delete" and post_ids:
@@ -3215,7 +3231,16 @@ def login_view(request):
                     from django.contrib import messages as django_messages
                     django_messages.success(request, "Twoje konto jest znów aktywne.")
                 login(request, user)
-                return redirect(request.POST.get("next") or request.GET.get("next") or "/")
+                next_url = request.POST.get("next") or request.GET.get("next") or "/"
+                # Show PM interstitial when landing on "/" if unread PMs exist
+                if next_url == "/":
+                    if PrivateMessageBox.objects.filter(
+                        owner=user,
+                        box_type=PrivateMessageBox.BoxType.INBOX,
+                        is_read=False,
+                    ).exists():
+                        return redirect("pm_interstitial")
+                return redirect(next_url)
 
             # Auth failed — distinguish cases
             try:
@@ -3709,6 +3734,103 @@ def pm_delete(request, box_id):
     return redirect(redirect_url)
 
 
+# ---------------------------------------------------------------------------
+# PM interstitial
+# ---------------------------------------------------------------------------
+
+@login_required
+def pm_interstitial(request):
+    """Shown after login (or index visit) when user has unread PMs.
+
+    Gives a choice: go to inbox or continue to forum.
+    Sets session flag 'pm_interstitial_ack' so it doesn't repeat this session.
+    """
+    unread = PrivateMessageBox.objects.filter(
+        owner=request.user,
+        box_type=PrivateMessageBox.BoxType.INBOX,
+        is_read=False,
+    ).count()
+    if request.method == "POST" or not unread:
+        # "Continue to forum" or no unread PMs → ack and go to index
+        request.session["pm_interstitial_ack"] = True
+        return redirect("/")
+    return render(request, "board/pm_interstitial.html", {"unread": unread})
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+def _notif_redirect_url(notif):
+    """Return the target URL for a notification."""
+    from django.urls import reverse
+    t = notif.notif_type
+    NT = notif.Type
+    if t == NT.PENDING_QUEUE:
+        return reverse("moderation_queue")
+    if notif.post_id:
+        topic_id = notif.post.topic_id
+        page_hint = ""
+        try:
+            per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+            order = notif.post.post_order
+            if order and order > 0:
+                page_num = (order - 1) // per_page + 1
+                if page_num > 1:
+                    page_hint = f"?page={page_num}"
+        except Exception:
+            pass
+        return f"/topic/{topic_id}/{page_hint}#post-{notif.post_id}"
+    if notif.pm_id:
+        return reverse("pm_inbox")
+    return "/"
+
+
+@login_required
+def notifications_list(request):
+    from .models import Notification
+    notifs = (
+        Notification.objects
+        .filter(recipient=request.user, is_read=False)
+        .select_related("actor", "post__topic", "pm")
+        .order_by("-created_at")
+    )
+    # PENDING_QUEUE shown only if queue actually non-empty
+    has_pending = Post.objects.filter(is_pending=True).exists()
+    return render(request, "board/notifications.html", {
+        "notifs": notifs,
+        "has_pending": has_pending,
+    })
+
+
+@login_required
+def notification_go(request, notif_id):
+    """Mark a notification as read and redirect to its target."""
+    from .models import Notification
+    notif = get_object_or_404(Notification, pk=notif_id, recipient=request.user)
+    if not notif.is_read:
+        notif.is_read = True
+        notif.save(update_fields=["is_read"])
+    return redirect(_notif_redirect_url(notif))
+
+
+@login_required
+def notifications_clear(request):
+    """Mark all unread notifications as read.
+
+    Keeps PENDING_QUEUE notifications if the pending queue is still non-empty.
+    """
+    if request.method != "POST":
+        return HttpResponseForbidden()
+    from .models import Notification
+    qs = Notification.objects.filter(recipient=request.user, is_read=False)
+    has_pending = Post.objects.filter(is_pending=True).exists()
+    if has_pending:
+        qs = qs.exclude(notif_type=Notification.Type.PENDING_QUEUE)
+    qs.update(is_read=True)
+    return redirect("notifications_list")
+
+
 @login_required
 def toggle_post_like(request, post_id):
     if request.method != "POST":
@@ -3731,10 +3853,14 @@ def toggle_post_like(request, post_id):
     like = PostLike.objects.filter(post=post, user=request.user).first()
     if like is not None:
         like.delete()
+        from .notifications import notify_post_unliked
+        notify_post_unliked(post, request.user)
         messages.success(request, "Wycofano polubienie.")
         return redirect(next_url)
 
     PostLike.objects.create(post=post, user=request.user)
+    from .notifications import notify_post_liked
+    notify_post_liked(post, request.user)
     messages.success(request, "Dodano polubienie.")
     return redirect(next_url)
 
