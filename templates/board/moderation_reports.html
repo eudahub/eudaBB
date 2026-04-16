@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Zgłoszenia postów{% endblock %}
+{% block content %}
+<h2>Otwarte zgłoszenia</h2>
+{% if reports %}
+<table>
+  <thead><tr>
+    <th>Post</th><th>Wątek</th><th>Zgłaszający</th><th>Powód</th><th>Komentarz</th><th>Kiedy</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for r in reports %}
+  <tr style="background:#fff0f0;">
+    <td><a href="/topic/{{ r.post.topic_id }}/#post-{{ r.post_id }}">#{{ r.post_id }}</a></td>
+    <td><a href="/topic/{{ r.post.topic_id }}/">{{ r.post.topic.title|truncatechars:40 }}</a></td>
+    <td>{% if r.reporter %}{{ r.reporter.username }}{% else %}[usunięty]{% endif %}</td>
+    <td>{{ r.get_reason_display }}</td>
+    <td>{{ r.comment|truncatechars:80 }}</td>
+    <td><small>{{ r.created_at|date:"d.m H:i" }}</small></td>
+    <td><a href="{% url 'report_detail' r.pk %}">Szczegóły →</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Brak otwartych zgłoszeń.</p>
+{% endif %}
+{% endblock %}

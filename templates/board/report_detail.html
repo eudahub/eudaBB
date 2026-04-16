@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Zgłoszenie #{{ report.pk }}{% endblock %}
+{% block content %}
+<h2>Zgłoszenie #{{ report.pk }}</h2>
+<table>
+  <tr><th>Post</th><td><a href="/topic/{{ report.post.topic_id }}/#post-{{ report.post_id }}">#{{ report.post_id }}</a> w {{ report.post.topic.title|truncatechars:50 }}</td></tr>
+  <tr><th>Zgłaszający</th><td>{% if report.reporter %}{{ report.reporter.username }}{% else %}[usunięty]{% endif %}</td></tr>
+  <tr><th>Powód</th><td>{{ report.get_reason_display }}</td></tr>
+  <tr><th>Komentarz</th><td>{{ report.comment|default:"—" }}</td></tr>
+  <tr><th>Data</th><td>{{ report.created_at|date:"Y-m-d H:i" }}</td></tr>
+  {% if report.is_closed %}
+  <tr><th>Zamknięte przez</th><td>{% if report.resolved_by %}{{ report.resolved_by.username }}{% else %}—{% endif %} ({{ report.resolved_at|date:"Y-m-d H:i" }})</td></tr>
+  {% endif %}
+</table>
+
+<div style="margin-top:1rem;">
+  <a href="/topic/{{ report.post.topic_id }}/#post-{{ report.post_id }}">Przejdź do postu →</a>
+</div>
+
+{% if not report.is_closed %}
+<form method="post" style="margin-top:1rem;">
+  {% csrf_token %}
+  <button type="submit" style="background:#c00;color:#fff;border:none;padding:.4rem 1rem;cursor:pointer;border-radius:3px;">Zamknij zgłoszenie</button>
+  <a href="{% url 'moderation_reports' %}" style="margin-left:.5rem;">← Wróć</a>
+</form>
+{% else %}
+<p style="color:#080;margin-top:1rem;">Zgłoszenie zamknięte.</p>
+<a href="{% url 'moderation_reports' %}">← Wróć do listy</a>
+{% endif %}
+{% endblock %}

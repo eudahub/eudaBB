@@ -408,6 +408,8 @@ class Topic(models.Model):
     )
     last_post_at = models.DateTimeField(null=True, blank=True)
 
+    open_report_count = models.PositiveSmallIntegerField(default=0, db_index=True)
+
     # Denormalized "last visible post" per spam class.
     # Updated whenever a post is added. Lets "Nowe wątki" / "Nowe posty"
     # filter without joining Post + User and without Exists() subqueries.
@@ -510,6 +512,7 @@ class Post(models.Model):
         default=False, db_index=True,
         help_text="Post awaiting moderation — not visible on the forum.",
     )
+    has_open_report = models.BooleanField(default=False, db_index=True)
 
     # Set during import when the post has unbalanced [quote]/[/quote] tags
     # (quote_status=4 in sfiniabb.db). Content is displayed verbatim, not parsed.
@@ -1121,6 +1124,33 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"Notif({self.notif_type}) → {self.recipient_id}"
+
+
+class PostReport(models.Model):
+    class Reason(models.TextChoices):
+        OFFTOP = "offtop", "Offtop"
+        RULES  = "rules",  "Łamie regulamin"
+
+    post     = models.ForeignKey("Post",  on_delete=models.CASCADE, related_name="board_reports")
+    reporter = models.ForeignKey(User,    on_delete=models.SET_NULL, null=True, related_name="submitted_reports")
+    reason   = models.CharField(max_length=16, choices=Reason.choices)
+    comment  = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    resolved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="resolved_reports",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    is_closed   = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        db_table      = "forum_post_report"
+        unique_together = [("post", "reporter")]
+        ordering      = ["-created_at"]
+
+    def __str__(self):
+        return f"Report(post={self.post_id}, reporter={self.reporter_id}, closed={self.is_closed})"
 
 
 class UserSession(models.Model):

@@ -26,6 +26,7 @@ from .models import (
     PostSearchIndex, SiteConfig, Poll, PollOption, PollVote,
     TopicParticipant, TopicReadState, IgnoredUser,
     Checklist, ChecklistCategory, ChecklistItem, ChecklistUpvote, ChecklistComment,
+    PostReport,
 )
 from .forms import (
     RegisterForm, RegisterStartForm, RegisterFinishForm,
@@ -3829,6 +3830,88 @@ def notifications_clear(request):
         qs = qs.exclude(notif_type=Notification.Type.PENDING_QUEUE)
     qs.update(is_read=True)
     return redirect("notifications_list")
+
+
+# ---------------------------------------------------------------------------
+# Post reports
+# ---------------------------------------------------------------------------
+
+MIN_ACTIVE_DAYS_TO_REPORT = 3
+
+@login_required
+def post_report(request, post_id):
+    """Submit a report on a post."""
+    from .report_utils import open_report
+
+    post = get_object_or_404(
+        Post.objects.select_related("author", "topic__forum"),
+        pk=post_id,
+    )
+    # Guard: can't report own post; need active_days >= 3
+    if post.author_id == request.user.pk:
+        return HttpResponseForbidden()
+    if request.user.active_days < MIN_ACTIVE_DAYS_TO_REPORT:
+        return HttpResponseForbidden()
+
+    already = PostReport.objects.filter(post=post, reporter=request.user).first()
+    error = None
+
+    if request.method == "POST":
+        reason  = request.POST.get("reason", "").strip()
+        comment = request.POST.get("comment", "").strip()
+        if reason not in PostReport.Reason.values:
+            error = "Wybierz powód zgłoszenia."
+        else:
+            report, created = open_report(post, request.user, reason, comment)
+            if not created:
+                error = "Już zgłosiłeś ten post."
+            else:
+                messages.success(request, "Zgłoszenie wysłane.")
+                return redirect(f"/topic/{post.topic_id}/#post-{post_id}")
+
+    return render(request, "board/post_report_form.html", {
+        "post": post,
+        "already": already,
+        "error": error,
+        "reasons": PostReport.Reason.choices,
+    })
+
+
+@login_required
+def moderation_reports(request):
+    """List of posts with open reports."""
+    user = request.user
+    if not (user.is_root or user.role >= User.ROLE_MODERATOR):
+        return HttpResponseForbidden()
+
+    reports = (
+        PostReport.objects
+        .filter(is_closed=False)
+        .select_related("post__topic__forum", "reporter")
+        .order_by("created_at")
+    )
+    return render(request, "board/moderation_reports.html", {"reports": reports})
+
+
+@login_required
+def report_detail(request, report_id):
+    """View a report and optionally close it."""
+    user = request.user
+    if not (user.is_root or user.role >= User.ROLE_MODERATOR):
+        return HttpResponseForbidden()
+    from .report_utils import close_report
+
+    report = get_object_or_404(
+        PostReport.objects.select_related("post__topic", "reporter", "resolved_by"),
+        pk=report_id,
+    )
+
+    if request.method == "POST" and not report.is_closed:
+        close_report(report, user)
+        messages.success(request, "Zgłoszenie zamknięte.")
+        return redirect("moderation_reports")
+
+    return render(request, "board/report_detail.html", {"report": report})
 
 
 @login_required

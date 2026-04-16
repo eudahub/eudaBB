@@ -98,3 +98,34 @@ def notify_pending_queue():
         ).exists()
         if not exists:
             _create(notif_type=Notification.Type.PENDING_QUEUE, recipient=mod)
+
+
+def notify_post_reported(post, reporter):
+    """Notify all mods/admins/root that a post was reported."""
+    from .models import Notification, User
+    mods = User.objects.filter(
+        django_models.Q(role__gte=User.ROLE_MODERATOR) | django_models.Q(is_root=True),
+        is_active=True,
+    )
+    for mod in mods:
+        if mod.pk == reporter.pk:
+            continue
+        _create(
+            notif_type=Notification.Type.POST_REPORTED,
+            recipient=mod,
+            actor=reporter,
+            post=post,
+        )
+
+
+def notify_report_closed_post(report):
+    """Notify the reporter that their report was closed."""
+    from .models import Notification
+    if not report.reporter_id:
+        return
+    _create(
+        notif_type=Notification.Type.REPORT_CLOSED_POST,
+        recipient_id=report.reporter_id,
+        actor=report.resolved_by,
+        post=report.post,
+    )

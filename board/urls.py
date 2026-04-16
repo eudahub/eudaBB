@@ -42,6 +42,9 @@ urlpatterns = [
     path("moderacja/kolejka/", views.moderation_queue, name="moderation_queue"),
     path("moderacja/okna/", views.moderation_windows_config, name="moderation_windows_config"),
     path("moderacja/kraje/", views.country_blocks_config, name="country_blocks_config"),
+    path("post/<int:post_id>/report/", views.post_report, name="post_report"),
+    path("moderacja/zgłoszenia/", views.moderation_reports, name="moderation_reports"),
+    path("moderacja/zgłoszenia/<int:report_id>/", views.report_detail, name="report_detail"),
     path("post/<int:post_id>/", views.goto_post, name="goto_post"),
     # Private Messages
     path("pm/",                     views.pm_inbox,   name="pm_inbox"),

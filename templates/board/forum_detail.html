@@ -40,7 +40,7 @@
   </thead>
   <tbody>
     {% for topic in page.object_list %}
-    <tr>
+    <tr{% if is_moderator and topic.open_report_count > 0 %} style="background:#fff5f5;"{% endif %}>
       <td>
         {% if topic.topic_type == 2 %}<strong>[Ogłoszenie] </strong>{% endif %}
         {% if topic.topic_type == 1 %}<em>[Przyklejony] </em>{% endif %}

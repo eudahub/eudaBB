@@ -231,6 +231,9 @@
         <a href="{% url 'spam_action' post.pk %}" class="bbsrc-btn"
            style="color:#900;border-color:#c88;">Spam</a>
       {% endif %}
+      {% if user.is_authenticated and user.active_days >= 3 and post.author != user and not post.author.is_root %}
+        <a href="{% url 'post_report' post.pk %}" style="color:#c00;font-size:11px;text-decoration:none;" title="Zgłoś post">&#9876;</a>
+      {% endif %}
       {% if post.is_temporary and is_admin_or_root %}
         {% if post.pk in convertible_post_ids %}
           <form method="post" action="{% url 'convert_post_permanent' post.pk %}" style="display:inline;">
@@ -244,6 +247,11 @@
       {% endif %}
     </span>
   </div>
+  {% if post.has_open_report and is_moderator %}
+  <div style="background:#ffd0d0;padding:.3rem .5rem;font-size:12px;margin-bottom:.3rem;">
+    &#9876; <a href="{% url 'moderation_reports' %}">kliknij by zobaczyć zgłoszenie</a>
+  </div>
+  {% endif %}
   <table style="width:100%; border-collapse: collapse;">
     <tr>
       <td class="post-author">
