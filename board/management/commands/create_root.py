@@ -48,6 +48,7 @@ class Command(BaseCommand):
         root = User(
             username="root",
             is_root=True,
+            role=User.ROLE_ROOT,
             is_superuser=True,
             is_staff=True,
             is_active=True,

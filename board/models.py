@@ -94,13 +94,14 @@ class User(AbstractUser):
     ROLE_USER      = 0
     ROLE_MODERATOR = 1
     ROLE_ADMIN     = 2
-    ROLE_CHOICES   = [(0, "Użytkownik"), (1, "Moderator"), (2, "Administrator")]
+    ROLE_ROOT      = 3
+    ROLE_CHOICES   = [(0, "Użytkownik"), (1, "Moderator"), (2, "Administrator"), (3, "Root")]
 
     role = models.SmallIntegerField(
         default=0,
         choices=ROLE_CHOICES,
         db_index=True,
-        help_text="0=użytkownik, 1=moderator, 2=administrator. Root jest osobnym kontem (is_root).",
+        help_text="0=użytkownik, 1=moderator, 2=administrator, 3=root. is_root blokuje pisanie/głosowanie.",
     )
 
     active_days = models.PositiveIntegerField(
