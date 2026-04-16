@@ -3576,17 +3576,24 @@ def pm_compose(request):
             except ForumUser.DoesNotExist:
                 error = f'Użytkownik "{recipient_name}" nie istnieje.'
             else:
+                # Anti-spam: PM antiflood check
+                from .antiflood import check_can_send_pm
+                cfg_pm = SiteConfig.get()
+                flood = check_can_send_pm(request.user, recipient, cfg_pm)
+                if not flood["allowed"]:
+                    error = flood["message"]
                 # Anti-spam: check sender's outbox limit
-                outbox_limit = getattr(settings, "PM_OUTBOX_LIMIT", 50)
-                in_flight = PrivateMessage.objects.filter(
-                    sender=request.user, delivered_at=None
-                ).count()
-                if in_flight >= outbox_limit:
-                    error = (
-                        f"Masz już {in_flight} wiadomości oczekujących na dostarczenie "
-                        f"(limit: {outbox_limit}). Poczekaj aż odbiorcy je odbiorą."
-                    )
-                else:
+                if not error:
+                    outbox_limit = getattr(settings, "PM_OUTBOX_LIMIT", 50)
+                    in_flight = PrivateMessage.objects.filter(
+                        sender=request.user, delivered_at=None
+                    ).count()
+                    if in_flight >= outbox_limit:
+                        error = (
+                            f"Masz już {in_flight} wiadomości oczekujących na dostarczenie "
+                            f"(limit: {outbox_limit}). Poczekaj aż odbiorcy je odbiorą."
+                        )
+                if not error:
                     repaired_content, changes, lint_errors = validate_pm_content(raw_content)
                     if lint_errors:
                         error_lines = "\n".join(f"• {e}" for e in lint_errors)
