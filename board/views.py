@@ -456,24 +456,32 @@ def topic_detail(request, topic_id):
     topic_post_count = topic.posts.count()
     deletable_post_ids = set()
     editable_post_ids = set()
+    is_blog_owner = (
+        request.user.is_authenticated
+        and topic.forum.blog_of_id == request.user.pk
+    )
     if request.user.is_authenticated:
+        cfg_edit = SiteConfig.get()
+        edit_minutes = cfg_edit.post_edit_minutes
+        now = timezone.now()
         for p in page.object_list:
             author_role = p.author.role if p.author else User.ROLE_USER
             if is_admin_view:
                 can_del = p.post_order > 1 or topic_post_count == 1
                 deletable_post_ids.update([p.pk] if can_del else [])
                 editable_post_ids.add(p.pk)
-            elif is_mod:
+            elif is_mod or is_blog_owner:
                 own = p.author_id == request.user.pk
                 author_is_user = author_role < User.ROLE_MODERATOR
                 if own or author_is_user:
                     can_del = p.post_order > 1 or topic_post_count == 1
                     deletable_post_ids.update([p.pk] if can_del else [])
-                    editable_post_ids.add(p.pk)
+                editable_post_ids.add(p.pk)
             else:
-                # Regular user: edit own posts only, no delete
+                # Regular user: edit own posts within time window
                 if p.author_id == request.user.pk:
-                    editable_post_ids.add(p.pk)
+                    if edit_minutes == 0 or (now - p.created_at).total_seconds() <= edit_minutes * 60:
+                        editable_post_ids.add(p.pk)
 
     # Can current user edit the poll?
     can_edit_poll = False
@@ -1083,30 +1091,47 @@ def edit_post(request, post_id):
 
     is_admin = user.role >= User.ROLE_ADMIN
     is_mod = _is_moderator(user, forum)
+    is_blog_owner = forum.blog_of_id == user.pk
     author_role = post.author.role if post.author else User.ROLE_USER
+    own = post.author_id == user.pk
 
     if is_admin:
         can_edit = True
-    elif is_mod:
-        own = post.author_id == user.pk
-        author_is_user = author_role < User.ROLE_MODERATOR
-        can_edit = own or author_is_user
+    elif is_mod or is_blog_owner:
+        can_edit = own or (author_role < User.ROLE_MODERATOR)
+    elif own:
+        cfg_edit = SiteConfig.get()
+        edit_minutes = cfg_edit.post_edit_minutes
+        if edit_minutes == 0:
+            can_edit = True
+        else:
+            age_seconds = (timezone.now() - post.created_at).total_seconds()
+            can_edit = age_seconds <= edit_minutes * 60
+        if not can_edit:
+            messages.error(request, f"Własny post można edytować tylko przez {edit_minutes} minut od napisania.")
+            return redirect("topic_detail", topic_id=topic.pk)
     else:
-        can_edit = post.author_id == user.pk
+        can_edit = False
 
     if not can_edit:
         messages.error(request, "Nie masz uprawnień do edycji tego postu.")
         return redirect("topic_detail", topic_id=topic.pk)
+
+    # Root edits silently — no edit_count bump, no updated_by/updated_at marker
+    silent_edit = user.is_root
 
     original_size = len(post.content_bbcode)
     if request.method == "POST":
         form = ReplyForm(request.POST, original_size=original_size)
         if form.is_valid():
             post.content_bbcode = form.cleaned_data["content"]
-            post.edit_count += 1
-            post.updated_by = user
-            post.updated_at = timezone.now()
-            post.save(update_fields=["content_bbcode", "edit_count", "updated_by", "updated_at"])
+            if silent_edit:
+                post.save(update_fields=["content_bbcode"])
+            else:
+                post.edit_count += 1
+                post.updated_by = user
+                post.updated_at = timezone.now()
+                post.save(update_fields=["content_bbcode", "edit_count", "updated_by", "updated_at"])
             messages.success(request, "Post zaktualizowany.")
             return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
     else:
@@ -4267,6 +4292,7 @@ def root_config(request):
                 cfg.reg_ip_window_hours = max(1, int(request.POST.get("reg_ip_window_hours", cfg.reg_ip_window_hours)))
                 cfg.reg_ip_max_real = max(0, int(request.POST.get("reg_ip_max_real", cfg.reg_ip_max_real)))
                 cfg.reg_ip_max_temp = max(0, int(request.POST.get("reg_ip_max_temp", cfg.reg_ip_max_temp)))
+                cfg.post_edit_minutes = max(0, int(request.POST.get("post_edit_minutes", cfg.post_edit_minutes)))
                 cfg.pm_min_active_days = max(0, int(request.POST.get("pm_min_active_days", cfg.pm_min_active_days)))
                 cfg.pm_max_burst = max(1, int(request.POST.get("pm_max_burst", cfg.pm_max_burst)))
                 cfg.pm_cold_reset_hours = max(1, int(request.POST.get("pm_cold_reset_hours", cfg.pm_cold_reset_hours)))

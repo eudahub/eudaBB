@@ -350,6 +350,11 @@ class Forum(models.Model):
     last_post_at = models.DateTimeField(null=True, blank=True)
 
     moderators = models.ManyToManyField(User, blank=True, related_name="moderated_forums")
+    blog_of = models.ForeignKey(
+        User, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="blog_forums",
+        help_text="Właściciel bloga — może edytować każdy post w tym dziale jak moderator.",
+    )
 
     class Meta:
         ordering = ["order"]
@@ -1053,6 +1058,11 @@ class SiteConfig(models.Model):
     reg_ip_max_temp = models.PositiveSmallIntegerField(
         default=3,
         help_text="Max rejestracji kont tymczasowych z jednego IP w oknie czasowym.",
+    )
+
+    post_edit_minutes = models.PositiveSmallIntegerField(
+        default=20,
+        help_text="Ile minut zwykły użytkownik może edytować swój post (0 = bez limitu).",
     )
 
     # PM antiflood

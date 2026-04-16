@@ -91,6 +91,18 @@
     </fieldset>
 
     <fieldset style="margin-top:.8rem;">
+      <legend>Edycja postów</legend>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:.3rem .7rem;align-items:center;font-size:13px;">
+        <label for="post_edit_minutes">Okno edycji własnego postu (minuty, 0 = bez limitu)</label>
+        <input type="number" name="post_edit_minutes" id="post_edit_minutes"
+               min="0" max="9999" step="1" value="{{ cfg.post_edit_minutes }}" style="width:70px;">
+      </div>
+      <p style="font-size:11px;color:#555;margin:.5rem 0 0 0;">
+        Moderatorzy, admini i root mogą edytować zawsze.
+      </p>
+    </fieldset>
+
+    <fieldset style="margin-top:.8rem;">
       <legend>Antyflood PM</legend>
       <div style="display:grid;grid-template-columns:auto 1fr;gap:.3rem .7rem;align-items:center;font-size:13px;">
         <label for="pm_min_active_days">Min. active_days do wysyłania PM</label>
