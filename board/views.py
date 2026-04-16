@@ -260,6 +260,42 @@ def _get_client_ip(request):
     return request.META.get("REMOTE_ADDR") or None
 
 
+def _post_edit_ref_time(post):
+    """Return the reference datetime for the edit window.
+
+    Uses the last merge-append time when available — more favorable to the author.
+    """
+    if post.merge_log:
+        from django.utils.dateparse import parse_datetime
+        last_time = (post.merge_log[-1] or {}).get("time")
+        if last_time:
+            dt = parse_datetime(last_time)
+            if dt:
+                return dt
+    return post.created_at
+
+
+def _remove_post_part(content: str, merge_log: list, part_index: int):
+    """Remove one part from a multi-part post and recalculate merge_log.
+
+    Returns (new_content, new_merge_log) where new_merge_log is None when
+    only a single part remains.
+    """
+    parts = _split_post_parts(content, merge_log)
+    if len(parts) <= 1:
+        return content, merge_log  # nothing to remove
+    new_parts = [p for i, p in enumerate(parts) if i != part_index]
+    # The log entry *for* part i is at index (i-1) for i>0, or index 0 for i==0.
+    if part_index == 0:
+        remaining_log = merge_log[1:]
+    else:
+        remaining_log = merge_log[:part_index - 1] + merge_log[part_index:]
+    if not remaining_log:
+        return new_parts[0], None
+    new_content, new_log = _rebuild_post_parts(new_parts, remaining_log)
+    return new_content, new_log or None
+
+
 def _split_post_parts(content: str, merge_log: list) -> list:
     """Split content_bbcode into individual parts using merge_log offsets."""
     if not merge_log:
@@ -547,9 +583,10 @@ def topic_detail(request, topic_id):
                     deletable_post_ids.update([p.pk] if can_del else [])
                 editable_post_ids.add(p.pk)
             else:
-                # Regular user: edit own posts within time window
+                # Regular user: edit own posts within time window (from last append)
                 if p.author_id == request.user.pk:
-                    if edit_minutes == 0 or (now - p.created_at).total_seconds() <= edit_minutes * 60:
+                    ref = _post_edit_ref_time(p)
+                    if edit_minutes == 0 or (now - ref).total_seconds() <= edit_minutes * 60:
                         editable_post_ids.add(p.pk)
 
     # Can current user edit the poll?
@@ -1190,10 +1227,11 @@ def edit_post(request, post_id):
         if edit_minutes == 0:
             can_edit = True
         else:
-            age_seconds = (timezone.now() - post.created_at).total_seconds()
+            ref = _post_edit_ref_time(post)
+            age_seconds = (timezone.now() - ref).total_seconds()
             can_edit = age_seconds <= edit_minutes * 60
         if not can_edit:
-            messages.error(request, f"Własny post można edytować tylko przez {edit_minutes} minut od napisania.")
+            messages.error(request, f"Własny post można edytować tylko przez {edit_minutes} minut od ostatniego dopisania.")
             return redirect("topic_detail", topic_id=topic.pk)
     else:
         can_edit = False
@@ -1266,6 +1304,64 @@ def edit_post(request, post_id):
         "part_count": len(merge_log) + 1 if merge_log else 1,
         "post_content_soft_limit": effective_limit,
     })
+
+
+@login_required
+def delete_post_part(request, post_id, part_index):
+    """Remove one part from a multi-part post (POST only)."""
+    if request.method != "POST":
+        return redirect("index")
+
+    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    topic = post.topic
+    forum = topic.forum
+    user = request.user
+
+    merge_log = post.merge_log or []
+    if not merge_log:
+        messages.error(request, "Post nie jest wieloczłonowy.")
+        return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
+
+    parts = _split_post_parts(post.content_bbcode, merge_log)
+    if not (0 <= part_index < len(parts)):
+        messages.error(request, "Nieprawidłowy numer części.")
+        return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
+
+    # Permission: same rules as edit_post
+    is_admin = user.role >= User.ROLE_ADMIN
+    is_mod = _is_moderator(user, forum)
+    is_blog_owner = forum.blog_of_id == user.pk
+    own = post.author_id == user.pk
+    author_role = post.author.role if post.author else User.ROLE_USER
+
+    if is_admin or is_mod or is_blog_owner:
+        can_del_part = True
+    elif own:
+        cfg_edit = SiteConfig.get()
+        edit_minutes = cfg_edit.post_edit_minutes
+        ref = _post_edit_ref_time(post)
+        age_seconds = (timezone.now() - ref).total_seconds()
+        can_del_part = edit_minutes == 0 or age_seconds <= edit_minutes * 60
+    else:
+        can_del_part = False
+
+    if not can_del_part:
+        messages.error(request, "Nie masz uprawnień do usunięcia tego fragmentu.")
+        return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
+
+    new_content, new_log = _remove_post_part(post.content_bbcode, merge_log, part_index)
+    post.content_bbcode = new_content
+    post.merge_log = new_log
+    if user.is_root:
+        post.updated_by_id = 0
+    else:
+        post.updated_by = user
+    post.edit_count += 1
+    post.updated_at = timezone.now()
+    post.save(update_fields=["content_bbcode", "merge_log", "edit_count", "updated_by", "updated_at"])
+    rebuild_quote_references_for_post(post)
+    messages.success(request, f"Fragment {part_index + 1} usunięty.")
+    return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
 
 
 @login_required

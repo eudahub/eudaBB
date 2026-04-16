@@ -29,6 +29,7 @@ urlpatterns = [
     path("post/<int:post_id>/like-toggle/", views.toggle_post_like, name="toggle_post_like"),
     path("post/<int:post_id>/delete/", views.delete_post, name="delete_post"),
     path("post/<int:post_id>/edit/", views.edit_post, name="edit_post"),
+    path("post/<int:post_id>/delete-part/<int:part_index>/", views.delete_post_part, name="delete_post_part"),
     path("topic/<int:topic_id>/edit-poll/", views.edit_poll, name="edit_poll"),
     path("user/<int:user_id>/", views.user_profile, name="user_profile"),
     path("users/", views.user_list, name="user_list"),

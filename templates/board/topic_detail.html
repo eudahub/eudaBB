@@ -221,7 +221,11 @@
         {% if post.merge_log %}
           <span style="font-size:11px;">Edytuj:
             <a href="{% url 'edit_post' post.pk %}?part=0" class="bbsrc-btn">cz.1</a>
-            {% for entry in post.merge_log %}<a href="{% url 'edit_post' post.pk %}?part={{ forloop.counter }}" class="bbsrc-btn">cz.{{ forloop.counter|add:1 }}</a>{% endfor %}
+            <form method="post" action="{% url 'delete_post_part' post.pk 0 %}" style="display:inline;" onsubmit="return confirm('Usunąć część 1?');"><span>{% csrf_token %}</span><button type="submit" class="bbsrc-btn" style="color:#900;padding:1px 4px;" title="Usuń część 1">×</button></form>
+            {% for entry in post.merge_log %}
+            <a href="{% url 'edit_post' post.pk %}?part={{ forloop.counter }}" class="bbsrc-btn">cz.{{ forloop.counter|add:1 }}</a>
+            <form method="post" action="{% url 'delete_post_part' post.pk forloop.counter %}" style="display:inline;" onsubmit="return confirm('Usunąć część {{ forloop.counter|add:1 }}?');"><span>{% csrf_token %}</span><button type="submit" class="bbsrc-btn" style="color:#900;padding:1px 4px;" title="Usuń część {{ forloop.counter|add:1 }}">×</button></form>
+            {% endfor %}
           </span>
         {% else %}
           <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
@@ -341,7 +345,11 @@
         {% if post.merge_log %}
           <span style="font-size:11px;">Edytuj:
             <a href="{% url 'edit_post' post.pk %}?part=0" class="bbsrc-btn">cz.1</a>
-            {% for entry in post.merge_log %}<a href="{% url 'edit_post' post.pk %}?part={{ forloop.counter }}" class="bbsrc-btn">cz.{{ forloop.counter|add:1 }}</a>{% endfor %}
+            <form method="post" action="{% url 'delete_post_part' post.pk 0 %}" style="display:inline;" onsubmit="return confirm('Usunąć część 1?');"><span>{% csrf_token %}</span><button type="submit" class="bbsrc-btn" style="color:#900;padding:1px 4px;" title="Usuń część 1">×</button></form>
+            {% for entry in post.merge_log %}
+            <a href="{% url 'edit_post' post.pk %}?part={{ forloop.counter }}" class="bbsrc-btn">cz.{{ forloop.counter|add:1 }}</a>
+            <form method="post" action="{% url 'delete_post_part' post.pk forloop.counter %}" style="display:inline;" onsubmit="return confirm('Usunąć część {{ forloop.counter|add:1 }}?');"><span>{% csrf_token %}</span><button type="submit" class="bbsrc-btn" style="color:#900;padding:1px 4px;" title="Usuń część {{ forloop.counter|add:1 }}">×</button></form>
+            {% endfor %}
           </span>
         {% else %}
           <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
