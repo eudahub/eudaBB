@@ -1218,6 +1218,16 @@ def edit_post(request, post_id):
             return _split_post_parts(post.content_bbcode, merge_log)[part_index]
         return post.content_bbcode
 
+    global_soft_limit = getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000)
+    if part_index is not None:
+        parts = _split_post_parts(post.content_bbcode, merge_log)
+        other_parts_size = sum(len(p) for i, p in enumerate(parts) if i != part_index)
+        # 2 chars per "\n\n" separator between each pair of parts
+        separators_size = (len(parts) - 1) * 2
+        effective_limit = max(1, global_soft_limit - other_parts_size - separators_size)
+    else:
+        effective_limit = global_soft_limit
+
     original_size = len(post.content_bbcode)
     if request.method == "POST":
         form = ReplyForm(request.POST, original_size=original_size)
@@ -1254,7 +1264,7 @@ def edit_post(request, post_id):
         "topic": topic,
         "part_index": part_index,
         "part_count": len(merge_log) + 1 if merge_log else 1,
-        "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
+        "post_content_soft_limit": effective_limit,
     })
 
 
