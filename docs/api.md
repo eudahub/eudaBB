@@ -467,15 +467,41 @@ Odpowiedź na wiadomość.
 
 ### Powiadomienia (polling, wymaga JWT)
 
+Aplikacja odpytuje przy otwarciu (nie utrzymuje stałego połączenia). Brak push/FCM.
+
 #### `GET /api/v1/notifications?page=1`
-Lista powiadomień. **TODO:** Na razie zawsze zwraca pustą listę.  
-Aplikacja powinna odpytywać przy otwarciu (nie utrzymywać stałego połączenia).
+Lista nieprzeczytanych powiadomień użytkownika.
+
+Pola obiektu:
+```json
+{
+  "id": 42,
+  "notif_type": "quote_reply",
+  "is_read": false,
+  "created_at": "2026-04-16T12:00:00Z",
+  "actor_id": 7,
+  "actor_name": "jankowal",
+  "post_id": 1234,
+  "topic_id": 56,
+  "pm_id": null
+}
+```
+
+Typy (`notif_type`):
+- `quote_reply` — ktoś odpowiedział cytując mój post
+- `post_liked` — ktoś dał plus mojemu postowi
+- `post_unliked` — ktoś cofnął plus
+- `pending_queue` — są posty do moderacji (tylko moderatorzy; pojawia się gdy kolejka niepusta)
+- `post_reported` — post zgłoszony (tylko moderatorzy)
+- `report_closed_post` — moje zgłoszenie postu zamknięte przez moderatora
+- `report_closed_pm` — moje zgłoszenie PM zamknięte przez moderatora
 
 #### `PUT /api/v1/notifications/{id}/read`
-Oznacz jako przeczytane. **TODO:** Stub (zwraca 501).
+Oznacz jedno powiadomienie jako przeczytane. Zwraca `{"id": N, "is_read": true}`.
 
 #### `PUT /api/v1/notifications/read-all`
-Oznacz wszystkie jako przeczytane. **TODO:** Stub.
+Oznacz wszystkie jako przeczytane. Zachowuje `pending_queue` gdy kolejka niepusta.
+Zwraca `{"marked": N}`.
 
 ---
 

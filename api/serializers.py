@@ -9,7 +9,7 @@ from rest_framework import serializers
 from board.models import (
     User, Section, Forum, Topic, Post,
     PrivateMessage, PrivateMessageBox,
-    PostReport,
+    PostReport, Notification,
 )
 from board.bbcode import render as bbcode_render
 
@@ -327,3 +327,23 @@ class PostReportSerializer(serializers.ModelSerializer):
 
     def get_status(self, obj):
         return obj.status
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+class NotificationSerializer(serializers.ModelSerializer):
+    actor_name = serializers.CharField(source="actor.username", default=None)
+    # Target object identifiers — only one will be non-null per notification
+    post_id    = serializers.IntegerField(source="post.pk",         default=None)
+    topic_id   = serializers.IntegerField(source="post.topic_id",   default=None)
+    pm_id      = serializers.IntegerField(source="pm.pk",           default=None)
+
+    class Meta:
+        model  = Notification
+        fields = [
+            "id", "notif_type", "is_read", "created_at",
+            "actor_id", "actor_name",
+            "post_id", "topic_id", "pm_id",
+        ]
