@@ -449,7 +449,7 @@ def topic_detail(request, topic_id):
         request.user.is_authenticated
         and _is_moderator(request.user, topic.forum)
     )
-    is_admin_view = request.user.is_authenticated and request.user.role >= User.ROLE_ADMIN
+    is_admin_view = request.user.is_authenticated and (request.user.is_root or request.user.role >= User.ROLE_ADMIN)
 
     # Compute which posts on this page can be deleted/edited by current user.
     # First post (post_order=1) is only deletable when it's the sole post in topic.
