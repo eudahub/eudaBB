@@ -96,9 +96,15 @@
         <label for="post_edit_minutes">Okno edycji własnego postu (minuty, 0 = bez limitu)</label>
         <input type="number" name="post_edit_minutes" id="post_edit_minutes"
                min="0" max="9999" step="1" value="{{ cfg.post_edit_minutes }}" style="width:70px;">
+        <label for="post_merge_minutes">Okno scalania postów (minuty, 0 = wyłącz)</label>
+        <input type="number" name="post_merge_minutes" id="post_merge_minutes"
+               min="0" max="9999" step="1" value="{{ cfg.post_merge_minutes }}" style="width:70px;">
+        <label for="post_merge_soft_kb">Limit wielkości scalonego postu (kB)</label>
+        <input type="number" name="post_merge_soft_kb" id="post_merge_soft_kb"
+               min="1" max="64" step="1" value="{{ cfg.post_merge_soft_kb }}" style="width:70px;">
       </div>
       <p style="font-size:11px;color:#555;margin:.5rem 0 0 0;">
-        Moderatorzy, admini i root mogą edytować zawsze.
+        Moderatorzy, admini i root mogą edytować zawsze. Scalanie: gdy user pisze ponownie w tym samym wątku jako ostatni, treść dołączana jest do poprzedniego postu zamiast tworzenia nowego (nie liczy się do antiflooda).
       </p>
     </fieldset>
 

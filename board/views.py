@@ -260,6 +260,45 @@ def _get_client_ip(request):
     return request.META.get("REMOTE_ADDR") or None
 
 
+def _try_merge_reply(topic: Topic, author, new_content: str):
+    """Append new_content to author's last post in topic if merge conditions are met.
+
+    Returns the updated Post on success, None when a new post should be created instead.
+    Merge is skipped when: feature is disabled (merge_minutes=0), the last post isn't
+    by this author, the post is too old, or combined size would exceed the soft limit.
+    """
+    cfg = SiteConfig.get()
+    merge_minutes = cfg.post_merge_minutes
+    if merge_minutes == 0:
+        return None
+
+    last_post = (
+        topic.posts
+        .filter(is_pending=False)
+        .order_by("-post_order")
+        .select_related("author")
+        .first()
+    )
+    if last_post is None or last_post.author_id != author.pk:
+        return None
+
+    age_seconds = (timezone.now() - last_post.created_at).total_seconds()
+    if age_seconds > merge_minutes * 60:
+        return None
+
+    combined = last_post.content_bbcode + "\n\n" + new_content
+    if len(combined.encode("utf-8")) > cfg.post_merge_soft_kb * 1024:
+        return None
+
+    last_post.content_bbcode = combined
+    last_post.save(update_fields=["content_bbcode"])
+    rebuild_quote_references_for_post(last_post)
+    if author and not last_post.is_pending:
+        from .notifications import notify_quote_reply
+        notify_quote_reply(last_post)
+    return last_post
+
+
 def _render_and_create_post(topic: Topic, author, content_bbcode: str,
                              post_order: int, author_ip: str = None,
                              is_temporary: bool = False,
@@ -882,6 +921,22 @@ def reply(request, topic_id):
     if request.method == "POST":
         form = ReplyForm(request.POST)
         if form.is_valid():
+            # Try to merge into previous post before antiflood/flood checks.
+            merged = _try_merge_reply(topic, request.user, form.cleaned_data["content"])
+            if merged:
+                # Update topic/forum timestamps only — reply_count and post_count stay unchanged.
+                now = timezone.now()
+                topic.last_post = merged
+                topic.last_post_at = now
+                topic.save(update_fields=["last_post", "last_post_at"])
+                forum = topic.forum
+                forum.last_post = merged
+                forum.last_post_at = now
+                forum.save(update_fields=["last_post", "last_post_at"])
+                posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
+                last_page = (topic.posts.filter(is_pending=False).count() - 1) // posts_per_page + 1
+                return redirect(f"/topic/{topic.pk}/?page={last_page}#post-{merged.pk}")
+
             from .antiflood import check_can_post as _flood_check
             flood = _flood_check(request.user)
             if not flood["allowed"]:
@@ -4293,6 +4348,8 @@ def root_config(request):
                 cfg.reg_ip_max_real = max(0, int(request.POST.get("reg_ip_max_real", cfg.reg_ip_max_real)))
                 cfg.reg_ip_max_temp = max(0, int(request.POST.get("reg_ip_max_temp", cfg.reg_ip_max_temp)))
                 cfg.post_edit_minutes = max(0, int(request.POST.get("post_edit_minutes", cfg.post_edit_minutes)))
+                cfg.post_merge_minutes = max(0, int(request.POST.get("post_merge_minutes", cfg.post_merge_minutes)))
+                cfg.post_merge_soft_kb = max(1, int(request.POST.get("post_merge_soft_kb", cfg.post_merge_soft_kb)))
                 cfg.pm_min_active_days = max(0, int(request.POST.get("pm_min_active_days", cfg.pm_min_active_days)))
                 cfg.pm_max_burst = max(1, int(request.POST.get("pm_max_burst", cfg.pm_max_burst)))
                 cfg.pm_cold_reset_hours = max(1, int(request.POST.get("pm_cold_reset_hours", cfg.pm_cold_reset_hours)))

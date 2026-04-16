@@ -1064,6 +1064,14 @@ class SiteConfig(models.Model):
         default=20,
         help_text="Ile minut zwykły użytkownik może edytować swój post (0 = bez limitu).",
     )
+    post_merge_minutes = models.PositiveSmallIntegerField(
+        default=30,
+        help_text="Okno scalania postów: jeśli user pisze ponownie w tym samym wątku i jego post jest ostatnim, treść dołącza się do poprzedniego (0 = wyłącz).",
+    )
+    post_merge_soft_kb = models.PositiveSmallIntegerField(
+        default=20,
+        help_text="Limit wielkości scalonego postu (kB). Jeśli połączona treść przekroczyłaby ten limit, tworzony jest nowy post.",
+    )
 
     # PM antiflood
     pm_min_active_days = models.PositiveSmallIntegerField(
