@@ -284,6 +284,37 @@ nginx as a reverse proxy + serving `/media/` and `/static/` (after `collectstati
 python manage.py collectstatic
 ```
 
+## Spam and abuse protection
+
+### IP blocking
+
+- **Tor exit nodes** (`TorExitNode`) — blocked on login and registration paths.
+  List is imported and refreshed periodically.
+- **Manually blocked IPs** (`BlockedIP`) — added by admin via the panel.
+
+### Why we do not block VPNs/proxies
+
+Blocking commercial VPNs (NordVPN, Mullvad, etc.) produces a high false-positive
+rate: developers use corporate VPNs, regular users use VPNs for privacy.
+The cost (legitimate users blocked) outweighs the benefit (spammers will simply
+find another IP). This is a deliberate decision — not implemented.
+
+### Per-IP registration limit
+
+Configurable by root in `/root-config/`:
+- max real-account registrations per time window (default 1 / 6h)
+- max temporary-account registrations per time window (default 3 / 6h)
+- limits are independent; value 0 = disabled for that type
+- can be disabled entirely (useful for testing in beta/maintenance mode)
+
+### Post antiflood
+
+Configurable by root; separate rules for:
+- new users (low `active_days`)
+- known users (posts in this topic / globally)
+
+---
+
 ## What is done (v0.1)
 
 - [x] Hierarchy: Section → Forum → Thread → Post

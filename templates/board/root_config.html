@@ -68,6 +68,49 @@
       </p>
     </fieldset>
 
+    <fieldset style="margin-top:.8rem;">
+      <legend>Limit rejestracji z jednego IP</legend>
+      <label style="display:block;margin-bottom:.5rem;">
+        <input type="checkbox" name="reg_ip_limit" {% if cfg.reg_ip_limit %}checked{% endif %}>
+        Włącz limit
+      </label>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:.3rem .7rem;align-items:center;font-size:13px;">
+        <label for="reg_ip_window_hours">Okno czasowe (godziny)</label>
+        <input type="number" name="reg_ip_window_hours" id="reg_ip_window_hours"
+               min="1" max="168" step="1" value="{{ cfg.reg_ip_window_hours }}" style="width:70px;">
+        <label for="reg_ip_max_real">Max kont realnych / okno</label>
+        <input type="number" name="reg_ip_max_real" id="reg_ip_max_real"
+               min="0" max="99" step="1" value="{{ cfg.reg_ip_max_real }}" style="width:70px;">
+        <label for="reg_ip_max_temp">Max kont tymczasowych / okno</label>
+        <input type="number" name="reg_ip_max_temp" id="reg_ip_max_temp"
+               min="0" max="99" step="1" value="{{ cfg.reg_ip_max_temp }}" style="width:70px;">
+      </div>
+      <p style="font-size:11px;color:#555;margin:.5rem 0 0 0;">
+        Limity realne i tymczasowe są niezależne. Wartość 0 = brak limitu dla danego typu.
+      </p>
+    </fieldset>
+
+    <fieldset style="margin-top:.8rem;">
+      <legend>Antyflood PM</legend>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:.3rem .7rem;align-items:center;font-size:13px;">
+        <label for="pm_min_active_days">Min. active_days do wysyłania PM</label>
+        <input type="number" name="pm_min_active_days" id="pm_min_active_days"
+               min="0" max="999" step="1" value="{{ cfg.pm_min_active_days }}" style="width:70px;">
+        <label for="pm_max_burst">Max nieprzerwanych PM bez odpowiedzi (burst)</label>
+        <input type="number" name="pm_max_burst" id="pm_max_burst"
+               min="1" max="99" step="1" value="{{ cfg.pm_max_burst }}" style="width:70px;">
+        <label for="pm_cold_reset_hours">Reset burst po (godziny bez odpowiedzi)</label>
+        <input type="number" name="pm_cold_reset_hours" id="pm_cold_reset_hours"
+               min="1" max="720" step="1" value="{{ cfg.pm_cold_reset_hours }}" style="width:70px;">
+        <label for="pm_new_recipients_per_day">Max nowych rozmówców dziennie</label>
+        <input type="number" name="pm_new_recipients_per_day" id="pm_new_recipients_per_day"
+               min="1" max="99" step="1" value="{{ cfg.pm_new_recipients_per_day }}" style="width:70px;">
+      </div>
+      <p style="font-size:11px;color:#555;margin:.5rem 0 0 0;">
+        pm_min_active_days=0 wyłącza bramkę active_days. Ustawienia dotyczą wysyłania PM przez zwykłych użytkowników.
+      </p>
+    </fieldset>
+
     <div style="margin-top:1rem;display:flex;gap:.5rem;">
       <button type="submit">Zapisz</button>
       <a href="/">Anuluj</a>

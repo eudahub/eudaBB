@@ -360,6 +360,37 @@ nginx jako reverse proxy + serwowanie `/media/` i `/static/` (po `collectstatic`
 python manage.py collectstatic
 ```
 
+## Ochrona przed spamem i nadużyciami
+
+### Blokowanie IP
+
+- **Węzły wyjściowe Tora** (`TorExitNode`) — blokowane na logowaniu i rejestracji.
+  Lista importowana i odświeżana cyklicznie.
+- **Ręcznie zablokowane IP** (`BlockedIP`) — administrator dodaje przez panel.
+
+### Dlaczego nie blokujemy VPN/proxy?
+
+Blokowanie komercyjnych VPN (NordVPN, Mullvad itp.) generuje wysoki odsetek
+fałszywych alarmów: programiści korzystają z VPN firmowych, zwykli użytkownicy
+używają VPN dla prywatności. Koszt (legalnie zablokowani użytkownicy) przewyższa
+zysk (spamer i tak znajdzie inne IP). Decyzja świadoma — nie wdrażamy.
+
+### Limit rejestracji z jednego IP
+
+Konfigurowalny przez roota w panelu (`/root-config/`):
+- max rejestracji realnych kont / okno czasowe (domyślnie 1 / 6h)
+- max rejestracji kont tymczasowych / okno czasowe (domyślnie 3 / 6h)
+- limity niezależne; wartość 0 = wyłączony limit dla danego typu
+- można wyłączyć całkowicie (przydatne przy testach w trybie beta/maintenance)
+
+### Antiflood postów
+
+Konfigurowalny przez roota; osobne reguły dla:
+- nowych userów (niska `active_days`)
+- znanych userów (posty w tym wątku / globalnie)
+
+---
+
 ## Co jest gotowe (v0.1)
 
 - [x] Hierarchia: Sekcja → Forum → Wątek → Post

@@ -191,3 +191,109 @@ def _build_result(allowed, wait, count, cooldown, message=None):
         "cooldown_seconds": int(cooldown),
         "message": message or ("OK" if allowed else ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# PM antiflood
+# ---------------------------------------------------------------------------
+
+def check_can_send_pm(sender, recipient, cfg):
+    """
+    Check whether `sender` is allowed to send a PM to `recipient`.
+
+    Rules (all configurable in SiteConfig):
+      1. active_days < pm_min_active_days → blocked
+      2. Consecutive unresponded PMs >= pm_max_burst → blocked until reply
+         Cold case (no reply ever): count PMs within pm_cold_reset_hours window
+      3. Cold recipients (no prior exchange) in last 24h >= pm_new_recipients_per_day
+
+    Returns dict:
+      {"allowed": bool, "reason": str, "message": str}
+    """
+    from .models import PrivateMessage
+
+    # 1. Activity gate
+    if cfg.pm_min_active_days > 0 and sender.active_days < cfg.pm_min_active_days:
+        return {
+            "allowed": False,
+            "reason": "activity",
+            "message": (
+                f"Musisz mieć co najmniej {cfg.pm_min_active_days} "
+                f"{'dzień' if cfg.pm_min_active_days == 1 else 'dni'} aktywności "
+                f"na forum, aby wysyłać prywatne wiadomości."
+            ),
+        }
+
+    # 2. Burst check
+    last_reply = (
+        PrivateMessage.objects
+        .filter(sender=recipient, recipient=sender)
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+
+    if last_reply:
+        # Warm dialog: count sender→recipient PMs after last reply
+        unresponded = PrivateMessage.objects.filter(
+            sender=sender,
+            recipient=recipient,
+            created_at__gt=last_reply,
+        ).count()
+    else:
+        # Cold contact: count within reset window
+        since = timezone.now() - timedelta(hours=cfg.pm_cold_reset_hours)
+        unresponded = PrivateMessage.objects.filter(
+            sender=sender,
+            recipient=recipient,
+            created_at__gte=since,
+        ).count()
+
+    if unresponded >= cfg.pm_max_burst:
+        return {
+            "allowed": False,
+            "reason": "burst",
+            "message": (
+                f"Wysłałeś już {unresponded} wiadomości bez odpowiedzi. "
+                f"Poczekaj na odpowiedź od rozmówcy."
+            ),
+        }
+
+    # 3. New recipients per day
+    if cfg.pm_new_recipients_per_day > 0:
+        since_day = timezone.now() - timedelta(hours=24)
+        # Recipients written to in last 24h
+        recent_recipient_ids = set(
+            PrivateMessage.objects.filter(
+                sender=sender,
+                created_at__gte=since_day,
+            ).values_list("recipient_id", flat=True).distinct()
+        )
+        # Of those, who has ever replied?
+        replied_ids = set(
+            PrivateMessage.objects.filter(
+                sender_id__in=recent_recipient_ids,
+                recipient=sender,
+            ).values_list("sender_id", flat=True).distinct()
+        )
+        cold_today = len(recent_recipient_ids - replied_ids)
+        # Add current recipient if they haven't replied yet
+        has_reply_from_recipient = PrivateMessage.objects.filter(
+            sender=recipient, recipient=sender
+        ).exists()
+        if not has_reply_from_recipient:
+            cold_today_with_current = cold_today if recipient.pk in recent_recipient_ids else cold_today + 1
+        else:
+            cold_today_with_current = cold_today
+
+        if cold_today_with_current > cfg.pm_new_recipients_per_day:
+            return {
+                "allowed": False,
+                "reason": "recipients",
+                "message": (
+                    f"Możesz napisać do maksymalnie {cfg.pm_new_recipients_per_day} "
+                    f"nowych rozmówców dziennie."
+                ),
+            }
+
+    return {"allowed": True, "reason": "", "message": ""}

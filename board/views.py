@@ -2335,21 +2335,48 @@ def register(request):
                                 user.set_password(prehash_password(password, user.username))
                             user.is_active = True
                             user.save()
+                            clear_pending_registration()
+                            login(request, user)
+                            return redirect("/")
                         else:
-                            user = User(
-                                username=pending["username"],
-                                email=pending["email"],
-                                is_active=True,
-                                is_temporary=(reg_type == "temporary"),
-                            )
-                            if finish_form.cleaned_data.get("password_is_prehashed") == "1":
-                                user.set_password(password)
-                            else:
-                                user.set_password(prehash_password(password, user.username))
-                            user.save()
-                        clear_pending_registration()
-                        login(request, user)
-                        return redirect("/")
+                            is_temp_reg = (reg_type == "temporary")
+
+                            # IP-based multi-account check
+                            if cfg.reg_ip_limit:
+                                window_hours = cfg.reg_ip_window_hours
+                                max_accounts = cfg.reg_ip_max_temp if is_temp_reg else cfg.reg_ip_max_real
+                                if max_accounts > 0:
+                                    since = timezone.now() - timedelta(hours=window_hours)
+                                    recent_count = User.objects.filter(
+                                        registration_ip=client_ip,
+                                        is_temporary=is_temp_reg,
+                                        date_joined__gte=since,
+                                    ).count()
+                                if max_accounts > 0 and recent_count >= max_accounts:
+                                    kind = "tymczasowych" if is_temp_reg else "realnych"
+                                    error = (
+                                        f"Z tego adresu IP zarejestrowano już {max_accounts} "
+                                        f"kont{'' if max_accounts == 1 else 'a'} {kind} "
+                                        f"w ciągu ostatnich {window_hours} godzin. "
+                                        f"Spróbuj ponownie później."
+                                    )
+
+                            if not error:
+                                user = User(
+                                    username=pending["username"],
+                                    email=pending["email"],
+                                    is_active=True,
+                                    is_temporary=is_temp_reg,
+                                    registration_ip=client_ip,
+                                )
+                                if finish_form.cleaned_data.get("password_is_prehashed") == "1":
+                                    user.set_password(password)
+                                else:
+                                    user.set_password(prehash_password(password, user.username))
+                                user.save()
+                                clear_pending_registration()
+                                login(request, user)
+                                return redirect("/")
 
     if pending:
         start_form = RegisterStartForm(initial=pending)
@@ -4010,6 +4037,7 @@ def root_config(request):
                         f"{stats['posts']} postów, {stats['topics']} wątków.",
                     )
             cfg.maintenance_message = request.POST.get("maintenance_message", "").strip()
+            cfg.reg_ip_limit = "reg_ip_limit" in request.POST
             hard_limit = getattr(settings, "POLL_OPTIONS_HARD_MAX", 64)
             try:
                 cfg.search_snippet_chars = max(
@@ -4020,6 +4048,13 @@ def root_config(request):
                     hard_limit,
                     max(2, int(request.POST.get("poll_options_soft_max", cfg.poll_options_soft_max))),
                 )
+                cfg.reg_ip_window_hours = max(1, int(request.POST.get("reg_ip_window_hours", cfg.reg_ip_window_hours)))
+                cfg.reg_ip_max_real = max(0, int(request.POST.get("reg_ip_max_real", cfg.reg_ip_max_real)))
+                cfg.reg_ip_max_temp = max(0, int(request.POST.get("reg_ip_max_temp", cfg.reg_ip_max_temp)))
+                cfg.pm_min_active_days = max(0, int(request.POST.get("pm_min_active_days", cfg.pm_min_active_days)))
+                cfg.pm_max_burst = max(1, int(request.POST.get("pm_max_burst", cfg.pm_max_burst)))
+                cfg.pm_cold_reset_hours = max(1, int(request.POST.get("pm_cold_reset_hours", cfg.pm_cold_reset_hours)))
+                cfg.pm_new_recipients_per_day = max(1, int(request.POST.get("pm_new_recipients_per_day", cfg.pm_new_recipients_per_day)))
             except (TypeError, ValueError):
                 messages.error(request, "Wartości liczbowe są nieprawidłowe.")
                 return redirect("root_config")

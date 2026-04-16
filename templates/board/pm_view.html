@@ -27,7 +27,7 @@
     </td>
     <td class="post-content">
       <strong>{{ box.message.subject }}</strong><br><br>
-      {{ box|pm_bbcode }}
+      {{ box.message|pm_bbcode }}
       {% if box.box_type == "INBOX" and box.message.sender and box.message.sender.signature %}
         <hr style="border:none;border-top:1px solid #ddd;margin:.6rem 0;">
         <small style="color:#666;">{{ box.message.sender.signature|bbcode }}</small>

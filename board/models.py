@@ -1,3 +1,5 @@
+import zlib
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import AbstractUser
@@ -83,6 +85,10 @@ class User(AbstractUser):
     is_temporary = models.BooleanField(
         default=False,
         help_text="Temporary account created during maintenance/beta — deleted on mode cleanup.",
+    )
+    registration_ip = models.GenericIPAddressField(
+        null=True, blank=True,
+        help_text="IP address used to register this account (for multi-account detection).",
     )
 
     ROLE_USER      = 0
@@ -1027,6 +1033,40 @@ class SiteConfig(models.Model):
     maintenance_message = models.TextField(
         blank=True, default="",
         help_text="Komunikat wyświetlany podczas przerwy technicznej.",
+    )
+    reg_ip_limit = models.BooleanField(
+        default=True,
+        help_text="Włącz limit rejestracji z tego samego IP.",
+    )
+    reg_ip_window_hours = models.PositiveSmallIntegerField(
+        default=6,
+        help_text="Okno czasowe limitu rejestracji (godziny).",
+    )
+    reg_ip_max_real = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="Max rejestracji realnych kont z jednego IP w oknie czasowym.",
+    )
+    reg_ip_max_temp = models.PositiveSmallIntegerField(
+        default=3,
+        help_text="Max rejestracji kont tymczasowych z jednego IP w oknie czasowym.",
+    )
+
+    # PM antiflood
+    pm_min_active_days = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="Minimalny active_days aby móc wysyłać PM (0 = brak bramki).",
+    )
+    pm_max_burst = models.PositiveSmallIntegerField(
+        default=2,
+        help_text="Max nieprzerwanych PM do tej samej osoby bez odpowiedzi.",
+    )
+    pm_cold_reset_hours = models.PositiveSmallIntegerField(
+        default=24,
+        help_text="Po ilu godzinach bez odpowiedzi licznik burst się resetuje.",
+    )
+    pm_new_recipients_per_day = models.PositiveSmallIntegerField(
+        default=5,
+        help_text="Max nowych rozmówców (bez historii) dziennie.",
     )
 
     class Meta:
