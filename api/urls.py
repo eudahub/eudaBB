@@ -44,6 +44,9 @@ from api.views.pm import (
     ConversationDetailView,
     SendPMView,
     ReplyPMView,
+    OutboxListView,
+    SentListView,
+    ConversationDeleteView,
 )
 from api.views.notifications import (
     NotificationListView,
@@ -99,10 +102,13 @@ urlpatterns = [
     path("push/unregister",  PushUnregisterView.as_view(), name="push_unregister"),
 
     # ---- Private messages ----
-    path("conversations",                     ConversationListView.as_view(),   name="conversation_list"),
-    path("conversations/<int:box_id>",        ConversationDetailView.as_view(), name="conversation_detail"),
-    path("conversations/new",                 SendPMView.as_view(),             name="send_pm"),
-    path("conversations/<int:box_id>/reply",  ReplyPMView.as_view(),            name="reply_pm"),
+    path("conversations",                       ConversationListView.as_view(),   name="conversation_list"),
+    path("conversations/outbox",                OutboxListView.as_view(),          name="conversation_outbox"),
+    path("conversations/sent",                  SentListView.as_view(),            name="conversation_sent"),
+    path("conversations/new",                   SendPMView.as_view(),              name="send_pm"),
+    path("conversations/<int:box_id>",          ConversationDetailView.as_view(), name="conversation_detail"),
+    path("conversations/<int:box_id>/reply",    ReplyPMView.as_view(),             name="reply_pm"),
+    path("conversations/<int:box_id>/delete",   ConversationDeleteView.as_view(), name="conversation_delete"),
 
     # ---- Notifications (polling stub) ----
     path("notifications",                          NotificationListView.as_view(),     name="notification_list"),

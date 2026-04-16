@@ -176,3 +176,59 @@ class ReplyPMView(APIView):
         )
 
         return R.created({"message_id": msg.pk})
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/conversations/outbox  — sent, not yet read by recipient
+# ---------------------------------------------------------------------------
+
+class OutboxListView(APIView):
+    """Outbox: PMs sent but not yet read by the recipient."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (
+            PrivateMessageBox.objects
+            .filter(owner=request.user, box_type=PrivateMessageBox.BoxType.OUTBOX)
+            .select_related("message__sender", "message__recipient")
+            .order_by("-message__created_at")
+        )
+        return R.paginate(qs, request, PMBoxSerializer, per_page=30, context={"request": request})
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/conversations/sent  — sent, already read by recipient
+# ---------------------------------------------------------------------------
+
+class SentListView(APIView):
+    """Sent: PMs sent and already read by the recipient."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (
+            PrivateMessageBox.objects
+            .filter(owner=request.user, box_type=PrivateMessageBox.BoxType.SENT)
+            .select_related("message__sender", "message__recipient")
+            .order_by("-message__delivered_at")
+        )
+        return R.paginate(qs, request, PMBoxSerializer, per_page=30, context={"request": request})
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/conversations/{box_id}  — remove from folder
+# ---------------------------------------------------------------------------
+
+class ConversationDeleteView(APIView):
+    """Delete a PM box entry (removes from the user's folder).
+
+    If no box entries remain for the message, the message itself is deleted.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, box_id):
+        box = get_object_or_404(PrivateMessageBox, pk=box_id, owner=request.user)
+        msg = box.message
+        box.delete()
+        if not msg.boxes.exists():
+            msg.delete()
+        return R.ok({"deleted": True})

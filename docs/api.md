@@ -446,6 +446,12 @@ PUT /api/v1/mod/threads/{id}/move
 #### `GET /api/v1/conversations?page=1`
 Inbox (wiadomości odebrane), posortowane od najnowszych.
 
+#### `GET /api/v1/conversations/outbox?page=1`
+Outbox: wiadomości wysłane, jeszcze nieprzeczytane przez odbiorcę.
+
+#### `GET /api/v1/conversations/sent?page=1`
+Sent: wiadomości wysłane i już przeczytane przez odbiorcę.
+
 #### `GET /api/v1/conversations/{id}`
 Pełna treść wiadomości. Automatycznie oznacza jako przeczytaną.
 
@@ -462,6 +468,9 @@ Odpowiedź na wiadomość.
 ```json
 { "content": "Treść odpowiedzi..." }
 ```
+
+#### `DELETE /api/v1/conversations/{id}/delete`
+Usuń wiadomość z folderu. Jeśli obie strony usunęły — wiadomość jest fizycznie kasowana.
 
 ---
 
