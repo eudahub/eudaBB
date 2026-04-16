@@ -12,6 +12,11 @@ Rules:
 from django.db.models import F
 
 
+def _user_model():
+    from board.models import User
+    return User
+
+
 def increment_if_new_day(user, post) -> None:
     """Call after creating `post`. Increments active_days if this is user's first post that UTC day."""
     if not user or not user.pk:
@@ -23,7 +28,7 @@ def increment_if_new_day(user, post) -> None:
         created_at__date=post_date,
     ).exclude(pk=post.pk).exists()
     if not already:
-        type(user).objects.filter(pk=user.pk).update(active_days=F("active_days") + 1)
+        _user_model().objects.filter(pk=user.pk).update(active_days=F("active_days") + 1)
 
 
 def decrement_if_last_on_day(user, post) -> None:
@@ -37,7 +42,7 @@ def decrement_if_last_on_day(user, post) -> None:
         created_at__date=post_date,
     ).exclude(pk=post.pk).exists()
     if not other:
-        type(user).objects.filter(pk=user.pk, active_days__gt=0).update(
+        _user_model().objects.filter(pk=user.pk, active_days__gt=0).update(
             active_days=F("active_days") - 1
         )
 
@@ -54,5 +59,5 @@ def recalculate_for_user(user) -> int:
         .distinct()
         .count()
     )
-    type(user).objects.filter(pk=user.pk).update(active_days=days)
+    _user_model().objects.filter(pk=user.pk).update(active_days=days)
     return days
