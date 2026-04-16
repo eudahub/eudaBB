@@ -38,9 +38,9 @@ def notify_quote_reply(post):
 
     quoted_author_ids = (
         QuoteReference.objects
-        .filter(citing_post=post)
-        .exclude(quoted_post__author__isnull=True)
-        .values_list("quoted_post__author_id", flat=True)
+        .filter(post=post)
+        .exclude(source_post__author__isnull=True)
+        .values_list("source_post__author_id", flat=True)
         .distinct()
     )
     for uid in quoted_author_ids:
