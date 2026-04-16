@@ -53,16 +53,37 @@ def bbcode(value):
     return mark_safe(render(value or ""))
 
 
+def _render_bbcode_or_raw(text, broken_tags):
+    if broken_tags:
+        return '<pre class="broken-bbcode">' + escape(text) + '</pre>'
+    return render(text or "")
+
+
 @register.filter
 def post_content(post):
-    """Render post content: verbatim (escaped) when broken_tags, BBCode otherwise."""
-    if post.broken_tags:
-        return mark_safe(
-            '<pre class="broken-bbcode">'
-            + escape(post.content_bbcode)
-            + '</pre>'
-        )
-    return mark_safe(render(post.content_bbcode or ""))
+    """Render post content, inserting merge markers between appended parts."""
+    merge_log = post.merge_log or []
+    if not merge_log:
+        return mark_safe(_render_bbcode_or_raw(post.content_bbcode, post.broken_tags))
+
+    starts = [0] + [e["offset"] for e in merge_log]
+    ends   = [e["offset"] - 2 for e in merge_log] + [len(post.content_bbcode)]
+    parts  = [post.content_bbcode[s:e] for s, e in zip(starts, ends)]
+
+    html_chunks = []
+    for i, part_text in enumerate(parts):
+        if i > 0:
+            entry = merge_log[i - 1]
+            minutes = entry.get("minutes_after", "?")
+            uname   = escape(entry.get("username", "?"))
+            html_chunks.append(
+                f'<p class="merge-marker" style="font-size:11px;color:#888;'
+                f'font-style:italic;margin:.6rem 0 .3rem 0;">'
+                f'— po {minutes} min. {uname} dopisał:</p>'
+            )
+        html_chunks.append(_render_bbcode_or_raw(part_text, post.broken_tags))
+
+    return mark_safe("".join(html_chunks))
 
 
 @register.filter

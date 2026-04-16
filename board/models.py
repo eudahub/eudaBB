@@ -491,8 +491,12 @@ class Post(models.Model):
     updated_by = models.ForeignKey(
         User, on_delete=models.SET_NULL,
         null=True, blank=True, related_name="edited_posts",
+        db_constraint=False,
     )
     edit_count = models.PositiveSmallIntegerField(default=0)
+    # Merge log: list of {offset, time, user_id, username, minutes_after}
+    # offset = char position in content_bbcode where this appended part starts.
+    merge_log = models.JSONField(null=True, blank=True, default=None)
 
     # IP address of author — retained for law enforcement requests.
     # Automatically nulled after ip_retain_until by: manage.py purge_expired_ips

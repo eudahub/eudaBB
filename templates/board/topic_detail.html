@@ -218,7 +218,14 @@
       <button class="bbsrc-btn" onclick="showBBSrc(this)"
               data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
       {% if post.pk in editable_post_ids %}
-        <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
+        {% if post.merge_log %}
+          <span style="font-size:11px;">Edytuj:
+            <a href="{% url 'edit_post' post.pk %}?part=0" class="bbsrc-btn">cz.1</a>
+            {% for entry in post.merge_log %}<a href="{% url 'edit_post' post.pk %}?part={{ forloop.counter }}" class="bbsrc-btn">cz.{{ forloop.counter|add:1 }}</a>{% endfor %}
+          </span>
+        {% else %}
+          <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
+        {% endif %}
       {% endif %}
       {% if post.pk in deletable_post_ids %}
         <form method="post" action="{% url 'delete_post' post.pk %}" style="display:inline;"
@@ -275,7 +282,8 @@
         {% if post.edit_count %}
           <hr>
           <small><em>Edytowano {{ post.edit_count }} raz.
-            {% if post.updated_by %}przez {{ post.updated_by.username }}{% endif %}
+            {% if post.updated_by_id == 0 %}przez root
+            {% elif post.updated_by %}przez {{ post.updated_by.username }}{% endif %}
             {% if post.updated_at %}({{ post.updated_at|date:"d.m.Y H:i" }}){% endif %}
           </em></small>
         {% endif %}
@@ -330,7 +338,14 @@
       <button class="bbsrc-btn" onclick="showBBSrc(this)"
               data-bbcode="{{ post.content_bbcode|escape }}">BBCode</button>
       {% if post.pk in editable_post_ids %}
-        <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
+        {% if post.merge_log %}
+          <span style="font-size:11px;">Edytuj:
+            <a href="{% url 'edit_post' post.pk %}?part=0" class="bbsrc-btn">cz.1</a>
+            {% for entry in post.merge_log %}<a href="{% url 'edit_post' post.pk %}?part={{ forloop.counter }}" class="bbsrc-btn">cz.{{ forloop.counter|add:1 }}</a>{% endfor %}
+          </span>
+        {% else %}
+          <a href="{% url 'edit_post' post.pk %}" class="bbsrc-btn">Edytuj</a>
+        {% endif %}
       {% endif %}
       {% if post.pk in deletable_post_ids %}
         <form method="post" action="{% url 'delete_post' post.pk %}" style="display:inline;"

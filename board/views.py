@@ -260,6 +260,26 @@ def _get_client_ip(request):
     return request.META.get("REMOTE_ADDR") or None
 
 
+def _split_post_parts(content: str, merge_log: list) -> list:
+    """Split content_bbcode into individual parts using merge_log offsets."""
+    if not merge_log:
+        return [content]
+    starts = [0] + [e["offset"] for e in merge_log]
+    ends   = [e["offset"] - 2 for e in merge_log] + [len(content)]
+    return [content[s:e] for s, e in zip(starts, ends)]
+
+
+def _rebuild_post_parts(parts: list, old_log: list) -> tuple:
+    """Reconstruct content_bbcode and recalculate merge_log offsets after part edit."""
+    new_content = "\n\n".join(parts)
+    new_log = []
+    offset = 0
+    for part, entry in zip(parts[:-1], old_log):
+        offset += len(part) + 2
+        new_log.append({**entry, "offset": offset})
+    return new_content, new_log
+
+
 def _try_merge_reply(topic: Topic, author, new_content: str):
     """Append new_content to author's last post in topic if merge conditions are met.
 
@@ -290,8 +310,18 @@ def _try_merge_reply(topic: Topic, author, new_content: str):
     if len(combined.encode("utf-8")) > cfg.post_merge_soft_kb * 1024:
         return None
 
+    now = timezone.now()
+    minutes_after = max(1, int(age_seconds / 60))
+    log_entry = {
+        "offset": len(last_post.content_bbcode) + 2,  # after "\n\n"
+        "time": now.isoformat(),
+        "user_id": author.pk,
+        "username": author.username,
+        "minutes_after": minutes_after,
+    }
     last_post.content_bbcode = combined
-    last_post.save(update_fields=["content_bbcode"])
+    last_post.merge_log = (last_post.merge_log or []) + [log_entry]
+    last_post.save(update_fields=["content_bbcode", "merge_log"])
     rebuild_quote_references_for_post(last_post)
     if author and not last_post.is_pending:
         from .notifications import notify_quote_reply
@@ -1172,30 +1202,58 @@ def edit_post(request, post_id):
         messages.error(request, "Nie masz uprawnień do edycji tego postu.")
         return redirect("topic_detail", topic_id=topic.pk)
 
-    # Root edits silently — no edit_count bump, no updated_by/updated_at marker
-    silent_edit = user.is_root
+    # Determine which part of a multi-part post is being edited (None = whole post)
+    merge_log = post.merge_log or []
+    part_index = None
+    if merge_log:
+        try:
+            pi = int(request.GET.get("part", ""))
+            if 0 <= pi <= len(merge_log):
+                part_index = pi
+        except (ValueError, TypeError):
+            pass
+
+    def _get_edit_content():
+        if part_index is not None:
+            return _split_post_parts(post.content_bbcode, merge_log)[part_index]
+        return post.content_bbcode
 
     original_size = len(post.content_bbcode)
     if request.method == "POST":
         form = ReplyForm(request.POST, original_size=original_size)
         if form.is_valid():
-            post.content_bbcode = form.cleaned_data["content"]
-            if silent_edit:
-                post.save(update_fields=["content_bbcode"])
+            new_part = form.cleaned_data["content"]
+            if part_index is not None:
+                parts = _split_post_parts(post.content_bbcode, merge_log)
+                parts[part_index] = new_part
+                new_content, new_log = _rebuild_post_parts(parts, merge_log)
+                post.content_bbcode = new_content
+                post.merge_log = new_log
+                update_fields = ["content_bbcode", "merge_log"]
             else:
-                post.edit_count += 1
+                post.content_bbcode = new_part
+                update_fields = ["content_bbcode"]
+            # Root: record edit with sentinel id=0 (not linked to real user profile)
+            if user.is_root:
+                post.updated_by_id = 0
+            else:
                 post.updated_by = user
-                post.updated_at = timezone.now()
-                post.save(update_fields=["content_bbcode", "edit_count", "updated_by", "updated_at"])
+            post.edit_count += 1
+            post.updated_at = timezone.now()
+            update_fields += ["edit_count", "updated_by", "updated_at"]
+            post.save(update_fields=update_fields)
+            rebuild_quote_references_for_post(post)
             messages.success(request, "Post zaktualizowany.")
             return redirect(f"{reverse('topic_detail', args=[topic.pk])}#post-{post.pk}")
     else:
-        form = ReplyForm(initial={"content": post.content_bbcode}, original_size=original_size)
+        form = ReplyForm(initial={"content": _get_edit_content()}, original_size=original_size)
 
     return render(request, "board/edit_post.html", {
         "form": form,
         "post": post,
         "topic": topic,
+        "part_index": part_index,
+        "part_count": len(merge_log) + 1 if merge_log else 1,
         "post_content_soft_limit": getattr(settings, "POST_CONTENT_SOFT_MAX_CHARS", 20_000),
     })
 
