@@ -26,49 +26,5 @@ class FcmToken(models.Model):
         return f"FCM token for {self.user_id}"
 
 
-class PostReport(models.Model):
-    """User report of a post (spam, abuse, etc.).
-
-    Stub for future implementation. The web version will have a moderation
-    queue that reads these. For now the endpoint POST /api/v1/posts/{id}/report
-    creates records here, and GET /api/v1/mod/reports returns them.
-    """
-
-    class Status(models.TextChoices):
-        OPEN = "open", "Open"
-        RESOLVED = "resolved", "Resolved"
-        DISMISSED = "dismissed", "Dismissed"
-
-    post = models.ForeignKey(
-        "board.Post",
-        on_delete=models.CASCADE,
-        related_name="reports",
-    )
-    reporter = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="reports_made",
-    )
-    reason = models.CharField(max_length=500, blank=True, default="")
-    status = models.CharField(
-        max_length=10, choices=Status.choices, default=Status.OPEN, db_index=True
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    resolved_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name="reports_resolved",
-    )
-    resolved_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        db_table = "api_post_reports"
-        ordering = ["-created_at"]
-        indexes = [
-            models.Index(fields=["post"]),
-            models.Index(fields=["status", "-created_at"]),
-        ]
-
-    def __str__(self):
-        return f"Report #{self.pk} on Post #{self.post_id} [{self.status}]"
+# PostReport removed — use board.PostReport (table: forum_post_report).
+# Unified model shared by web and API views.

@@ -209,14 +209,15 @@ class ModReportListView(APIView):
     permission_classes = [IsModerator]
 
     def get(self, request):
-        from api.models import PostReport
+        from board.models import PostReport
         status_filter = request.query_params.get("status", "open")
-        qs = (
-            PostReport.objects
-            .filter(status=status_filter)
-            .select_related("post", "reporter")
-            .order_by("-created_at")
-        )
+        if status_filter == "open":
+            qs = PostReport.objects.filter(is_closed=False)
+        elif status_filter == "dismissed":
+            qs = PostReport.objects.filter(is_closed=True, resolution="dismissed")
+        else:  # resolved or any other value
+            qs = PostReport.objects.filter(is_closed=True, resolution="resolved")
+        qs = qs.select_related("post", "reporter").order_by("-created_at")
         return R.paginate(qs, request, PostReportSerializer, per_page=30)
 
 
@@ -228,12 +229,10 @@ class ModReportResolveView(APIView):
     permission_classes = [IsModerator]
 
     def put(self, request, report_id):
-        from api.models import PostReport
+        from board.models import PostReport
+        from board.report_utils import close_report
         report = get_object_or_404(PostReport, pk=report_id)
-        report.status = PostReport.Status.RESOLVED
-        report.resolved_by = request.user
-        report.resolved_at = timezone.now()
-        report.save(update_fields=["status", "resolved_by", "resolved_at"])
+        close_report(report, request.user, resolution="resolved")
         return R.ok({"status": "resolved"})
 
 
@@ -241,10 +240,8 @@ class ModReportDismissView(APIView):
     permission_classes = [IsModerator]
 
     def put(self, request, report_id):
-        from api.models import PostReport
+        from board.models import PostReport
+        from board.report_utils import close_report
         report = get_object_or_404(PostReport, pk=report_id)
-        report.status = PostReport.Status.DISMISSED
-        report.resolved_by = request.user
-        report.resolved_at = timezone.now()
-        report.save(update_fields=["status", "resolved_by", "resolved_at"])
+        close_report(report, request.user, resolution="dismissed")
         return R.ok({"status": "dismissed"})

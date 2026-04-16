@@ -1127,13 +1127,22 @@ class Notification(models.Model):
 
 
 class PostReport(models.Model):
-    class Reason(models.TextChoices):
-        OFFTOP = "offtop", "Offtop"
-        RULES  = "rules",  "Łamie regulamin"
+    # Web form uses these labels; API may send any free text.
+    REASON_OFFTOP = "offtop"
+    REASON_RULES  = "rules"
+    WEB_REASON_CHOICES = [
+        (REASON_OFFTOP, "Offtop"),
+        (REASON_RULES,  "Łamie regulamin"),
+    ]
+
+    class Resolution(models.TextChoices):
+        RESOLVED  = "resolved",  "Rozwiązane"
+        DISMISSED = "dismissed", "Oddalone"
 
     post     = models.ForeignKey("Post",  on_delete=models.CASCADE, related_name="board_reports")
     reporter = models.ForeignKey(User,    on_delete=models.SET_NULL, null=True, related_name="submitted_reports")
-    reason   = models.CharField(max_length=16, choices=Reason.choices)
+    # Free-text: web sends "offtop"/"rules", Android may send anything (max 500)
+    reason   = models.CharField(max_length=500, blank=True, default="")
     comment  = models.CharField(max_length=300, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -1143,14 +1152,25 @@ class PostReport(models.Model):
     )
     resolved_at = models.DateTimeField(null=True, blank=True)
     is_closed   = models.BooleanField(default=False, db_index=True)
+    # How it was closed: "resolved" (action taken) or "dismissed" (no action)
+    resolution  = models.CharField(
+        max_length=10, choices=Resolution.choices, blank=True, default=""
+    )
 
     class Meta:
         db_table      = "forum_post_report"
         unique_together = [("post", "reporter")]
         ordering      = ["-created_at"]
 
+    @property
+    def status(self):
+        """API-compatible status string: open / resolved / dismissed."""
+        if not self.is_closed:
+            return "open"
+        return self.resolution or "resolved"
+
     def __str__(self):
-        return f"Report(post={self.post_id}, reporter={self.reporter_id}, closed={self.is_closed})"
+        return f"Report(post={self.post_id}, reporter={self.reporter_id}, status={self.status})"
 
 
 class UserSession(models.Model):

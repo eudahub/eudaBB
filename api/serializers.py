@@ -9,9 +9,9 @@ from rest_framework import serializers
 from board.models import (
     User, Section, Forum, Topic, Post,
     PrivateMessage, PrivateMessageBox,
+    PostReport,
 )
 from board.bbcode import render as bbcode_render
-from api.models import PostReport
 
 
 # ---------------------------------------------------------------------------
@@ -314,11 +314,16 @@ class PMDetailSerializer(serializers.ModelSerializer):
 class PostReportSerializer(serializers.ModelSerializer):
     reporter_name = serializers.CharField(source="reporter.username", default=None)
     post_topic_id = serializers.IntegerField(source="post.topic_id", default=None)
+    # Map is_closed + resolution → status string for API compatibility
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = PostReport
         fields = [
             "id", "post_id", "post_topic_id",
             "reporter_id", "reporter_name",
-            "reason", "status", "created_at",
+            "reason", "comment", "status", "created_at",
         ]
+
+    def get_status(self, obj):
+        return obj.status

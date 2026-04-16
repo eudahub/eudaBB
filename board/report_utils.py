@@ -39,14 +39,18 @@ def open_report(post, reporter, reason, comment):
     return report, created
 
 
-def close_report(report, moderator):
-    """Close a report and update flags. Notifies reporter."""
+def close_report(report, moderator, resolution="resolved"):
+    """Close a report and update flags. Notifies reporter.
+
+    resolution: "resolved" (action taken) or "dismissed" (no action needed).
+    """
     if report.is_closed:
         return
     report.is_closed   = True
+    report.resolution  = resolution
     report.resolved_by = moderator
     report.resolved_at = timezone.now()
-    report.save(update_fields=["is_closed", "resolved_by", "resolved_at"])
+    report.save(update_fields=["is_closed", "resolution", "resolved_by", "resolved_at"])
     # Refresh post from DB to have current has_open_report value
     report.post.refresh_from_db(fields=["has_open_report"])
     _update_post_report_flag(report.post)

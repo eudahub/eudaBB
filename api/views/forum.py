@@ -305,14 +305,11 @@ class ReportPostView(APIView):
 
     def post(self, request, post_id):
         post = get_object_or_404(Post, pk=post_id)
-        reason = (request.data.get("reason") or "").strip()
+        reason  = (request.data.get("reason")  or "").strip()
+        comment = (request.data.get("comment") or "").strip()[:300]
 
-        from api.models import PostReport
-        report, created = PostReport.objects.get_or_create(
-            post=post,
-            reporter=request.user,
-            defaults={"reason": reason, "status": PostReport.Status.OPEN},
-        )
+        from board.report_utils import open_report
+        report, created = open_report(post, request.user, reason, comment)
         if not created:
             return R.error("ALREADY_REPORTED", "Już zgłosiłeś tego posta.", 409)
 
