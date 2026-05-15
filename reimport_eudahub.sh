@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCHIVER_DIR="${SCRIPT_DIR}/../phpbb-archiver"
 VENV_ACTIVATE="${SCRIPT_DIR}/venv/bin/activate"
 
-EUDAHUB_DB="${ARCHIVER_DIR}/eudaHub1.db"
+EUDAHUB_DB="${ARCHIVER_DIR}/eudaHub.db"
 AVATARS_DIR="${ARCHIVER_DIR}/avatars"
 
 if [[ ! -f "${VENV_ACTIVATE}" ]]; then
