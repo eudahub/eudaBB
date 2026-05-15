@@ -14,7 +14,7 @@
   {% for post in page.object_list %}
     <div class="post-box" style="margin-bottom:.6rem;">
       <div class="post-header">
-        <span>{{ post.topic.forum.title }}</span>
+        <span>{{ post.topic.board.title }}</span>
         <span>{{ post.created_at|date:"d.m.Y H:i" }}</span>
       </div>
       <div style="padding:.45rem .6rem;">

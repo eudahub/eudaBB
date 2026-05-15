@@ -2,7 +2,7 @@
 Scala tabelę forums_admin z forums w sfinia_full.db.
 
 Kroki:
-  1. Sprawdza czy forum_id są rozłączne (bezpieczeństwo).
+  1. Sprawdza czy board_id są rozłączne (bezpieczeństwo).
   2. Dodaje kolumny section_id=7 i "order" (10,20,30...) do forums_admin.
   3. Kopiuje wszystkie wiersze z forums_admin do forums.
   4. Opcjonalnie usuwa forums_admin (--drop).
@@ -44,13 +44,13 @@ class Command(BaseCommand):
 
         # 1. Sprawdź rozłączność
         overlap = conn.execute(
-            "SELECT COUNT(*) FROM forums f "
-            "JOIN forums_admin fa ON CAST(fa.forum_id AS INTEGER) = f.forum_id"
+            "SELECT COUNT(*) FROM boards f "
+            "JOIN forums_admin fa ON CAST(fa.board_id AS INTEGER) = f.board_id"
         ).fetchone()[0]
         if overlap:
             conn.close()
             raise CommandError(
-                f"Kolizja! {overlap} forum_id występuje w obu tabelach. Przerywam."
+                f"Kolizja! {overlap} board_id występuje w obu tabelach. Przerywam."
             )
         self.stdout.write(f"Rozłączność OK (0 kolizji).")
 
@@ -90,17 +90,17 @@ class Command(BaseCommand):
                 f'forums_admin."order" przypisana ({ORDER_START},{ORDER_START+ORDER_STEP},...)'
             )
 
-            # 3. Wstaw do forums (pomijaj już istniejące forum_id)
+            # 3. Wstaw do forums (pomijaj już istniejące board_id)
             conn.execute("""
-                INSERT OR IGNORE INTO forums (
-                    forum_id, parent_forum_id, visibility, title, description,
+                INSERT OR IGNORE INTO boards (
+                    board_id, parent_board_id, visibility, title, description,
                     url, topic_count, post_count, moderator_names,
                     last_post_at, last_post_author, last_post_author_url, last_post_url,
                     section_id, "order"
                 )
                 SELECT
-                    CAST(forum_id AS INTEGER),
-                    NULLIF(CAST(NULLIF(parent_forum_id, '') AS INTEGER), 0),
+                    CAST(board_id AS INTEGER),
+                    NULLIF(CAST(NULLIF(parent_board_id, '') AS INTEGER), 0),
                     visibility,
                     title,
                     description,
@@ -117,10 +117,10 @@ class Command(BaseCommand):
                 FROM forums_admin
             """)
             inserted = conn.execute(
-                "SELECT COUNT(*) FROM forums f "
-                "JOIN forums_admin fa ON CAST(fa.forum_id AS INTEGER) = f.forum_id"
+                "SELECT COUNT(*) FROM boards f "
+                "JOIN forums_admin fa ON CAST(fa.board_id AS INTEGER) = f.board_id"
             ).fetchone()[0]
-            self.stdout.write(f"Wstawiono {inserted} forów z forums_admin do forums.")
+            self.stdout.write(f"Wstawiono {inserted} działów z forums_admin do boards.")
 
             # 4. Opcjonalne usunięcie forums_admin
             if options["drop"]:
@@ -128,9 +128,9 @@ class Command(BaseCommand):
                 self.stdout.write("Tabela forums_admin usunięta.")
 
         if not options["drop"]:
-            total = conn.execute("SELECT COUNT(*) FROM forums").fetchone()[0]
+            total = conn.execute("SELECT COUNT(*) FROM boards").fetchone()[0]
             conn.close()
-            self.stdout.write(self.style.SUCCESS(f"Gotowe. forums ma teraz {total} forów."))
+            self.stdout.write(self.style.SUCCESS(f"Gotowe. boards ma teraz {total} działów."))
         else:
             conn.close()
             self.stdout.write(self.style.SUCCESS("Gotowe."))

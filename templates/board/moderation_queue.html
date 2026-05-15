@@ -61,7 +61,7 @@
           {% endif %}
         </td>
         <td style="padding:4px 6px;">
-          <span style="color:#888;font-size:11px;">{{ post.topic.forum.title }}</span><br>
+          <span style="color:#888;font-size:11px;">{{ post.topic.board.title }}</span><br>
           {% if not post.topic.is_pending %}
             <a href="{% url 'topic_detail' post.topic.pk %}" target="_blank">{{ post.topic.title }}</a>
           {% else %}

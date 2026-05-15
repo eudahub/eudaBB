@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 
-from board.models import Forum, PostSearchIndex
+from board.models import Board, PostSearchIndex
 
 
 class Command(BaseCommand):
@@ -8,13 +8,13 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--forum-id",
+            "--board-id",
             type=int,
-            help="Restrict output to one forum id.",
+            help="Restrict output to one board id.",
         )
         parser.add_argument(
-            "--forum-title",
-            help='Restrict output to one forum selected by exact title. Use quotes if the title contains spaces.',
+            "--board-title",
+            help='Restrict output to one board selected by exact title. Use quotes if the title contains spaces.',
         )
         parser.add_argument(
             "--limit",
@@ -24,33 +24,33 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        forum_id = options.get("forum_id")
-        forum_title = (options.get("forum_title") or "").strip()
+        board_id = options.get("board_id")
+        board_title = (options.get("board_title") or "").strip()
         limit = max(1, options.get("limit") or 20)
 
-        if forum_id is not None and forum_title:
-            raise CommandError("Use only one of --forum-id or --forum-title.")
+        if board_id is not None and board_title:
+            raise CommandError("Use only one of --board-id or --board-title.")
 
-        qs = PostSearchIndex.objects.select_related("post", "forum", "topic", "author").order_by("post_id")
-        if forum_id is not None:
-            if not Forum.objects.filter(pk=forum_id).exists():
-                raise CommandError(f"Forum id={forum_id} does not exist.")
-            qs = qs.filter(forum_id=forum_id)
-            self.stdout.write(f"Podgląd indeksu dla forum_id={forum_id}")
-        elif forum_title:
-            forums = list(Forum.objects.filter(title=forum_title))
-            if not forums:
-                raise CommandError(f'Forum with title "{forum_title}" does not exist.')
-            if len(forums) > 1:
+        qs = PostSearchIndex.objects.select_related("post", "board", "topic", "author").order_by("post_id")
+        if board_id is not None:
+            if not Board.objects.filter(pk=board_id).exists():
+                raise CommandError(f"Board id={board_id} does not exist.")
+            qs = qs.filter(board_id=board_id)
+            self.stdout.write(f"Podgląd indeksu dla board_id={board_id}")
+        elif board_title:
+            boards = list(Board.objects.filter(title=board_title))
+            if not boards:
+                raise CommandError(f'Board with title "{board_title}" does not exist.')
+            if len(boards) > 1:
                 raise CommandError(
-                    f'Forum title "{forum_title}" is ambiguous ({len(forums)} matches). '
-                    "Use --forum-id instead."
+                    f'Board title "{board_title}" is ambiguous ({len(boards)} matches). '
+                    "Use --board-id instead."
                 )
-            forum = forums[0]
-            qs = qs.filter(forum=forum)
-            self.stdout.write(f'Podgląd indeksu dla forum "{forum.title}" (id={forum.pk})')
+            board = boards[0]
+            qs = qs.filter(board=board)
+            self.stdout.write(f'Podgląd indeksu dla działu "{board.title}" (id={board.pk})')
         else:
-            self.stdout.write("Podgląd indeksu dla wszystkich forów")
+            self.stdout.write("Podgląd indeksu dla wszystkich działów")
 
         rows = list(qs[:limit])
         if not rows:
@@ -63,7 +63,7 @@ class Command(BaseCommand):
             if len(preview) > 180:
                 preview = preview[:177] + "..."
             self.stdout.write(
-                f"post={row.post_id} forum={row.forum_id} topic={row.topic_id} author={author} "
+                f"post={row.post_id} board={row.board_id} topic={row.topic_id} author={author} "
                 f"created={row.created_at:%Y-%m-%d %H:%M}"
             )
             self.stdout.write(f"  {preview}")

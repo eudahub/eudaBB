@@ -1,7 +1,7 @@
 """Delete a user account with full cleanup:
 - rewrite quotes in other posts (like rename, but to "[usunięty]")
 - enriched quotes pointing to deleted posts are stripped to plain [quote="[usunięty]"]
-- all user's posts are deleted with proper topic/forum stat updates
+- all user's posts are deleted with proper topic/board stat updates
 - user account is deleted (nick freed)
 """
 
@@ -9,7 +9,7 @@ import re
 from django.db import transaction
 from django.db.models import F, Q
 
-from .models import Post, QuoteReference, Topic, Forum, User
+from .models import Post, QuoteReference, Topic, Board, User
 from .quote_refs import rebuild_quote_references_for_posts
 from .user_lock import user_processing_lock
 
@@ -118,9 +118,9 @@ def delete_user_and_cleanup(user: User) -> dict:
         Post.objects.filter(author=user).delete()
 
         # Delete empty topics, renumber and update stats for the rest
-        affected_forum_ids = set()
-        for topic in Topic.objects.filter(pk__in=affected_topic_ids).select_related("forum"):
-            affected_forum_ids.add(topic.forum_id)
+        affected_board_ids = set()
+        for topic in Topic.objects.filter(pk__in=affected_topic_ids).select_related("board"):
+            affected_board_ids.add(topic.board_id)
             if topic.posts.count() == 0:
                 topic.delete()
                 continue
@@ -136,14 +136,14 @@ def delete_user_and_cleanup(user: User) -> dict:
             topic.last_post_at = last_post.created_at if last_post else None
             topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
 
-        # Update forum stats
-        for forum in Forum.objects.filter(pk__in=affected_forum_ids):
-            forum.post_count = Post.objects.filter(topic__forum=forum).count()
-            forum.topic_count = forum.topics.count()
-            last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
-            forum.last_post = last
-            forum.last_post_at = last.created_at if last else None
-            forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
+        # Update board stats
+        for board in Board.objects.filter(pk__in=affected_board_ids):
+            board.post_count = Post.objects.filter(topic__board=board).count()
+            board.topic_count = board.topics.count()
+            last = Post.objects.filter(topic__board=board).order_by("-created_at").first()
+            board.last_post = last
+            board.last_post_at = last.created_at if last else None
+            board.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
 
         # 3. Delete the user (SET_NULL on remaining post.author handled by DB)
         user.delete()

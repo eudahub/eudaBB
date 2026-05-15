@@ -12,7 +12,7 @@ Usage:
 """
 
 from django.core.management.base import BaseCommand
-from board.models import Forum
+from board.models import Board
 
 SOFT_FORUMS = ["Blog: IroB", "Blog: hushek"]
 HARD_FORUMS = ["Śmietnik", "Więzienie", "Magiel więzienny", "Gwiezdne Wojny"]
@@ -28,24 +28,24 @@ class Command(BaseCommand):
         dry = options["dry_run"]
 
         for title in SOFT_FORUMS:
-            self._set(title, Forum.ArchiveLevel.SOFT, dry)
+            self._set(title, Board.ArchiveLevel.SOFT, dry)
         for title in HARD_FORUMS:
-            self._set(title, Forum.ArchiveLevel.HARD, dry)
+            self._set(title, Board.ArchiveLevel.HARD, dry)
 
     def _set(self, title, level, dry):
         try:
-            forum = Forum.objects.get(title=title)
-        except Forum.DoesNotExist:
+            board = Board.objects.get(title=title)
+        except Board.DoesNotExist:
             self.stdout.write(self.style.WARNING(f"  Nie znaleziono: '{title}'"))
             return
-        except Forum.MultipleObjectsReturned:
+        except Board.MultipleObjectsReturned:
             self.stdout.write(self.style.WARNING(f"  Duplikat tytułu: '{title}' — pomiń"))
             return
 
-        label = dict(Forum.ArchiveLevel.choices)[level]
+        label = dict(Board.ArchiveLevel.choices)[level]
         if dry:
             self.stdout.write(f"  [dry] '{title}' → {label}")
         else:
-            forum.archive_level = level
-            forum.save(update_fields=["archive_level"])
+            board.archive_level = level
+            board.save(update_fields=["archive_level"])
             self.stdout.write(self.style.SUCCESS(f"  '{title}' → {label}"))

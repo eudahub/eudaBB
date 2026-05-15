@@ -24,7 +24,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 
 from board.models import (
-    User, Section, Forum, Topic, Post,
+    User, Section, Board, Topic, Post,
     Poll, PollOption, PollVote,
     Checklist, ChecklistCategory, ChecklistItem, ChecklistUpvote, ChecklistComment,
 )
@@ -107,7 +107,7 @@ class Command(BaseCommand):
                     changed_users.append((u, ",".join(changes)))
 
         # --- New topics ---
-        topics_qs = Topic.objects.filter(archive_topic_id__isnull=True).select_related("forum", "author")
+        topics_qs = Topic.objects.filter(archive_topic_id__isnull=True).select_related("board", "author")
         if not include_temp:
             topics_qs = topics_qs.filter(is_temporary=False)
         new_topics = list(topics_qs)
@@ -136,7 +136,7 @@ class Command(BaseCommand):
 
         # --- Sections & Forums (always full dump) ---
         all_sections = list(Section.objects.all())
-        all_forums = list(Forum.objects.select_related("section", "parent").all())
+        all_boards = list(Board.objects.select_related("section", "parent").all())
 
         # === Create output SQLite ===
         out = sqlite3.connect(output_path)
@@ -164,16 +164,16 @@ class Command(BaseCommand):
         for s in all_sections:
             out.execute("INSERT INTO sections VALUES (?,?,?)", (s.pk, s.title, s.order))
 
-        # --- forums ---
-        out.execute("""CREATE TABLE forums (
-            forum_id INTEGER, section_id INTEGER, parent_id INTEGER,
+        # --- boards ---
+        out.execute("""CREATE TABLE boards (
+            board_id INTEGER, section_id INTEGER, parent_id INTEGER,
             title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
             "order" INTEGER NOT NULL DEFAULT 0,
             access_level INTEGER NOT NULL DEFAULT 0,
             archive_level INTEGER NOT NULL DEFAULT 0
         )""")
-        for f in all_forums:
-            out.execute("INSERT INTO forums VALUES (?,?,?,?,?,?,?,?)",
+        for f in all_boards:
+            out.execute("INSERT INTO boards VALUES (?,?,?,?,?,?,?,?)",
                 (f.pk, f.section_id, f.parent_id, f.title, f.description,
                  f.order, f.access_level, f.archive_level))
 
@@ -197,7 +197,7 @@ class Command(BaseCommand):
 
         # --- topics ---
         out.execute("""CREATE TABLE topics (
-            topic_id INTEGER, forum_id INTEGER, title TEXT NOT NULL,
+            topic_id INTEGER, board_id INTEGER, title TEXT NOT NULL,
             author_name TEXT, created_at TEXT,
             is_temporary INTEGER NOT NULL DEFAULT 0,
             is_locked INTEGER NOT NULL DEFAULT 0,
@@ -205,20 +205,20 @@ class Command(BaseCommand):
         )""")
         for t in new_topics:
             out.execute("INSERT INTO topics VALUES (?,?,?,?,?,?,?,?)",
-                (t.pk, t.forum_id, t.title,
+                (t.pk, t.board_id, t.title,
                  t.author.username if t.author else "", _dt(t.created_at),
                  int(t.is_temporary), int(t.is_locked), t.feature))
 
         # --- posts ---
         out.execute("""CREATE TABLE posts (
-            post_id INTEGER, topic_id INTEGER, forum_id INTEGER,
+            post_id INTEGER, topic_id INTEGER, board_id INTEGER,
             topic_title TEXT, author_name TEXT, title TEXT,
             content TEXT NOT NULL, created_at TEXT,
             post_order INTEGER
         )""")
         for p in new_posts:
             out.execute("INSERT INTO posts VALUES (?,?,?,?,?,?,?,?,?)",
-                (p.pk, p.topic_id, p.topic.forum_id,
+                (p.pk, p.topic_id, p.topic.board_id,
                  p.topic.title, p.author.username if p.author else "",
                  p.subject, p.content_bbcode, _dt(p.created_at),
                  p.post_order))
@@ -329,7 +329,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Eksport: {output_path}\n"
             f"  Sekcje:            {len(all_sections)}\n"
-            f"  Fora:              {len(all_forums)}\n"
+            f"  Działy:            {len(all_boards)}\n"
             f"  Nowi userzy:       {len(new_users)}\n"
             f"  Zmienieni userzy:  {len(changed_users)}\n"
             f"  Nowe topiki:       {len(new_topics)}\n"

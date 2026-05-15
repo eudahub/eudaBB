@@ -34,7 +34,7 @@ from django.utils import timezone
 
 _WARSAW = ZoneInfo("Europe/Warsaw")
 
-from board.models import Forum, Post, Topic, User, TopicParticipant
+from board.models import Board, Post, Topic, User, TopicParticipant
 from board.bbcode_lint import repair as repair_bbcode
 from board.management.commands.update_forum_counts import compute_recursive_counts, compute_recursive_last_posts
 from board.quote_refs import rebuild_quote_references_for_posts
@@ -129,7 +129,7 @@ class Command(BaseCommand):
         # --- Build post query based on sampling mode ---
         if options["first"]:
             sql = (
-                "SELECT p.*, t.title as topic_title, t.forum_id, t.topic_type, "
+                "SELECT p.*, t.title as topic_title, t.board_id, t.topic_type, "
                 "       t.view_count, t.author_name as topic_author_name "
                 "FROM posts p JOIN topics t ON p.topic_id = t.topic_id "
                 "WHERE p.post_id IN (SELECT post_id FROM posts ORDER BY post_id LIMIT ?) "
@@ -139,7 +139,7 @@ class Command(BaseCommand):
 
         elif options["last"]:
             sql = (
-                "SELECT p.*, t.title as topic_title, t.forum_id, t.topic_type, "
+                "SELECT p.*, t.title as topic_title, t.board_id, t.topic_type, "
                 "       t.view_count, t.author_name as topic_author_name "
                 "FROM posts p JOIN topics t ON p.topic_id = t.topic_id "
                 "WHERE p.post_id IN (SELECT post_id FROM posts ORDER BY post_id DESC LIMIT ?) "
@@ -150,7 +150,7 @@ class Command(BaseCommand):
         elif options["every"]:
             n = options["every"]
             sql = (
-                "SELECT p.*, t.title as topic_title, t.forum_id, t.topic_type, "
+                "SELECT p.*, t.title as topic_title, t.board_id, t.topic_type, "
                 "       t.view_count, t.author_name as topic_author_name "
                 "FROM posts p JOIN topics t ON p.topic_id = t.topic_id "
                 f"WHERE p.post_id IN (SELECT post_id FROM posts WHERE (post_id % {n}) = 0) "
@@ -160,7 +160,7 @@ class Command(BaseCommand):
 
         elif options["random"]:
             sql = (
-                "SELECT p.*, t.title as topic_title, t.forum_id, t.topic_type, "
+                "SELECT p.*, t.title as topic_title, t.board_id, t.topic_type, "
                 "       t.view_count, t.author_name as topic_author_name "
                 "FROM posts p JOIN topics t ON p.topic_id = t.topic_id "
                 "WHERE p.post_id IN (SELECT post_id FROM posts ORDER BY RANDOM() LIMIT ?) "
@@ -170,7 +170,7 @@ class Command(BaseCommand):
 
         else:
             sql = (
-                "SELECT p.*, t.title as topic_title, t.forum_id, t.topic_type, "
+                "SELECT p.*, t.title as topic_title, t.board_id, t.topic_type, "
                 "       t.view_count, t.author_name as topic_author_name "
                 "FROM posts p JOIN topics t ON p.topic_id = t.topic_id "
                 "ORDER BY p.topic_id, p.post_order"
@@ -211,29 +211,29 @@ class Command(BaseCommand):
 
         topic_map = {}   # archive topic_id → our Topic instance
 
-        # Build archive_forum_id → our Forum mapping by title
+        # Build archive_board_id → our Board mapping by title
         conn2 = sqlite3.connect(db_path)
         conn2.row_factory = sqlite3.Row
-        archive_forums = {
-            r["forum_id"]: r["title"]
-            for r in conn2.execute("SELECT forum_id, title FROM forums").fetchall()
+        archive_boards = {
+            r["board_id"]: r["title"]
+            for r in conn2.execute("SELECT board_id, title FROM boards").fetchall()
         }
         conn2.close()
 
-        our_forums_by_title = {f.title: f for f in Forum.objects.all()}
-        only_forums = None
+        our_boards_by_title = {b.title: b for b in Board.objects.all()}
+        only_boards = None
         if options.get("only_forums"):
-            only_forums = {t.strip() for t in options["only_forums"].split(",")}
-        forum_map = {}
-        for arch_id, title in archive_forums.items():
-            if title in our_forums_by_title:
-                if only_forums is None or title in only_forums:
-                    forum_map[arch_id] = our_forums_by_title[title]
+            only_boards = {t.strip() for t in options["only_forums"].split(",")}
+        board_map = {}
+        for arch_id, title in archive_boards.items():
+            if title in our_boards_by_title:
+                if only_boards is None or title in only_boards:
+                    board_map[arch_id] = our_boards_by_title[title]
         self.stdout.write(
-            f"Zmapowano {len(forum_map)}/{len(archive_forums)} forów po tytułach."
+            f"Zmapowano {len(board_map)}/{len(archive_boards)} działów po tytułach."
         )
 
-        posts_created = topics_created = skipped_forum = repaired_posts = 0
+        posts_created = topics_created = skipped_board = repaired_posts = 0
         sfinia_to_django = {}  # sfinia post_id (int) → django post_id (int)
         imported_post_ids = []
         imported_topic_ids = []
@@ -247,9 +247,9 @@ class Command(BaseCommand):
 
                 # Get or create Topic
                 if archive_topic_id not in topic_map:
-                    forum = forum_map.get(first["forum_id"])
-                    if forum is None:
-                        skipped_forum += len(posts_in_topic)
+                    board = board_map.get(first["board_id"])
+                    if board is None:
+                        skipped_board += len(posts_in_topic)
                         continue
 
                     topic_author = user_map.get(first["topic_author_name"]) or user_map.get(first["author_name"])
@@ -259,7 +259,7 @@ class Command(BaseCommand):
                     first_dt = parse_pl_date(first["created_at"])
 
                     topic = Topic.objects.create(
-                        forum=forum,
+                        board=board,
                         archive_topic_id=archive_topic_id,
                         title=first["topic_title"],
                         author=topic_author,
@@ -369,7 +369,7 @@ class Command(BaseCommand):
 
             self.stdout.write("Buduję indeks wyszukiwania (forum_post_search)…")
             indexed_search = rebuild_post_search_index_for_posts(
-                Post.objects.filter(pk__in=imported_post_ids).select_related("topic", "topic__forum", "author")
+                Post.objects.filter(pk__in=imported_post_ids).select_related("topic", "topic__board", "author")
             )
             self.stdout.write(f"  Zindeksowano wyszukiwanie dla {indexed_search} postów.")
 
@@ -429,18 +429,18 @@ class Command(BaseCommand):
             last_post_gray_author_id=Subquery(gray_visible.values("author_id")[:1]),
         )
 
-        # --- Update forum counters (recursive, like phpBB) ---
-        self.stdout.write("Aktualizuję liczniki forów (rekurencyjnie)…")
+        # --- Update board counters (recursive, like phpBB) ---
+        self.stdout.write("Aktualizuję liczniki działów (rekurencyjnie)…")
         totals = compute_recursive_counts()
         last_posts = compute_recursive_last_posts()
-        for forum in Forum.objects.all():
-            tc, pc = totals[forum.id]
-            forum.topic_count = tc
-            forum.post_count  = pc
-            lp = last_posts.get(forum.id)
-            forum.last_post    = lp
-            forum.last_post_at = lp.created_at if lp else None
-            forum.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
+        for board in Board.objects.all():
+            tc, pc = totals[board.id]
+            board.topic_count = tc
+            board.post_count  = pc
+            lp = last_posts.get(board.id)
+            board.last_post    = lp
+            board.last_post_at = lp.created_at if lp else None
+            board.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
 
         # --- Recalculate per-user post counters from imported posts ---
         self.stdout.write("Przeliczam liczbę postów użytkowników…")
@@ -480,5 +480,5 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Gotowe. Wątki: {topics_created}, Posty: {posts_created}"
             + (f", Naprawione BBCode/linki: {repaired_posts}" if repaired_posts else "")
-            + (f", Pominięte (brak forum): {skipped_forum}" if skipped_forum else "")
+            + (f", Pominięte (brak działu): {skipped_board}" if skipped_board else "")
         ))

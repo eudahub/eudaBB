@@ -4,7 +4,7 @@
 {% block content %}
 <p class="breadcrumb">
   <a href="/">Forum</a> ›
-  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'board_detail' topic.board.pk %}">{{ topic.board.title }}</a> ›
   <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
   Edycja postu #{{ post.post_order }}
 </p>

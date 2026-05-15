@@ -7,7 +7,7 @@ Usage:
 Options:
     --clear   Delete all existing sections and forums before import.
 
-The command handles subforum nesting (parent_forum_id) and runs in two
+The command handles subforum nesting (parent_board_id) and runs in two
 passes so parents always exist before children.
 """
 
@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from django.core.management.base import BaseCommand, CommandError
 
-from board.models import Forum, Section
+from board.models import Board, Section
 
 _UTC = ZoneInfo("UTC")
 
@@ -52,7 +52,7 @@ class Command(BaseCommand):
             raise CommandError(f"Cannot open {db_path}: {e}")
 
         if options["clear"]:
-            Forum.objects.all().delete()
+            Board.objects.all().delete()
             Section.objects.all().delete()
             self.stdout.write("Cleared existing sections and forums.")
 
@@ -77,43 +77,43 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Sections: {len(section_map)}")
 
-        # --- Forums (two passes for parent/child) ---
-        # Używamy kolumny "order" jeśli istnieje, fallback na forum_id
-        forum_cols = {r[1] for r in conn.execute("PRAGMA table_info(forums)").fetchall()}
-        order_col = '"order"' if "order" in forum_cols else "forum_id"
-        has_last_post_at = "last_post_at" in forum_cols
+        # --- Boards (two passes for parent/child) ---
+        # Używamy kolumny "order" jeśli istnieje, fallback na board_id
+        board_cols = {r[1] for r in conn.execute("PRAGMA table_info(boards)").fetchall()}
+        order_col = '"order"' if "order" in board_cols else "board_id"
+        has_last_post_at = "last_post_at" in board_cols
         last_post_at_col = ", last_post_at" if has_last_post_at else ""
         # Note: topic_count, post_count are NOT imported — maintained by the app.
         # Note: moderator_names, last_post_author, last_post_author_url, last_post_url
-        # have no corresponding Django Forum model fields — they are not imported.
-        forums = conn.execute(
-            f"SELECT forum_id, section_id, parent_forum_id, title, description, "
+        # have no corresponding Django Board model fields — they are not imported.
+        boards = conn.execute(
+            f"SELECT board_id, section_id, parent_board_id, title, description, "
             f"visibility AS visibility_class, {order_col} AS display_order"
             f"{last_post_at_col} "
-            f"FROM forums ORDER BY forum_id"
+            f"FROM boards ORDER BY board_id"
         ).fetchall()
 
-        forum_map = {}  # source forum_id → Forum instance
+        board_map = {}  # source board_id → Board instance
 
         def get_section(row):
             """Return Section for this forum, falling back to parent's section."""
             if row["section_id"] and row["section_id"] in section_map:
                 return section_map[row["section_id"]]
-            if row["parent_forum_id"] and row["parent_forum_id"] in forum_map:
-                return forum_map[row["parent_forum_id"]].section
+            if row["parent_board_id"] and row["parent_board_id"] in board_map:
+                return board_map[row["parent_board_id"]].section
             # Last resort: first section
             return next(iter(section_map.values()))
 
         def import_row(row):
             parent = None
-            if row["parent_forum_id"]:
-                parent = forum_map.get(row["parent_forum_id"])
+            if row["parent_board_id"]:
+                parent = board_map.get(row["parent_board_id"])
                 if parent is None:
                     return False  # parent not yet imported
 
             section = get_section(row)
             last_post_at_val = _dt(row["last_post_at"]) if has_last_post_at else None
-            forum, created = Forum.objects.get_or_create(
+            board, created = Board.objects.get_or_create(
                 title=row["title"],
                 section=section,
                 defaults={
@@ -127,19 +127,19 @@ class Command(BaseCommand):
             )
             if not created:
                 update_fields = []
-                if forum.order != row["display_order"]:
-                    forum.order = row["display_order"]
+                if board.order != row["display_order"]:
+                    board.order = row["display_order"]
                     update_fields.append("order")
                 if has_last_post_at:
-                    forum.last_post_at = last_post_at_val
+                    board.last_post_at = last_post_at_val
                     update_fields.append("last_post_at")
                 if update_fields:
-                    forum.save(update_fields=update_fields)
-            forum_map[row["forum_id"]] = forum
+                    board.save(update_fields=update_fields)
+            board_map[row["board_id"]] = board
             return True
 
-        # Pass 1: forums without parents (or with already-imported parents)
-        remaining = list(forums)
+        # Pass 1: boards without parents (or with already-imported parents)
+        remaining = list(boards)
         max_passes = 10
         for _ in range(max_passes):
             if not remaining:
@@ -156,5 +156,5 @@ class Command(BaseCommand):
             remaining = still_remaining
 
         conn.close()
-        self.stdout.write(f"Forums imported: {len(forum_map)}")
+        self.stdout.write(f"Boards imported: {len(board_map)}")
         self.stdout.write(self.style.SUCCESS("Done."))

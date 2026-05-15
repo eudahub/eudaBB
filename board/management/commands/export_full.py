@@ -11,7 +11,7 @@ Nazwy kolumn zgodne ze standardem archiwum sfinia/phpBB tam gdzie to możliwe:
   - author_name zamiast author_id/author FK
   - content zamiast content_bbcode
   - www zamiast website
-  - parent_forum_id zamiast parent_id
+  - parent_board_id zamiast parent_id
 
 Użycie:
     python manage.py export_full /path/to/output.db
@@ -27,7 +27,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 
 from board.models import (
-    User, Section, Forum, Topic, Post,
+    User, Section, Board, Topic, Post,
     Poll, PollOption, PollVote,
     Checklist, ChecklistCategory, ChecklistItem, ChecklistUpvote, ChecklistComment,
     QuoteReference,
@@ -71,7 +71,7 @@ class Command(BaseCommand):
         )
 
         all_sections = list(Section.objects.order_by("order", "pk"))
-        all_forums   = list(Forum.objects.select_related("section", "parent").order_by("section_id", "order", "pk"))
+        all_boards   = list(Board.objects.select_related("section", "parent").order_by("section_id", "order", "pk"))
 
         users = list(
             User.objects.exclude(is_temporary=True).exclude(is_root=True).order_by("pk")
@@ -81,7 +81,7 @@ class Command(BaseCommand):
             Topic.objects
             .filter(is_temporary=False, is_pending=False)
             .exclude(author_id__in=temp_user_ids)
-            .select_related("author", "forum")
+            .select_related("author", "board")
             .prefetch_related("posts")
             .order_by("pk")
         )
@@ -149,11 +149,11 @@ class Command(BaseCommand):
         for s in all_sections:
             out.execute('INSERT INTO sections VALUES (?,?,?)', (s.pk, s.title, s.order))
 
-        # --- forums (archive schema) ---
-        out.execute("""CREATE TABLE forums (
-            forum_id INTEGER PRIMARY KEY,
+        # --- boards (archive schema) ---
+        out.execute("""CREATE TABLE boards (
+            board_id INTEGER PRIMARY KEY,
             section_id INTEGER,
-            parent_forum_id INTEGER,
+            parent_board_id INTEGER,
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             "order" INTEGER NOT NULL DEFAULT 0,
@@ -162,8 +162,8 @@ class Command(BaseCommand):
             visibility INTEGER NOT NULL DEFAULT 0,
             blog_of TEXT NOT NULL DEFAULT ''
         )""")
-        for f in all_forums:
-            out.execute('INSERT INTO forums VALUES (?,?,?,?,?,?,?,?,?,?)',
+        for f in all_boards:
+            out.execute('INSERT INTO boards VALUES (?,?,?,?,?,?,?,?,?,?)',
                 (f.pk, f.section_id, f.parent_id, f.title, f.description,
                  f.order, f.access_level, f.archive_level,
                  f.access_level, ""))
@@ -191,7 +191,7 @@ class Command(BaseCommand):
         # --- topics (archive schema) ---
         out.execute("""CREATE TABLE topics (
             topic_id INTEGER PRIMARY KEY,
-            forum_id INTEGER NOT NULL,
+            board_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             topic_type TEXT NOT NULL DEFAULT '',
             reply_count INTEGER NOT NULL DEFAULT 0,
@@ -212,7 +212,7 @@ class Command(BaseCommand):
             last_post_author = last_post.author.username if last_post and last_post.author else ""
             has_poll = 1 if t.pk in topic_poll_ids else (2 if t.pk in topic_cl_ids else 0)
             out.execute('INSERT INTO topics VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                (t.pk, t.forum_id, t.title,
+                (t.pk, t.board_id, t.title,
                  t.topic_type or "",
                  reply_count, t.view_count or 0,
                  t.author.username if t.author else "",
@@ -223,7 +223,7 @@ class Command(BaseCommand):
         out.execute("""CREATE TABLE posts (
             post_id INTEGER PRIMARY KEY,
             topic_id INTEGER NOT NULL,
-            forum_id INTEGER,
+            board_id INTEGER,
             topic_title TEXT,
             author_name TEXT,
             created_at TEXT,
@@ -233,7 +233,7 @@ class Command(BaseCommand):
         )""")
         for p in all_posts:
             out.execute('INSERT INTO posts VALUES (?,?,?,?,?,?,?,?,?)',
-                (p.pk, p.topic_id, p.topic.forum_id,
+                (p.pk, p.topic_id, p.topic.board_id,
                  p.topic.title,
                  p.author.username if p.author else "",
                  _dt(p.created_at),
@@ -387,7 +387,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Eksport: {output_path}\n"
             f"  Sekcje:       {len(all_sections)}\n"
-            f"  Fora:         {len(all_forums)}\n"
+            f"  Działy:       {len(all_boards)}\n"
             f"  Użytkownicy:  {len(users)}\n"
             f"  Topiki:       {len(all_topics)}\n"
             f"  Posty:        {len(all_posts)}\n"

@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
-from .models import User, Section, Forum, Topic, Post
+from .models import User, Section, Board, Topic, Post
 
 
 @admin.register(User)
@@ -45,23 +45,23 @@ class SectionAdmin(admin.ModelAdmin):
     list_display = ["title", "order"]
 
 
-@admin.register(Forum)
-class ForumAdmin(admin.ModelAdmin):
+@admin.register(Board)
+class BoardAdmin(admin.ModelAdmin):
     list_display = ["title", "section", "parent", "order", "topic_count", "post_count", "access_level", "archive_level"]
     list_filter = ["access_level", "archive_level", "section"]
 
 
 @admin.register(Topic)
 class TopicAdmin(admin.ModelAdmin):
-    list_display = ["title", "forum", "author", "topic_type", "is_locked", "reply_count", "view_count", "created_at"]
-    list_filter = ["forum", "topic_type", "is_locked"]
+    list_display = ["title", "board", "author", "topic_type", "is_locked", "reply_count", "view_count", "created_at"]
+    list_filter = ["board", "topic_type", "is_locked"]
     search_fields = ["title"]
 
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
     list_display = ["__str__", "author", "topic", "created_at", "post_order"]
-    list_filter = ["topic__forum"]
+    list_filter = ["topic__board"]
     search_fields = ["content_bbcode", "author__username"]
 
 

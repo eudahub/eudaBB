@@ -14,7 +14,7 @@
   {% for topic in page.object_list %}
     <div class="post-box" style="margin-bottom:.6rem;">
       <div class="post-header">
-        <span>{{ topic.forum.title }}</span>
+        <span>{{ topic.board.title }}</span>
         <span>{% if topic.last_post %}{{ topic.last_post.created_at|date:"d.m.Y H:i" }}{% else %}{{ topic.last_post_at|date:"d.m.Y H:i" }}{% endif %}</span>
       </div>
       <div style="padding:.45rem .6rem;">

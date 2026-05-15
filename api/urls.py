@@ -70,7 +70,7 @@ urlpatterns = [
 
     # ---- Forum read ----
     path("categories",                           CategoriesView.as_view(),       name="categories"),
-    path("categories/<int:forum_id>/threads",    ThreadListView.as_view(),       name="thread_list"),
+    path("categories/<int:board_id>/threads",    ThreadListView.as_view(),       name="thread_list"),
     path("threads/<int:topic_id>/posts",         PostListView.as_view(),         name="post_list"),
     path("posts/<int:post_id>",                  PostDetailView.as_view(),       name="post_detail"),
     path("users/<int:user_id>/profile",          UserProfileView.as_view(),      name="user_profile"),

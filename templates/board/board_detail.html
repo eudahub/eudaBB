@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}{{ forum.title }}{% endblock %}
+{% block title %}{{ board.title }}{% endblock %}
 
 {% block content %}
-<p class="breadcrumb"><a href="/">Forum</a> › {{ forum.title }}</p>
-<h2>{{ forum.title }}</h2>
+<p class="breadcrumb"><a href="/">Forum</a> › {{ board.title }}</p>
+<h2>{{ board.title }}</h2>
 
-{% with subforums=forum.subforums.all %}
-{% if subforums %}
+{% with subboards=board.subboards.all %}
+{% if subboards %}
 <table>
   <thead><tr><th>Podforum</th><th>Wątki</th><th>Posty</th><th>Ostatni post</th></tr></thead>
   <tbody>
-  {% for sub in subforums %}
+  {% for sub in subboards %}
   <tr>
-    <td><a href="{% url 'forum_detail' sub.pk %}"><strong>{{ sub.title }}</strong></a>
+    <td><a href="{% url 'board_detail' sub.pk %}"><strong>{{ sub.title }}</strong></a>
       {% if sub.description %}<br><small>{{ sub.description }}</small>{% endif %}</td>
     <td>{{ sub.topic_count }}</td>
     <td>{{ sub.post_count }}</td>
@@ -25,7 +25,7 @@
 {% endwith %}
 
 {% if user.is_authenticated %}
-  <p><a href="{% url 'new_topic' forum.pk %}" role="button">+ Nowy wątek</a></p>
+  <p><a href="{% url 'new_topic' board.pk %}" role="button">+ Nowy wątek</a></p>
 {% endif %}
 
 <table>
@@ -60,7 +60,7 @@
       </td>
     </tr>
     {% empty %}
-    <tr><td colspan="5"><em>Brak wątków w tym forum.</em></td></tr>
+    <tr><td colspan="5"><em>Brak wątków w tym dziale.</em></td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -21,7 +21,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.conf import settings
 
 from .models import (
-    Section, Forum, Topic, Post, User, ActivationToken, BlockedIP,
+    Section, Board, Topic, Post, User, ActivationToken, BlockedIP,
     PasswordResetCode, PrivateMessage, PrivateMessageBox, PostLike,
     PostSearchIndex, SiteConfig, Poll, PollOption, PollVote,
     TopicParticipant, TopicReadState, IgnoredUser,
@@ -35,7 +35,7 @@ from .forms import (
 from .email_utils import mask_email, mask_email_variants
 from .spam_utils import (
     get_author_spam_filter,
-    filter_forums,
+    filter_boards,
     get_ignored_user_ids,
     get_topic_visibility_filter,
 )
@@ -75,13 +75,13 @@ def _update_topic_stats(topic: Topic, last_post: Post) -> None:
     topic.save(update_fields=update_fields)
 
 
-def _update_forum_stats(forum: Forum, last_post: Post) -> None:
-    """Recalculate and save cached counters on a forum after a new post."""
-    forum.post_count = Post.objects.filter(topic__forum=forum, is_pending=False).count()
-    forum.topic_count = forum.topics.filter(is_pending=False).count()
-    forum.last_post = last_post
-    forum.last_post_at = last_post.created_at
-    forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
+def _update_board_stats(board: Board, last_post: Post) -> None:
+    """Recalculate and save cached counters on a board after a new post."""
+    board.post_count = Post.objects.filter(topic__board=board, is_pending=False).count()
+    board.topic_count = board.topics.filter(is_pending=False).count()
+    board.last_post = last_post
+    board.last_post_at = last_post.created_at
+    board.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
 
 
 def _increment_user_post_count(user) -> None:
@@ -238,7 +238,7 @@ def _annotate_topics_with_unread_state(user, topics, posts_per_page: int):
 
 def _get_global_pinned_topic_posts(exclude_topic=None):
     qs = (
-        Post.objects.select_related("author", "topic", "topic__forum")
+        Post.objects.select_related("author", "topic", "topic__board")
         .filter(
             post_order=1,
             topic__topic_type__in=[
@@ -246,7 +246,7 @@ def _get_global_pinned_topic_posts(exclude_topic=None):
                 Topic.TopicType.ANNOUNCEMENT,
             ],
         )
-        .order_by("topic__forum__title", "-topic__topic_type", "topic__title", "topic_id")
+        .order_by("topic__board__title", "-topic__topic_type", "topic__title", "topic_id")
     )
     if exclude_topic is not None:
         qs = qs.exclude(topic=exclude_topic)
@@ -441,16 +441,16 @@ def index(request):
     user_access = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     is_staff = request.user.is_staff if request.user.is_authenticated else False
     sections = Section.objects.prefetch_related(
-        "forums",
-        "forums__last_post",
-        "forums__last_post__author",
+        "boards",
+        "boards__last_post",
+        "boards__last_post__author",
     ).all()
     # Filter forums per-section based on user's spam_class
     filtered_sections = []
     for section in sections:
-        visible = list(filter_forums(section.forums.all(), request.user))
+        visible = list(filter_boards(section.boards.all(), request.user))
         if visible:
-            section.visible_forums = visible
+            section.visible_boards = visible
             filtered_sections.append(section)
     return render(request, "board/index.html", {
         "sections": filtered_sections,
@@ -459,15 +459,15 @@ def index(request):
     })
 
 
-def forum_detail(request, forum_id):
+def board_detail(request, board_id):
     """Topic list for a single forum, paginated."""
-    forum = get_object_or_404(Forum, pk=forum_id)
-    from .spam_utils import get_max_forum_level
-    if forum.archive_level > get_max_forum_level(request.user):
+    board = get_object_or_404(Board, pk=board_id)
+    from .spam_utils import get_max_board_level
+    if board.archive_level > get_max_board_level(request.user):
         return HttpResponseForbidden("Brak dostępu do tego forum.")
     ts_field, ignore_q = get_topic_visibility_filter(request.user)
     topics_qs = (
-        forum.topics
+        board.topics
         .select_related("author", "last_post", "last_post__author")
         .filter(**{f"{ts_field}__isnull": False})
         .exclude(ignore_q)
@@ -479,7 +479,7 @@ def forum_detail(request, forum_id):
         page.object_list,
         getattr(settings, "POSTS_PER_PAGE", 20),
     )
-    return render(request, "board/forum_detail.html", {"forum": forum, "page": page})
+    return render(request, "board/board_detail.html", {"board": board, "page": page})
 
 
 def topic_detail(request, topic_id):
@@ -552,7 +552,7 @@ def topic_detail(request, topic_id):
 
     is_mod = (
         request.user.is_authenticated
-        and _is_moderator(request.user, topic.forum)
+        and _is_moderator(request.user, topic.board)
     )
     is_admin_view = request.user.is_authenticated and request.user.role >= User.ROLE_ADMIN
 
@@ -563,7 +563,7 @@ def topic_detail(request, topic_id):
     editable_post_ids = set()
     is_blog_owner = (
         request.user.is_authenticated
-        and topic.forum.blog_of_id == request.user.pk
+        and topic.board.blog_of_id == request.user.pk
     )
     if request.user.is_authenticated:
         cfg_edit = SiteConfig.get()
@@ -692,7 +692,7 @@ def topic_detail(request, topic_id):
 
     return render(request, "board/topic_detail.html", {
         "topic": topic,
-        "forum": topic.forum,
+        "board": topic.board,
         "page": page,
         "reply_form": reply_form,
         "visible_post_ids": visible_post_ids,
@@ -835,11 +835,11 @@ def toggle_ignore_user(request, user_id):
 # ---------------------------------------------------------------------------
 
 @login_required
-def new_topic(request, forum_id):
+def new_topic(request, board_id):
     """Create a new topic with its first post."""
     if request.user.is_root:
         return HttpResponseForbidden("Konto root nie może tworzyć postów.")
-    forum = get_object_or_404(Forum, pk=forum_id)
+    board = get_object_or_404(Board, pk=board_id)
 
     is_admin = request.user.role >= User.ROLE_ADMIN
     if request.method == "POST":
@@ -850,7 +850,7 @@ def new_topic(request, forum_id):
             if not flood["allowed"]:
                 messages.error(request, str(flood["wait_seconds"]), extra_tags="antiflood")
                 return render(request, "board/new_topic.html", {
-                    "forum": forum, "form": form, "is_admin": is_admin,
+                    "board": board, "form": form, "is_admin": is_admin,
                     "pinned_topic_posts": _get_global_pinned_topic_posts(),
                     "poll_options_text": request.POST.get("poll_options_text", ""),
                     "poll_panel_open": False,
@@ -861,7 +861,7 @@ def new_topic(request, forum_id):
             if is_country_blocked(_get_client_ip(request)):
                 messages.error(request, "Tworzenie wątków jest niedostępne z Twojej lokalizacji.")
                 return render(request, "board/new_topic.html", {
-                    "forum": forum, "form": form, "is_admin": is_admin,
+                    "board": board, "form": form, "is_admin": is_admin,
                     "pinned_topic_posts": _get_global_pinned_topic_posts(),
                     "poll_options_text": request.POST.get("poll_options_text", ""),
                     "poll_panel_open": False,
@@ -872,7 +872,7 @@ def new_topic(request, forum_id):
             from .moderation_windows import should_hold_for_moderation
             pending = should_hold_for_moderation(request.user)
             topic = Topic.objects.create(
-                forum=forum,
+                board=board,
                 title=form.cleaned_data["title"],
                 author=request.user,
                 is_temporary=temp,
@@ -892,9 +892,9 @@ def new_topic(request, forum_id):
                     request,
                     "Twój wątek trafił do kolejki moderacji i będzie widoczny po zatwierdzeniu.",
                 )
-                return redirect("forum_detail", forum_id=forum.pk)
+                return redirect("board_detail", board_id=board.pk)
             _update_topic_stats(topic, post)
-            _update_forum_stats(forum, post)
+            _update_board_stats(board, post)
             _increment_user_post_count(request.user)
             _increment_topic_participant(topic, request.user, post)
             poll_data = form.cleaned_data.get("poll_data")
@@ -960,7 +960,7 @@ def new_topic(request, forum_id):
     )
 
     return render(request, "board/new_topic.html", {
-        "forum": forum,
+        "board": board,
         "form": form,
         "is_admin": is_admin,
         "pinned_topic_posts": _get_global_pinned_topic_posts(),
@@ -996,10 +996,10 @@ def reply(request, topic_id):
                 topic.last_post = merged
                 topic.last_post_at = now
                 topic.save(update_fields=["last_post", "last_post_at"])
-                forum = topic.forum
-                forum.last_post = merged
-                forum.last_post_at = now
-                forum.save(update_fields=["last_post", "last_post_at"])
+                board = topic.board
+                board.last_post = merged
+                board.last_post_at = now
+                board.save(update_fields=["last_post", "last_post_at"])
                 posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
                 last_page = (topic.posts.filter(is_pending=False).count() - 1) // posts_per_page + 1
                 return redirect(f"/topic/{topic.pk}/?page={last_page}#post-{merged.pk}")
@@ -1032,7 +1032,7 @@ def reply(request, topic_id):
                 )
                 return redirect("topic_detail", topic_id=topic.pk)
             _update_topic_stats(topic, post)
-            _update_forum_stats(topic.forum, post)
+            _update_board_stats(topic.board, post)
             _increment_user_post_count(request.user)
             _increment_topic_participant(topic, request.user, post)
 
@@ -1121,13 +1121,13 @@ def delete_post(request, post_id):
     if request.method != "POST":
         return redirect("index")
 
-    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    post = get_object_or_404(Post.objects.select_related("author", "topic__board"), pk=post_id)
     topic = post.topic
-    forum = topic.forum
+    board = topic.board
     user = request.user
 
     is_admin = user.role >= User.ROLE_ADMIN
-    is_mod = _is_moderator(user, forum)
+    is_mod = _is_moderator(user, board)
     author_role = post.author.role if post.author else User.ROLE_USER
 
     if is_admin:
@@ -1152,17 +1152,17 @@ def delete_post(request, post_id):
             if post.author and not post.is_pending:
                 from .active_days import decrement_if_last_on_day
                 decrement_if_last_on_day(post.author, post)
-            forum_id = forum.pk
+            board_id = board.pk
             topic.delete()
             messages.success(request, "Usunięto ostatni post — wątek został usunięty.")
-            forum.refresh_from_db()
-            forum.post_count = Post.objects.filter(topic__forum=forum, is_pending=False).count()
-            forum.topic_count = forum.topics.filter(is_pending=False).count()
-            new_last = Post.objects.filter(topic__forum=forum, is_pending=False).order_by("-created_at").first()
-            forum.last_post = new_last
-            forum.last_post_at = new_last.created_at if new_last else None
-            forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
-            return redirect("forum_detail", forum_id=forum_id)
+            board.refresh_from_db()
+            board.post_count = Post.objects.filter(topic__board=board, is_pending=False).count()
+            board.topic_count = board.topics.filter(is_pending=False).count()
+            new_last = Post.objects.filter(topic__board=board, is_pending=False).order_by("-created_at").first()
+            board.last_post = new_last
+            board.last_post_at = new_last.created_at if new_last else None
+            board.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
+            return redirect("board_detail", board_id=board_id)
 
         if post.post_order == 1:
             # First post with siblings — cannot delete, only hide
@@ -1188,11 +1188,11 @@ def delete_post(request, post_id):
             topic.last_post_at = new_last_post.created_at
             topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
         # Update forum stats
-        forum.post_count = Post.objects.filter(topic__forum=forum, is_pending=False).count()
-        new_forum_last = Post.objects.filter(topic__forum=forum, is_pending=False).order_by("-created_at").first()
-        forum.last_post = new_forum_last
-        forum.last_post_at = new_forum_last.created_at if new_forum_last else None
-        forum.save(update_fields=["post_count", "last_post", "last_post_at"])
+        board.post_count = Post.objects.filter(topic__board=board, is_pending=False).count()
+        new_board_last = Post.objects.filter(topic__board=board, is_pending=False).order_by("-created_at").first()
+        board.last_post = new_board_last
+        board.last_post_at = new_board_last.created_at if new_board_last else None
+        board.save(update_fields=["post_count", "last_post", "last_post_at"])
         messages.success(request, "Post usunięty.")
 
     return redirect("topic_detail", topic_id=topic.pk)
@@ -1200,9 +1200,9 @@ def delete_post(request, post_id):
 
 @login_required
 def edit_post(request, post_id):
-    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    post = get_object_or_404(Post.objects.select_related("author", "topic__board"), pk=post_id)
     topic = post.topic
-    forum = topic.forum
+    board = topic.board
     user = request.user
 
     from .user_lock import user_is_locked
@@ -1212,8 +1212,8 @@ def edit_post(request, post_id):
         return redirect("topic_detail", topic_id=topic.pk)
 
     is_admin = user.role >= User.ROLE_ADMIN
-    is_mod = _is_moderator(user, forum)
-    is_blog_owner = forum.blog_of_id == user.pk
+    is_mod = _is_moderator(user, board)
+    is_blog_owner = board.blog_of_id == user.pk
     author_role = post.author.role if post.author else User.ROLE_USER
     own = post.author_id == user.pk
 
@@ -1312,9 +1312,9 @@ def delete_post_part(request, post_id, part_index):
     if request.method != "POST":
         return redirect("index")
 
-    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    post = get_object_or_404(Post.objects.select_related("author", "topic__board"), pk=post_id)
     topic = post.topic
-    forum = topic.forum
+    board = topic.board
     user = request.user
 
     merge_log = post.merge_log or []
@@ -1329,8 +1329,8 @@ def delete_post_part(request, post_id, part_index):
 
     # Permission: same rules as edit_post
     is_admin = user.role >= User.ROLE_ADMIN
-    is_mod = _is_moderator(user, forum)
-    is_blog_owner = forum.blog_of_id == user.pk
+    is_mod = _is_moderator(user, board)
+    is_blog_owner = board.blog_of_id == user.pk
     own = post.author_id == user.pk
     author_role = post.author.role if post.author else User.ROLE_USER
 
@@ -1366,8 +1366,8 @@ def delete_post_part(request, post_id, part_index):
 
 @login_required
 def edit_poll(request, topic_id):
-    topic = get_object_or_404(Topic.objects.select_related("forum"), pk=topic_id)
-    forum = topic.forum
+    topic = get_object_or_404(Topic.objects.select_related("board"), pk=topic_id)
+    board = topic.board
     poll = getattr(topic, "poll", None)
     user = request.user
 
@@ -1380,7 +1380,7 @@ def edit_poll(request, topic_id):
         return redirect("topic_detail", topic_id=topic.pk)
 
     is_admin = user.role >= User.ROLE_ADMIN
-    is_mod = _is_moderator(user, forum)
+    is_mod = _is_moderator(user, board)
     is_author = topic.author_id == user.pk
 
     if not (is_admin or is_mod or is_author):
@@ -1486,7 +1486,7 @@ def preview_post(request, topic_id):
 
 
 @login_required
-def preview_new_topic(request, forum_id):
+def preview_new_topic(request, board_id):
     """AJAX: validate and render BBCode text for the new-topic editor.
 
     Also validates poll options (if poll_enabled=1) and returns poll preview HTML.
@@ -1499,7 +1499,7 @@ def preview_new_topic(request, forum_id):
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
 
-    get_object_or_404(Forum, pk=forum_id)
+    get_object_or_404(Board, pk=board_id)
     text = request.POST.get("content", "")
     repaired, changes, errors = validate_post_content(text)
 
@@ -1899,7 +1899,7 @@ def _parse_search_bound(value: str, *, is_end: bool):
 @login_required
 def search(request):
     raw_query = (request.GET.get("q") or "").strip()
-    forum_id_raw = (request.GET.get("forum_id") or "").strip()
+    board_id_raw = (request.GET.get("board_id") or "").strip()
     author_query_raw = (request.GET.get("author") or "").strip()
     date_from_raw = (request.GET.get("date_from") or "").strip()
     date_to_raw = (request.GET.get("date_to") or "").strip()
@@ -1915,8 +1915,8 @@ def search(request):
         search_filter = "all"
     page_num = request.GET.get("page")
 
-    indexed_forums = Forum.objects.filter(search_posts__isnull=False).distinct().order_by("title")
-    selected_forum = None
+    indexed_boards = Board.objects.filter(search_posts__isnull=False).distinct().order_by("title")
+    selected_board = None
     selected_author = None
     parsed = {"phrases": [], "term_groups": [], "skipped_terms": [], "expanded_query": "", "has_expansion": False}
     page = None
@@ -1934,10 +1934,10 @@ def search(request):
     pagination_query.pop("page", None)
     page_query = pagination_query.urlencode()
 
-    if forum_id_raw:
+    if board_id_raw:
         try:
-            selected_forum = indexed_forums.get(pk=int(forum_id_raw))
-        except (ValueError, Forum.DoesNotExist):
+            selected_board = indexed_boards.get(pk=int(board_id_raw))
+        except (ValueError, Board.DoesNotExist):
             info_message = "Wybrane forum nie istnieje w indeksie wyszukiwania."
 
     if author_query_raw and not info_message:
@@ -1973,18 +1973,18 @@ def search(request):
             else:
                 info_message = "Podaj szukany tekst."
         if not info_message:
-            max_forum_level = getattr(request.user, "archive_access", 0)
+            max_board_level = getattr(request.user, "archive_access", 0)
             if search_mode == "topics":
                 ts_field, ignore_q = get_topic_visibility_filter(request.user)
                 qs = (
                     Topic.objects
-                    .select_related("forum", "author", "last_post", "last_post__author", "poll")
-                    .filter(forum__archive_level__lte=max_forum_level)
+                    .select_related("board", "author", "last_post", "last_post__author", "poll")
+                    .filter(board__archive_level__lte=max_board_level)
                     .filter(**{f"{ts_field}__isnull": False})
                     .exclude(ignore_q)
                 )
-                if selected_forum is not None:
-                    qs = qs.filter(forum=selected_forum)
+                if selected_board is not None:
+                    qs = qs.filter(board=selected_board)
                 if selected_author is not None:
                     qs = qs.filter(author=selected_author)
                 if date_from is not None:
@@ -2021,12 +2021,12 @@ def search(request):
             else:
                 qs = (
                     PostSearchIndex.objects
-                    .select_related("post", "author", "topic", "forum")
-                    .filter(forum__archive_level__lte=max_forum_level)
+                    .select_related("post", "author", "topic", "board")
+                    .filter(board__archive_level__lte=max_board_level)
                     .filter(get_author_spam_filter(request.user))
                 )
-                if selected_forum is not None:
-                    qs = qs.filter(forum=selected_forum)
+                if selected_board is not None:
+                    qs = qs.filter(board=selected_board)
                 if selected_author is not None:
                     qs = qs.filter(author=selected_author)
                 if date_from is not None:
@@ -2080,8 +2080,8 @@ def search(request):
                         )
 
     return render(request, "board/search.html", {
-        "indexed_forums": indexed_forums,
-        "selected_forum": selected_forum,
+        "indexed_boards": indexed_boards,
+        "selected_board": selected_board,
         "selected_author": selected_author,
         "author_query": author_query_raw,
         "date_from_raw": date_from_raw,
@@ -2097,10 +2097,10 @@ def search(request):
 
 
 def new_posts(request):
-    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    max_board_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     posts = (
-        Post.objects.select_related("author", "topic", "topic__forum")
-        .filter(topic__forum__archive_level__lte=max_forum_level)
+        Post.objects.select_related("author", "topic", "topic__board")
+        .filter(topic__board__archive_level__lte=max_board_level)
         .filter(get_author_spam_filter(request.user))
         .order_by("-created_at", "-pk")
     )
@@ -2118,11 +2118,11 @@ def new_posts(request):
 
 
 def new_topics(request):
-    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    max_board_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     ts_field, ignore_q = get_topic_visibility_filter(request.user)
     topics = (
-        Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
-        .filter(forum__archive_level__lte=max_forum_level)
+        Topic.objects.select_related("author", "board", "last_post", "last_post__author")
+        .filter(board__archive_level__lte=max_board_level)
         .filter(**{f"{ts_field}__isnull": False})
         .exclude(ignore_q)
         .order_by("-created_at", "-pk")
@@ -2144,14 +2144,14 @@ def my_topics(request):
     participations = (
         TopicParticipant.objects.select_related(
             "topic",
-            "topic__forum",
+            "topic__board",
             "topic__author",
             "topic__last_post",
             "topic__last_post__author",
         )
         .filter(
             user=request.user,
-            topic__forum__archive_level__lte=request.user.archive_access,
+            topic__board__archive_level__lte=request.user.archive_access,
         )
         .order_by("-last_post_at", "-topic_id")
     )
@@ -2184,10 +2184,10 @@ def user_list(request):
 
 
 def unanswered_topics(request):
-    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    max_board_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     topics = (
-        Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
-        .filter(forum__archive_level__lte=max_forum_level, reply_count=0)
+        Topic.objects.select_related("author", "board", "last_post", "last_post__author")
+        .filter(board__archive_level__lte=max_board_level, reply_count=0)
         .order_by("-created_at", "-pk")
     )
     page = Paginator(topics, getattr(settings, "TOPICS_PER_PAGE", 30)).get_page(request.GET.get("page"))
@@ -2199,12 +2199,12 @@ def unanswered_topics(request):
 
 @login_required
 def unread_topics(request):
-    max_forum_level = getattr(request.user, "archive_access", 0)
+    max_board_level = getattr(request.user, "archive_access", 0)
     posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
     ts_field, ignore_q = get_topic_visibility_filter(request.user)
     topics = list(
-        Topic.objects.select_related("author", "forum", "last_post", "last_post__author")
-        .filter(forum__archive_level__lte=max_forum_level)
+        Topic.objects.select_related("author", "board", "last_post", "last_post__author")
+        .filter(board__archive_level__lte=max_board_level)
         .exclude(last_post__isnull=True)
         .filter(**{f"{ts_field}__gt": request.user.mark_all_read_at})
         .exclude(ignore_q)
@@ -2862,14 +2862,14 @@ def _retain_until(flagged: bool) -> "datetime":
     return timezone.now() + timedelta(days=days)
 
 
-def _is_moderator(user, forum) -> bool:
+def _is_moderator(user, board) -> bool:
     """True for root, global admins/moderators (role≥1), and forum-specific moderators."""
     if not user.is_authenticated:
         return False
     return (
         user.is_root
         or user.role >= User.ROLE_MODERATOR
-        or forum.moderators.filter(pk=user.pk).exists()
+        or board.moderators.filter(pk=user.pk).exists()
     )
 
 
@@ -2932,9 +2932,9 @@ def flag_post_ip(request, post_id):
     if request.method != "POST":
         return HttpResponseForbidden()
 
-    post = get_object_or_404(Post.objects.select_related("topic__forum"), pk=post_id)
+    post = get_object_or_404(Post.objects.select_related("topic__board"), pk=post_id)
 
-    if not _is_moderator(request.user, post.topic.forum):
+    if not _is_moderator(request.user, post.topic.board):
         return HttpResponseForbidden()
 
     if not post.ip_flagged:
@@ -2952,12 +2952,12 @@ def flag_post_ip(request, post_id):
 @login_required
 def spam_action(request, post_id):
     """Moderator spam panel: delete post, ban user, release nick, flag IP, block domain."""
-    post = get_object_or_404(Post.objects.select_related("author", "topic__forum"), pk=post_id)
+    post = get_object_or_404(Post.objects.select_related("author", "topic__board"), pk=post_id)
     topic = post.topic
-    forum = topic.forum
+    board = topic.board
     user = request.user
 
-    if not _is_moderator(user, forum):
+    if not _is_moderator(user, board):
         return HttpResponseForbidden()
 
     author = post.author
@@ -3021,12 +3021,12 @@ def spam_action(request, post_id):
                         topic.last_post = new_last
                         topic.last_post_at = new_last.created_at
                         topic.save(update_fields=["reply_count", "last_post", "last_post_at"])
-                forum.post_count = Post.objects.filter(topic__forum=forum).count()
-                forum.topic_count = forum.topics.count()
-                new_forum_last = Post.objects.filter(topic__forum=forum).order_by("-created_at").first()
-                forum.last_post = new_forum_last
-                forum.last_post_at = new_forum_last.created_at if new_forum_last else None
-                forum.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
+                board.post_count = Post.objects.filter(topic__board=board).count()
+                board.topic_count = board.topics.count()
+                new_board_last = Post.objects.filter(topic__board=board).order_by("-created_at").first()
+                board.last_post = new_board_last
+                board.last_post_at = new_board_last.created_at if new_board_last else None
+                board.save(update_fields=["post_count", "topic_count", "last_post", "last_post_at"])
 
             # 2. Flag IP as dangerous
             if do_flag_ip and not do_delete:
@@ -3074,7 +3074,7 @@ def spam_action(request, post_id):
 
         messages.success(request, "Akcja antyspamowa wykonana.")
         if topic_deleted or do_release_nick:
-            return redirect("forum_detail", forum_id=forum.pk)
+            return redirect("board_detail", board_id=board.pk)
         return redirect("topic_detail", topic_id=topic.pk)
 
     ban_choices = [
@@ -3133,19 +3133,19 @@ def moderation_queue(request):
             posts = list(
                 Post.objects
                 .filter(pk__in=post_ids, is_pending=True)
-                .select_related("author", "topic__forum")
+                .select_related("author", "topic__board")
             )
             with transaction.atomic():
                 for post in posts:
                     post.is_pending = False
                     post.save(update_fields=["is_pending"])
                     topic = post.topic
-                    forum = topic.forum
+                    board = topic.board
                     if topic.is_pending:
                         topic.is_pending = False
                         topic.save(update_fields=["is_pending"])
                     _update_topic_stats(topic, post)
-                    _update_forum_stats(forum, post)
+                    _update_board_stats(board, post)
                     if post.author:
                         _increment_user_post_count(post.author)
                         from .active_days import increment_if_new_day
@@ -3196,7 +3196,7 @@ def moderation_queue(request):
     pending_posts = (
         Post.objects
         .filter(is_pending=True)
-        .select_related("author", "topic", "topic__forum")
+        .select_related("author", "topic", "topic__board")
         .order_by("created_at")
     )
     # Group authors for the "release user" action
@@ -4088,7 +4088,7 @@ def post_report(request, post_id):
     from .report_utils import open_report
 
     post = get_object_or_404(
-        Post.objects.select_related("author", "topic__forum"),
+        Post.objects.select_related("author", "topic__board"),
         pk=post_id,
     )
     # Guard: can't report own post; need active_days >= 3
@@ -4131,7 +4131,7 @@ def moderation_reports(request):
     reports = (
         PostReport.objects
         .filter(is_closed=False)
-        .select_related("post__topic__forum", "reporter")
+        .select_related("post__topic__board", "reporter")
         .order_by("created_at")
     )
     return render(request, "board/moderation_reports.html", {"reports": reports})
@@ -4194,13 +4194,13 @@ def toggle_post_like(request, post_id):
 
 def user_likes_received(request, user_id):
     target_user = get_object_or_404(User, pk=user_id)
-    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    max_board_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     likes = (
         PostLike.objects
-        .select_related("user", "post", "post__topic", "post__topic__forum")
+        .select_related("user", "post", "post__topic", "post__topic__board")
         .filter(
             post__author=target_user,
-            post__topic__forum__archive_level__lte=max_forum_level,
+            post__topic__board__archive_level__lte=max_board_level,
         )
         .order_by("-created_at", "-pk")
     )
@@ -4214,13 +4214,13 @@ def user_likes_received(request, user_id):
 
 def user_likes_given(request, user_id):
     target_user = get_object_or_404(User, pk=user_id)
-    max_forum_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
+    max_board_level = getattr(request.user, "archive_access", 0) if request.user.is_authenticated else 0
     likes = (
         PostLike.objects
-        .select_related("post", "post__author", "post__topic", "post__topic__forum")
+        .select_related("post", "post__author", "post__topic", "post__topic__board")
         .filter(
             user=target_user,
-            post__topic__forum__archive_level__lte=max_forum_level,
+            post__topic__board__archive_level__lte=max_board_level,
         )
         .order_by("-created_at", "-pk")
     )
@@ -4309,7 +4309,7 @@ def _preserve_checklist_anon_upvotes(temp_users_qs):
 
 def _cleanup_temporary():
     """Delete temporary users, posts, and topics.  Returns stats dict."""
-    from .models import Forum as _Forum
+    from .models import Board as _Board
 
     # Topics with at least one permanent post survive
     surviving_topic_ids = set(
@@ -4319,9 +4319,9 @@ def _cleanup_temporary():
     )
 
     # Gather affected forum IDs for stat recalculation
-    affected_forum_ids = set(
+    affected_board_ids = set(
         Topic.objects.filter(is_temporary=True)
-        .values_list("forum_id", flat=True)
+        .values_list("board_id", flat=True)
         .distinct()
     )
 
@@ -4369,19 +4369,19 @@ def _cleanup_temporary():
         item.save(update_fields=["upvote_count"])
 
     # Recalculate forum/topic/user stats
-    for forum in _Forum.objects.filter(pk__in=affected_forum_ids):
-        forum.topic_count = forum.topics.count()
-        forum.post_count = Post.objects.filter(topic__forum=forum).count()
+    for board in _Board.objects.filter(pk__in=affected_board_ids):
+        board.topic_count = board.topics.count()
+        board.post_count = Post.objects.filter(topic__board=board).count()
         last = (
-            Post.objects.filter(topic__forum=forum)
+            Post.objects.filter(topic__board=board)
             .order_by("-created_at")
             .first()
         )
-        forum.last_post = last
-        forum.last_post_at = last.created_at if last else None
-        forum.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
+        board.last_post = last
+        board.last_post_at = last.created_at if last else None
+        board.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
 
-    for topic in Topic.objects.filter(forum_id__in=affected_forum_ids):
+    for topic in Topic.objects.filter(board_id__in=affected_board_ids):
         topic.reply_count = max(0, topic.posts.count() - 1)
         last = topic.posts.order_by("-created_at").first()
         topic.last_post = last
@@ -4579,24 +4579,24 @@ def admin_order(request):
     if not request.user.is_root:
         return HttpResponseForbidden()
     sections = Section.objects.order_by("order")
-    top_forums = Forum.objects.filter(parent__isnull=True).order_by("order").select_related("section")
+    top_boards = Board.objects.filter(parent__isnull=True).order_by("order").select_related("section")
     return render(request, "board/admin_order.html", {
         "sections": sections,
-        "top_forums": top_forums,
-        "parent_forum": None,
+        "top_boards": top_boards,
+        "parent_board": None,
     })
 
 
 @login_required
-def admin_order_children(request, forum_id):
+def admin_order_children(request, board_id):
     if not request.user.is_root:
         return HttpResponseForbidden()
-    parent = get_object_or_404(Forum, pk=forum_id)
-    children = Forum.objects.filter(parent=parent).order_by("order")
+    parent = get_object_or_404(Board, pk=board_id)
+    children = Board.objects.filter(parent=parent).order_by("order")
     return render(request, "board/admin_order.html", {
         "sections": None,
-        "top_forums": children,
-        "parent_forum": parent,
+        "top_boards": children,
+        "parent_board": parent,
     })
 
 
@@ -4611,17 +4611,17 @@ def admin_order_move_section(request, pk, direction):
 
 
 @login_required
-def admin_order_move_forum(request, pk, direction):
+def admin_order_move_board(request, pk, direction):
     if not request.user.is_root:
         return HttpResponseForbidden()
     if request.method != "POST":
         return HttpResponseForbidden()
-    forum = get_object_or_404(Forum, pk=pk)
-    parent_id = forum.parent_id
-    _swap_order(Forum, pk, direction, {"parent_id": parent_id})
+    board = get_object_or_404(Board, pk=pk)
+    parent_id = board.parent_id
+    _swap_order(Board, pk, direction, {"parent_id": parent_id})
     # redirect back to the right page
     if parent_id:
-        return redirect("admin_order_children", forum_id=parent_id)
+        return redirect("admin_order_children", board_id=parent_id)
     return redirect("admin_order")
 
 
@@ -4712,7 +4712,7 @@ def set_topic_type(request, topic_id):
     Admins and root can also set ANNOUNCEMENT.
     """
     topic = get_object_or_404(Topic, pk=topic_id)
-    if not _is_moderator(request.user, topic.forum):
+    if not _is_moderator(request.user, topic.board):
         return HttpResponseForbidden()
     if request.method != "POST":
         return HttpResponseForbidden()
@@ -4740,7 +4740,7 @@ def set_topic_type(request, topic_id):
 def lock_topic(request, topic_id):
     """POST: toggle is_locked on a topic. Moderators and above."""
     topic = get_object_or_404(Topic, pk=topic_id)
-    if not _is_moderator(request.user, topic.forum):
+    if not _is_moderator(request.user, topic.board):
         return HttpResponseForbidden()
     if request.method != "POST":
         return HttpResponseForbidden()

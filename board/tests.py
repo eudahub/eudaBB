@@ -6,7 +6,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Forum, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post, TopicParticipant, TopicReadState
+from .models import Board, Poll, PollOption, PollVote, PostLike, Section, Topic, User, Post, TopicParticipant, TopicReadState
 from .quote_refs import rebuild_quote_references_for_post, rebuild_quote_references_for_posts
 from .quote_selection import extract_exact_quote_fragment
 from .quote_validation import validate_enriched_quotes
@@ -22,7 +22,7 @@ from .views import _build_search_snippet, _matches_search_text, _parse_search_qu
 class UserRenameTests(TestCase):
     def setUp(self):
         self.section = Section.objects.create(title="Sekcja", order=1)
-        self.forum = Forum.objects.create(
+        self.forum = Board.objects.create(
             section=self.section,
             title="Forum",
             description="",
@@ -30,7 +30,7 @@ class UserRenameTests(TestCase):
         )
 
     def _make_topic(self, author: User, title: str = "Temat") -> Topic:
-        return Topic.objects.create(forum=self.forum, title=title, author=author)
+        return Topic.objects.create(board=self.forum, title=title, author=author)
 
     def test_rename_updates_username_normalized_and_quotes(self):
         renamed_user = User.objects.create_user(username="Stary Łoś", password="x")
@@ -302,7 +302,7 @@ class UserRenameTests(TestCase):
         author = User.objects.create_user(username="Autor2", password="x")
         reader = User.objects.create_user(username="Czytelnik2", password="x")
         topic = self._make_topic(author)
-        forum = topic.forum
+        board = topic.board
         posts_per_page = getattr(settings, "POSTS_PER_PAGE", 20)
 
         for order in range(1, posts_per_page + 3):
@@ -315,10 +315,10 @@ class UserRenameTests(TestCase):
         topic.last_post = topic.posts.order_by("-post_order").first()
         topic.reply_count = topic.posts.count() - 1
         topic.save(update_fields=["last_post", "reply_count"])
-        forum.last_post = topic.last_post
-        forum.post_count = topic.posts.count()
-        forum.topic_count = 1
-        forum.save(update_fields=["last_post", "post_count", "topic_count"])
+        board.last_post = topic.last_post
+        board.post_count = topic.posts.count()
+        board.topic_count = 1
+        board.save(update_fields=["last_post", "post_count", "topic_count"])
 
         client = Client()
         client.force_login(reader)
@@ -342,14 +342,14 @@ class UserRenameTests(TestCase):
         topic = self._make_topic(author, title="Bieżący temat")
         Post.objects.create(topic=topic, author=author, content_bbcode="Treść bieżąca", post_order=1)
 
-        other_forum = Forum.objects.create(
+        other_forum = Board.objects.create(
             section=self.section,
             title="Ogłoszenia",
             description="",
             order=2,
         )
         sticky_topic = Topic.objects.create(
-            forum=other_forum,
+            board=other_forum,
             title="Regulamin",
             author=author,
             topic_type=Topic.TopicType.STICKY,
@@ -531,7 +531,7 @@ class UserRenameTests(TestCase):
 
         client = Client()
         client.force_login(reader)
-        response = client.get(reverse("forum_detail", args=[self.forum.pk]))
+        response = client.get(reverse("board_detail", args=[self.forum.pk]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Forum nieprzeczytane")
@@ -759,7 +759,7 @@ class UserRenameTests(TestCase):
             post_order=2,
         )
         rebuild_post_search_index_for_posts(
-            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+            Post.objects.filter(topic=topic).select_related("topic", "topic__board", "author")
         )
 
         client = Client()
@@ -787,7 +787,7 @@ class UserRenameTests(TestCase):
             post_order=2,
         )
         rebuild_post_search_index_for_posts(
-            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+            Post.objects.filter(topic=topic).select_related("topic", "topic__board", "author")
         )
 
         client = Client()
@@ -809,7 +809,7 @@ class UserRenameTests(TestCase):
         Post.objects.filter(pk=older.pk).update(created_at=old_dt)
         Post.objects.filter(pk=newer.pk).update(created_at=new_dt)
         rebuild_post_search_index_for_posts(
-            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+            Post.objects.filter(topic=topic).select_related("topic", "topic__board", "author")
         )
 
         client = Client()
@@ -852,7 +852,7 @@ class UserRenameTests(TestCase):
         Post.objects.create(topic=topic, author=author, content_bbcode="Treść autora", post_order=1)
         Post.objects.create(topic=topic, author=other, content_bbcode="Treść innego", post_order=2)
         rebuild_post_search_index_for_posts(
-            Post.objects.filter(topic=topic).select_related("topic", "topic__forum", "author")
+            Post.objects.filter(topic=topic).select_related("topic", "topic__board", "author")
         )
 
         client = Client()
@@ -1188,14 +1188,14 @@ class UserRenameTests(TestCase):
         )
 
         total = rebuild_post_search_index_for_posts(
-            Post.objects.filter(pk=post.pk).select_related("topic", "topic__forum", "author")
+            Post.objects.filter(pk=post.pk).select_related("topic", "topic__board", "author")
         )
 
         self.assertEqual(total, 1)
         post.refresh_from_db()
         self.assertEqual(post.search_index.content_search_author, "Początek koniec")
         self.assertEqual(post.search_index.topic_id, topic.pk)
-        self.assertEqual(post.search_index.forum_id, topic.forum_id)
+        self.assertEqual(post.search_index.board_id, topic.board_id)
 
     def test_new_topic_form_accepts_poll_data(self):
         form = NewTopicForm(data={
@@ -1220,7 +1220,7 @@ class UserRenameTests(TestCase):
         client = Client()
         client.force_login(author)
 
-        response = client.post(reverse("new_topic", args=[self.forum.pk]), {
+        response = client.post(reverse("new_topic", args=[self.board.pk]), {
             "title": "Temat z ankietą",
             "content": "Treść główna",
             "poll_enabled": "1",
@@ -1263,7 +1263,7 @@ class UserRenameTests(TestCase):
 
         client = Client()
         client.force_login(reader)
-        response = client.get(reverse("search"), {"q": "byt", "forum_id": topic.forum_id})
+        response = client.get(reverse("search"), {"q": "byt", "board_id": topic.board_id})
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Wyszukiwarka")

@@ -97,7 +97,7 @@ def build_post_search_payload(post: Post) -> dict:
     author_only = extract_author_search_text(post.content_bbcode or "")
     return {
         "topic": post.topic,
-        "forum": post.topic.forum,
+        "board": post.topic.board,
         "author": post.author,
         "created_at": post.created_at,
         "has_link": has_link,

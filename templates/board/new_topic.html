@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% load bbcode_tags %}
-{% block title %}Nowy wątek — {{ forum.title }}{% endblock %}
+{% block title %}Nowy wątek — {{ board.title }}{% endblock %}
 
 {% block content %}
 <p class="breadcrumb">
   <a href="/">Forum</a> ›
-  <a href="{% url 'forum_detail' forum.pk %}">{{ forum.title }}</a> ›
+  <a href="{% url 'board_detail' board.pk %}">{{ board.title }}</a> ›
   Nowy wątek
 </p>
 
-<h2>Nowy wątek w: {{ forum.title }}</h2>
+<h2>Nowy wątek w: {{ board.title }}</h2>
 
 <form method="post" id="new-topic-form">
   {% csrf_token %}
@@ -54,7 +54,7 @@
         <button type="button" onclick="doNewTopicValidate()" style="width:auto;flex:0 0 auto;">Walidacja</button>
         <button type="submit" style="width:auto;flex:0 0 auto;min-width:0;">Dodaj wątek</button>
       </div>
-      <a href="{% url 'forum_detail' forum.pk %}" style="margin-left:auto;">Anuluj</a>
+      <a href="{% url 'board_detail' board.pk %}" style="margin-left:auto;">Anuluj</a>
     </div>
   </div>
 
@@ -212,7 +212,7 @@
               aria-expanded="false"
               style="border:0;background:transparent;padding:0;color:#800000;font-weight:bold;text-align:left;cursor:pointer;"
             >{{ post.topic.title }}</button>
-            <span style="color:#666;">· {{ post.topic.forum.title }}</span>
+            <span style="color:#666;">· {{ post.topic.board.title }}</span>
             <span style="color:#666;">· {{ post.author.username|default:"[usunięty]" }}</span>
             <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
           </div>
@@ -613,7 +613,7 @@ function requestNewTopicPreviewData() {
     var opts = document.getElementById('poll-options-text');
     if (opts) body += '&poll_options_text=' + encodeURIComponent(opts.value);
   }
-  return fetch('{% url "preview_new_topic" forum.pk %}', {
+  return fetch('{% url "preview_new_topic" board.pk %}', {
     method: 'POST',
     headers: {'X-CSRFToken': '{{ csrf_token }}', 'Content-Type': 'application/x-www-form-urlencoded'},
     body: body

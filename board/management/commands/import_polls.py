@@ -3,7 +3,7 @@ import sqlite3
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from board.models import Forum, Poll, PollOption, Topic
+from board.models import Board, Poll, PollOption, Topic
 from board.polls import parse_archive_datetime, parse_poll_results_text
 
 
@@ -30,14 +30,14 @@ class Command(BaseCommand):
             Poll.objects.all().delete()
             self.stdout.write("Cleared existing polls.")
 
-        archive_forums = {
-            row["forum_id"]: row["title"]
-            for row in conn.execute("SELECT forum_id, title FROM forums").fetchall()
+        archive_boards = {
+            row["board_id"]: row["title"]
+            for row in conn.execute("SELECT board_id, title FROM boards").fetchall()
         }
         topic_rows = {
             row["topic_id"]: row
             for row in conn.execute(
-                "SELECT topic_id, forum_id, title, has_poll FROM topics WHERE has_poll = 1"
+                "SELECT topic_id, board_id, title, has_poll FROM topics WHERE has_poll = 1"
             ).fetchall()
         }
         poll_rows = conn.execute("SELECT * FROM topic_polls ORDER BY topic_id").fetchall()
@@ -55,13 +55,13 @@ class Command(BaseCommand):
 
                 topic = Topic.objects.filter(archive_topic_id=row["topic_id"]).first()
                 if topic is None:
-                    forum_title = archive_forums.get(row["forum_id"])
-                    if not forum_title:
-                        skipped.append((row["topic_id"], "missing forum title"))
+                    board_title = archive_boards.get(row["board_id"])
+                    if not board_title:
+                        skipped.append((row["topic_id"], "missing board title"))
                         continue
 
                     topics = Topic.objects.filter(
-                        forum__title=forum_title,
+                        board__title=board_title,
                         title=topic_meta["title"],
                     )
                     if not topics.exists():

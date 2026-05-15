@@ -124,24 +124,24 @@ class ModMoveThreadView(APIView):
 
     def put(self, request, topic_id):
         topic = get_object_or_404(Topic, pk=topic_id)
-        target_forum_id = request.data.get("forum_id")
-        if not target_forum_id:
-            return R.error("MISSING_FIELD", "Wymagane pole: forum_id.")
+        target_board_id = request.data.get("board_id")
+        if not target_board_id:
+            return R.error("MISSING_FIELD", "Wymagane pole: board_id.")
 
-        from board.models import Forum
-        target = get_object_or_404(Forum, pk=target_forum_id)
-        old_forum = topic.forum
+        from board.models import Board
+        target = get_object_or_404(Board, pk=target_board_id)
+        old_board = topic.board
 
-        topic.forum = target
-        topic.save(update_fields=["forum"])
+        topic.board = target
+        topic.save(update_fields=["board"])
 
-        # Refresh counters on both forums
-        for forum in [old_forum, target]:
-            forum.topic_count = Topic.objects.filter(forum=forum).count()
-            forum.post_count = Post.objects.filter(topic__forum=forum).count()
-            forum.save(update_fields=["topic_count", "post_count"])
+        # Refresh counters on both boards
+        for b in [old_board, target]:
+            b.topic_count = Topic.objects.filter(board=b).count()
+            b.post_count = Post.objects.filter(topic__board=b).count()
+            b.save(update_fields=["topic_count", "post_count"])
 
-        return R.ok({"moved_to_forum_id": target.pk})
+        return R.ok({"moved_to_board_id": target.pk})
 
 
 # ---------------------------------------------------------------------------

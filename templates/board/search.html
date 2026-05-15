@@ -19,11 +19,11 @@
     </label>
     <label style="flex:0 1 260px;">
       <span>Forum</span>
-      <select name="forum_id">
+      <select name="board_id">
         <option value="">Wszystkie zindeksowane fora</option>
-        {% for forum in indexed_forums %}
-          <option value="{{ forum.pk }}"{% if selected_forum and selected_forum.pk == forum.pk %} selected{% endif %}>
-            {{ forum.title }}
+        {% for board in indexed_boards %}
+          <option value="{{ board.pk }}"{% if selected_board and selected_board.pk == board.pk %} selected{% endif %}>
+            {{ board.title }}
           </option>
         {% endfor %}
       </select>
@@ -117,7 +117,7 @@
     {% for topic in page.object_list %}
       <div class="post-box" style="margin-bottom:.6rem;">
         <div class="post-header">
-          <span>{{ topic.forum.title }}</span>
+          <span>{{ topic.board.title }}</span>
           <span>{{ topic.created_at|date:"d.m.Y H:i" }}</span>
         </div>
         <div style="padding:.45rem .6rem;">
@@ -145,7 +145,7 @@
       <div class="post-box" style="margin-bottom:.6rem;">
         <div class="post-header">
           <span>
-            <a href="{% url 'forum_detail' row.forum.pk %}">{{ row.forum.title }}</a>
+            <a href="{% url 'board_detail' row.board.pk %}">{{ row.board.title }}</a>
             · {{ row.author.username|default:"[usunięty]" }}
             · <a href="/post/{{ row.post_id }}/">{{ row.topic.title }}</a>
           </span>

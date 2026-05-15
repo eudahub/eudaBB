@@ -7,7 +7,7 @@ Write serializers validate incoming POST/PUT data.
 import zlib
 from rest_framework import serializers
 from board.models import (
-    User, Section, Forum, Topic, Post,
+    User, Section, Board, Topic, Post,
     PrivateMessage, PrivateMessageBox,
     PostReport, Notification,
 )
@@ -90,65 +90,64 @@ class MeSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
-# Forum structure
+# Board structure (forum is the site as a whole; a board is one section/subforum)
 # ---------------------------------------------------------------------------
 
-class ForumBriefSerializer(serializers.ModelSerializer):
+class BoardBriefSerializer(serializers.ModelSerializer):
     last_post_at = serializers.DateTimeField()
 
     class Meta:
-        model = Forum
+        model = Board
         fields = [
             "id", "title", "description", "order",
             "topic_count", "post_count", "last_post_at",
         ]
 
 
-class SectionWithForumsSerializer(serializers.ModelSerializer):
-    """Section with its top-level forums. Used for GET /api/v1/categories."""
-    forums = serializers.SerializerMethodField()
+class SectionWithBoardsSerializer(serializers.ModelSerializer):
+    """Section with its top-level boards. Used for GET /api/v1/categories."""
+    boards = serializers.SerializerMethodField()
 
     class Meta:
         model = Section
-        fields = ["id", "title", "order", "forums"]
+        fields = ["id", "title", "order", "boards"]
 
-    def get_forums(self, obj):
-        # Only top-level forums (no parent) in this section, respecting access level
+    def get_boards(self, obj):
+        # Only top-level boards (no parent) in this section, respecting access level
         request = self.context.get("request")
         user = request.user if request else None
-        qs = obj.forums.filter(parent=None).order_by("order")
-        qs = _filter_forums_by_access(qs, user)
-        return ForumWithSubsSerializer(qs, many=True, context=self.context).data
+        qs = obj.boards.filter(parent=None).order_by("order")
+        qs = _filter_boards_by_access(qs, user)
+        return BoardWithSubsSerializer(qs, many=True, context=self.context).data
 
 
-class ForumWithSubsSerializer(serializers.ModelSerializer):
-    """Forum with subforums. Used inside SectionWithForumsSerializer."""
-    subforums = serializers.SerializerMethodField()
+class BoardWithSubsSerializer(serializers.ModelSerializer):
+    """Board with subboards. Used inside SectionWithBoardsSerializer."""
+    subboards = serializers.SerializerMethodField()
     last_post_at = serializers.DateTimeField()
 
     class Meta:
-        model = Forum
+        model = Board
         fields = [
             "id", "title", "description", "order",
             "topic_count", "post_count", "last_post_at",
-            "subforums",
+            "subboards",
         ]
 
-    def get_subforums(self, obj):
+    def get_subboards(self, obj):
         request = self.context.get("request")
         user = request.user if request else None
-        qs = obj.subforums.order_by("order")
-        qs = _filter_forums_by_access(qs, user)
-        return ForumBriefSerializer(qs, many=True, context=self.context).data
+        qs = obj.subboards.order_by("order")
+        qs = _filter_boards_by_access(qs, user)
+        return BoardBriefSerializer(qs, many=True, context=self.context).data
 
 
-def _filter_forums_by_access(qs, user):
-    from board.models import Forum as F
+def _filter_boards_by_access(qs, user):
     if user and user.is_authenticated and (user.is_root or user.role >= User.ROLE_ADMIN):
         return qs  # admins see everything
     if user and user.is_authenticated:
-        return qs.filter(access_level__lte=F.AccessLevel.REGISTERED)
-    return qs.filter(access_level=F.AccessLevel.PUBLIC)
+        return qs.filter(access_level__lte=Board.AccessLevel.REGISTERED)
+    return qs.filter(access_level=Board.AccessLevel.PUBLIC)
 
 
 # ---------------------------------------------------------------------------

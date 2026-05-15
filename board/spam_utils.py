@@ -116,12 +116,12 @@ def _get_hidden_classes_for_normal(user) -> list:
         return [User.SpamClass.GRAY, User.SpamClass.WEB]
 
 
-def get_max_forum_level(user) -> int:
-    """Return maximum archive_level of forums this user may see."""
+def get_max_board_level(user) -> int:
+    """Return maximum archive_level of boards this user may see."""
     return get_user_spam_class(user)
 
 
-def filter_forums(forums_qs, user):
-    """Filter a Forum queryset to only forums the user may access."""
-    max_level = get_max_forum_level(user)
-    return forums_qs.filter(archive_level__lte=max_level)
+def filter_boards(boards_qs, user):
+    """Filter a Board queryset to only boards the user may access."""
+    max_level = get_max_board_level(user)
+    return boards_qs.filter(archive_level__lte=max_level)

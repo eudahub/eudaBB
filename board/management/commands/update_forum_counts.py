@@ -11,12 +11,12 @@ from collections import defaultdict
 
 from django.core.management.base import BaseCommand
 
-from board.models import Forum, Post
+from board.models import Board, Post
 
 
 def compute_recursive_last_posts():
-    """Return {forum_id: Post|None} — last post recursively including subforums."""
-    forums = list(Forum.objects.all())
+    """Return {board_id: Post|None} — last post recursively including subforums."""
+    forums = list(Board.objects.all())
     children = defaultdict(list)
     for f in forums:
         if f.parent_id:
@@ -26,7 +26,7 @@ def compute_recursive_last_posts():
     direct = {}
     for f in forums:
         post = (
-            Post.objects.filter(topic__forum_id=f.id)
+            Post.objects.filter(topic__board_id=f.id)
             .order_by("-created_at")
             .select_related("author")
             .first()
@@ -50,13 +50,13 @@ def compute_recursive_last_posts():
 
 
 def compute_recursive_counts():
-    """Return {forum_id: (total_topic_count, total_post_count)} including subforums."""
-    forums = list(Forum.objects.all())
+    """Return {board_id: (total_topic_count, total_post_count)} including subforums."""
+    forums = list(Board.objects.all())
 
     # Direct counts
     direct_topics = {f.id: f.topics.count() for f in forums}
     direct_posts  = {
-        f.id: Post.objects.filter(topic__forum_id=f.id).count()
+        f.id: Post.objects.filter(topic__board_id=f.id).count()
         for f in forums
     }
 
@@ -86,17 +86,17 @@ class Command(BaseCommand):
         totals = compute_recursive_counts()
         last_posts = compute_recursive_last_posts()
         updated = 0
-        for forum in Forum.objects.all():
-            tc, pc = totals[forum.id]
-            lp = last_posts.get(forum.id)
+        for board in Board.objects.all():
+            tc, pc = totals[board.id]
+            lp = last_posts.get(board.id)
             lp_at = lp.created_at if lp else None
-            forum.topic_count  = tc
-            forum.post_count   = pc
-            forum.last_post    = lp
-            forum.last_post_at = lp_at
-            forum.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
+            board.topic_count  = tc
+            board.post_count   = pc
+            board.last_post    = lp
+            board.last_post_at = lp_at
+            board.save(update_fields=["topic_count", "post_count", "last_post", "last_post_at"])
             updated += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f"Zaktualizowano {updated} forów."
+            f"Zaktualizowano {updated} działów."
         ))

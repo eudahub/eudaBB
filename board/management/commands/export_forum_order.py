@@ -13,7 +13,7 @@ import sys
 
 from django.core.management.base import BaseCommand
 
-from board.models import Forum, Section
+from board.models import Board, Section
 
 
 class Command(BaseCommand):
@@ -34,7 +34,7 @@ class Command(BaseCommand):
             Section.objects.order_by("order").values("id", "title", "order")
         )
         forums = list(
-            Forum.objects.order_by("order").values(
+            Board.objects.order_by("order").values(
                 "id", "title", "order", "parent_id", "section_id"
             )
         )
@@ -43,7 +43,7 @@ class Command(BaseCommand):
         out_path = options["output"]
 
         if fmt == "json":
-            data = {"sections": sections, "forums": forums}
+            data = {"sections": sections, "boards": forums}
             content = json.dumps(data, ensure_ascii=False, indent=2)
             if out_path:
                 with open(out_path, "w", encoding="utf-8") as f:

@@ -4,7 +4,7 @@
 {% block content %}
 <p class="breadcrumb">
   <a href="/">Forum</a> ›
-  <a href="{% url 'forum_detail' topic.forum.pk %}">{{ topic.forum.title }}</a> ›
+  <a href="{% url 'board_detail' topic.board.pk %}">{{ topic.board.title }}</a> ›
   <a href="{% url 'topic_detail' topic.pk %}">{{ topic.title }}</a> ›
   Odpowiedź
 </p>
@@ -192,7 +192,7 @@
               aria-expanded="false"
               style="border:0;background:transparent;padding:0;color:#800000;font-weight:bold;text-align:left;cursor:pointer;"
             >{{ post.topic.title }}</button>
-            <span style="color:#666;">· {{ post.topic.forum.title }}</span>
+            <span style="color:#666;">· {{ post.topic.board.title }}</span>
             <span style="color:#666;">· {{ post.author.username|default:"[usunięty]" }}</span>
             <span style="color:#888;">{{ post.created_at|date:"d.m.Y H:i" }}</span>
           </div>

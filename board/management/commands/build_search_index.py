@@ -2,7 +2,7 @@ import time
 
 from django.core.management.base import BaseCommand, CommandError
 
-from board.models import Forum, Post
+from board.models import Board, Post
 from board.search_index import rebuild_post_search_index_for_posts
 
 
@@ -11,45 +11,45 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--forum-id",
+            "--board-id",
             type=int,
-            help="Restrict rebuild to one forum (recommended for first runs).",
+            help="Restrict rebuild to one board (recommended for first runs).",
         )
         parser.add_argument(
-            "--forum-title",
-            help='Restrict rebuild to one forum selected by exact title. Use quotes if the title contains spaces.',
+            "--board-title",
+            help='Restrict rebuild to one board selected by exact title. Use quotes if the title contains spaces.',
         )
 
     def handle(self, *args, **options):
         started = time.monotonic()
-        posts = Post.objects.select_related("topic", "topic__forum", "author").order_by("pk")
-        forum_id = options.get("forum_id")
-        forum_title = (options.get("forum_title") or "").strip()
+        posts = Post.objects.select_related("topic", "topic__board", "author").order_by("pk")
+        board_id = options.get("board_id")
+        board_title = (options.get("board_title") or "").strip()
 
-        if forum_id is not None and forum_title:
-            raise CommandError("Use only one of --forum-id or --forum-title.")
+        if board_id is not None and board_title:
+            raise CommandError("Use only one of --board-id or --board-title.")
 
-        if forum_id is not None:
-            if not Forum.objects.filter(pk=forum_id).exists():
-                raise CommandError(f"Forum id={forum_id} does not exist.")
-            posts = posts.filter(topic__forum_id=forum_id)
-            self.stdout.write(f"Buduję indeks wyszukiwania dla forum_id={forum_id}…")
-        elif forum_title:
-            forums = list(Forum.objects.filter(title=forum_title))
-            if not forums:
-                raise CommandError(f'Forum with title "{forum_title}" does not exist.')
-            if len(forums) > 1:
+        if board_id is not None:
+            if not Board.objects.filter(pk=board_id).exists():
+                raise CommandError(f"Board id={board_id} does not exist.")
+            posts = posts.filter(topic__board_id=board_id)
+            self.stdout.write(f"Buduję indeks wyszukiwania dla board_id={board_id}…")
+        elif board_title:
+            boards = list(Board.objects.filter(title=board_title))
+            if not boards:
+                raise CommandError(f'Board with title "{board_title}" does not exist.')
+            if len(boards) > 1:
                 raise CommandError(
-                    f'Forum title "{forum_title}" is ambiguous ({len(forums)} matches). '
-                    "Use --forum-id instead."
+                    f'Board title "{board_title}" is ambiguous ({len(boards)} matches). '
+                    "Use --board-id instead."
                 )
-            forum = forums[0]
-            posts = posts.filter(topic__forum=forum)
+            board = boards[0]
+            posts = posts.filter(topic__board=board)
             self.stdout.write(
-                f'Buduję indeks wyszukiwania dla forum "{forum.title}" (id={forum.pk})…'
+                f'Buduję indeks wyszukiwania dla działu "{board.title}" (id={board.pk})…'
             )
         else:
-            self.stdout.write("Buduję indeks wyszukiwania dla wszystkich forów…")
+            self.stdout.write("Buduję indeks wyszukiwania dla wszystkich działów…")
 
         total = rebuild_post_search_index_for_posts(posts)
         elapsed = time.monotonic() - started

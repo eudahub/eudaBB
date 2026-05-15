@@ -288,7 +288,7 @@ class ActivationToken(models.Model):
 
 
 class Section(models.Model):
-    """Top-level grouping of forums (phpBB: category)."""
+    """Top-level grouping of boards (phpBB: category)."""
     title = models.CharField(max_length=255)
     order = models.PositiveSmallIntegerField(default=0)
 
@@ -300,15 +300,15 @@ class Section(models.Model):
         return self.title
 
 
-class Forum(models.Model):
-    """A forum board, optionally nested under a parent forum."""
+class Board(models.Model):
+    """A board (subforum), optionally nested under a parent board."""
     section = models.ForeignKey(
         Section, on_delete=models.PROTECT,
-        related_name="forums",
+        related_name="boards",
     )
     parent = models.ForeignKey(
         "self", on_delete=models.SET_NULL,
-        null=True, blank=True, related_name="subforums",
+        null=True, blank=True, related_name="subboards",
     )
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default="")
@@ -323,7 +323,7 @@ class Forum(models.Model):
     access_level = models.SmallIntegerField(
         choices=AccessLevel.choices,
         default=AccessLevel.PUBLIC,
-        help_text="Who can see this forum (phpBB visibility_class)",
+        help_text="Who can see this board (phpBB visibility_class)",
     )
 
     # Archive darkweb level — separate from access_level
@@ -349,23 +349,23 @@ class Forum(models.Model):
     )
     last_post_at = models.DateTimeField(null=True, blank=True)
 
-    moderators = models.ManyToManyField(User, blank=True, related_name="moderated_forums")
+    moderators = models.ManyToManyField(User, blank=True, related_name="moderated_boards")
     blog_of = models.ForeignKey(
         User, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name="blog_forums",
+        null=True, blank=True, related_name="blog_boards",
         help_text="Właściciel bloga — może edytować każdy post w tym dziale jak moderator.",
     )
 
     class Meta:
         ordering = ["order"]
-        db_table = "forum_forums"
+        db_table = "forum_boards"
 
     def __str__(self):
         return self.title
 
 
 class Topic(models.Model):
-    """A thread within a forum."""
+    """A thread within a board."""
 
     class TopicType(models.IntegerChoices):
         NORMAL = 0, "Normal"
@@ -377,7 +377,7 @@ class Topic(models.Model):
         POLL = 1, "Poll"
         CHECKLIST = 2, "Checklist"
 
-    forum = models.ForeignKey(Forum, on_delete=models.CASCADE, related_name="topics")
+    board = models.ForeignKey(Board, on_delete=models.CASCADE, related_name="topics")
     archive_topic_id = models.PositiveIntegerField(
         null=True, blank=True, db_index=True
     )
@@ -430,7 +430,7 @@ class Topic(models.Model):
         ordering = ["-topic_type", "-last_post_at"]
         db_table = "forum_topics"
         indexes = [
-            models.Index(fields=["forum", "-topic_type", "-last_post_at"]),
+            models.Index(fields=["board", "-topic_type", "-last_post_at"]),
         ]
 
     def __str__(self):
@@ -580,8 +580,8 @@ class PostSearchIndex(models.Model):
     topic = models.ForeignKey(
         Topic, on_delete=models.CASCADE, related_name="search_posts"
     )
-    forum = models.ForeignKey(
-        Forum, on_delete=models.CASCADE, related_name="search_posts"
+    board = models.ForeignKey(
+        Board, on_delete=models.CASCADE, related_name="search_posts"
     )
     author = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="search_posts"
@@ -595,7 +595,7 @@ class PostSearchIndex(models.Model):
     class Meta:
         db_table = "forum_post_search"
         indexes = [
-            models.Index(fields=["forum", "created_at"]),
+            models.Index(fields=["board", "created_at"]),
             models.Index(fields=["topic", "created_at"]),
             models.Index(fields=["author"]),
             models.Index(fields=["has_link"]),
