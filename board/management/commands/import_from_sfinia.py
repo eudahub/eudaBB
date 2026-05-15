@@ -68,7 +68,7 @@ class Command(BaseCommand):
             for row in conn.execute("PRAGMA table_info(users)").fetchall()
         }
         required_columns = {
-            "user_id", "username", "email", "signature", "website", "location", "avatar_local_path",
+            "user_id", "username", "email", "signature", "www", "location", "avatar_local_path",
         }
         if not required_columns.issubset(columns):
             conn.close()
@@ -92,7 +92,7 @@ class Command(BaseCommand):
             ", username AS final_username"
         )
         rows = conn.execute(
-            f"SELECT user_id, username, email, signature, website, location, avatar_local_path, "
+            f"SELECT user_id, username, email, signature, www AS website, location, avatar_local_path, "
             f"COALESCE(joined_at, '') AS joined_at, pass_hash, role{extra_name} "
             f"FROM users ORDER BY user_id"
         ).fetchall()
